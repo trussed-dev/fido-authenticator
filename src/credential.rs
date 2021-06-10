@@ -6,7 +6,7 @@ use trussed::{
 };
 
 pub(crate) use ctap_types::{
-    Bytes, Bytes32, consts, String, Vec,
+    Bytes, Bytes32, String, Vec,
     // authenticator::{ctap1, ctap2, Error, Request, Response},
     ctap2::credential_management::CredentialProtectionPolicy,
     sizes::*,
@@ -33,8 +33,8 @@ pub enum CtapVersion {
 pub struct CredentialId(pub Bytes<MAX_CREDENTIAL_ID_LENGTH>);
 
 // TODO: how to determine necessary size?
-// pub type SerializedCredential = Bytes<consts::U512>;
-// pub type SerializedCredential = Bytes<consts::U256>;
+// pub type SerializedCredential = Bytes<512>;
+// pub type SerializedCredential = Bytes<256>;
 pub type SerializedCredential = trussed::types::Message;
 
 #[derive(Clone, Debug)]
@@ -65,7 +65,7 @@ impl TryFrom<CredentialId> for EncryptedSerializedCredential {
 pub enum Key {
     ResidentKey(KeyId),
     // THIS USED TO BE 92 NOW IT'S 96 or 97 or so... waddup?
-    WrappedKey(Bytes<consts::U128>),
+    WrappedKey(Bytes<128>),
 }
 
 #[derive(Clone, Debug, serde_indexed::DeserializeIndexed, serde_indexed::SerializeIndexed)]
@@ -103,7 +103,7 @@ pub struct CredentialData {
 pub struct Credential {
     ctap: CtapVersion,
     pub data: CredentialData,
-    nonce: Bytes<consts::U12>,
+    nonce: Bytes<12>,
 }
 
 impl core::ops::Deref for Credential {
@@ -114,7 +114,7 @@ impl core::ops::Deref for Credential {
     }
 }
 
-pub type CredentialList = Vec<Credential, ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST>;
+pub type CredentialList = Vec<Credential, {ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST}>;
 
 impl Into<PublicKeyCredentialDescriptor> for CredentialId {
     fn into(self) -> PublicKeyCredentialDescriptor {
@@ -161,7 +161,7 @@ impl Credential {
         Credential {
             ctap,
             data,
-            nonce: Bytes::try_from_slice(&nonce).unwrap(),
+            nonce: Bytes::from_slice(&nonce).unwrap(),
         }
     }
 
@@ -199,7 +199,7 @@ impl Credential {
 
         let rp_id_hash: Bytes32 = syscall!(trussed.hash_sha256(&self.rp.id.as_ref()))
             .hash
-            .try_to_bytes().map_err(|_| Error::Other)?;
+            .to_bytes().map_err(|_| Error::Other)?;
 
         let associated_data = &rp_id_hash[..];
         let nonce: [u8; 12] = self.nonce.as_slice().try_into().unwrap();
@@ -227,7 +227,7 @@ impl Credential {
 
     pub fn try_from<UP: UserPresence, T: client::Client + client::Chacha8Poly1305>(
         authnr: &mut Authenticator<UP,T>,
-        rp_id_hash: &Bytes<consts::U32>,
+        rp_id_hash: &Bytes<32>,
         descriptor: &PublicKeyCredentialDescriptor,
     )
         -> Result<Self>
@@ -237,7 +237,7 @@ impl Credential {
 
     pub fn try_from_bytes<UP: UserPresence, T: client::Client + client::Chacha8Poly1305>(
         authnr: &mut Authenticator<UP, T>,
-        rp_id_hash: &Bytes<consts::U32>,
+        rp_id_hash: &Bytes<32>,
         id: &[u8],
     )
         -> Result<Self>

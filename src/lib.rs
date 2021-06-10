@@ -21,7 +21,7 @@ use trussed::{
 };
 
 use ctap_types::{
-    Bytes, Bytes32, consts, String, Vec,
+    Bytes, Bytes32, String, Vec,
     // cose::EcdhEsHkdf256PublicKey as CoseEcdhEsHkdf256PublicKey,
     // cose::PublicKey as CosePublicKey,
     operation::VendorOperation,
@@ -58,7 +58,7 @@ fn format_hex(data: &[u8], mut buffer: &mut [u8]) {
     }
 }
 
-fn rp_rk_dir(rp_id_hash: &Bytes<consts::U32>) -> PathBuf {
+fn rp_rk_dir(rp_id_hash: &Bytes<32>) -> PathBuf {
     // uses only first 8 bytes of hash, which should be "good enough"
     let mut hex = [b'0'; 16];
     format_hex(&rp_id_hash[..8], &mut hex);
@@ -69,7 +69,7 @@ fn rp_rk_dir(rp_id_hash: &Bytes<consts::U32>) -> PathBuf {
     dir
 }
 
-fn rk_path(rp_id_hash: &Bytes<consts::U32>, credential_id_hash: &Bytes<consts::U32>) -> PathBuf {
+fn rk_path(rp_id_hash: &Bytes<32>, credential_id_hash: &Bytes<32>) -> PathBuf {
     let mut path = rp_rk_dir(rp_id_hash);
 
     let mut hex = [0u8; 16];
@@ -169,7 +169,7 @@ where UP: UserPresence,
         info!("called u2f");
         self.state.persistent.load_if_not_initialised(&mut self.trussed);
 
-        let mut commitment = Bytes::<consts::U324>::new();
+        let mut commitment = Bytes::<324>::new();
 
         match request {
             U2fCommand::Register(reg) => {
@@ -197,7 +197,7 @@ where UP: UserPresence,
                 )).wrapped_key;
                 // debug!("wrapped_key = {:?}", &wrapped_key);
 
-                let key = Key::WrappedKey(wrapped_key.try_to_bytes().map_err(|_| U2fError::UnspecifiedCheckingError)?);
+                let key = Key::WrappedKey(wrapped_key.to_bytes().map_err(|_| U2fError::UnspecifiedCheckingError)?);
                 let nonce = syscall!(self.trussed.random_bytes(12)).bytes.as_slice().try_into().unwrap();
 
                 let mut rp_id = heapless::String::new();
@@ -211,7 +211,7 @@ where UP: UserPresence,
                 };
 
                 let user = ctap_types::webauthn::PublicKeyCredentialUserEntity {
-                    id: Bytes::try_from_slice(&[0u8; 8]).unwrap(),
+                    id: Bytes::from_slice(&[0u8; 8]).unwrap(),
                     icon: None,
                     name: None,
                     display_name: None,
@@ -259,7 +259,7 @@ where UP: UserPresence,
                                 key,
                                 &commitment,
                                 SignatureSerialization::Asn1Der
-                            )).signature.to_bytes(),
+                            )).signature.to_bytes().unwrap(),
                             cert
                         )
                     },
@@ -345,7 +345,7 @@ where UP: UserPresence,
                     key,
                     &commitment,
                     SignatureSerialization::Asn1Der
-                )).signature.to_bytes();
+                )).signature.to_bytes().unwrap();
 
                 Ok(U2fResponse::Authenticate(ctap1::AuthenticateResponse::new(
                     user_presence_byte,
@@ -651,7 +651,7 @@ where UP: UserPresence,
                 if pin_token_enc.len() != 16 {
                     return Err(Error::Other);
                 }
-                let pin_token_enc_32 = Bytes::try_from_slice(&pin_token_enc).unwrap();
+                let pin_token_enc_32 = Bytes::from_slice(&pin_token_enc).unwrap();
 
                 ctap2::client_pin::Response {
                     key_agreement: None,
@@ -663,7 +663,7 @@ where UP: UserPresence,
         })
     }
 
-    fn decrypt_pin_hash_and_maybe_escalate(&mut self, shared_secret: KeyId, pin_hash_enc: &Bytes<consts::U64>)
+    fn decrypt_pin_hash_and_maybe_escalate(&mut self, shared_secret: KeyId, pin_hash_enc: &Bytes<64>)
         -> Result<()>
     {
         let pin_hash = syscall!(self.trussed.decrypt_aes256cbc(
@@ -723,7 +723,7 @@ where UP: UserPresence,
     }
 
 
-    // fn verify_pin(&mut self, pin_auth: &Bytes<consts::U16>, client_data_hash: &Bytes<consts::U32>) -> bool {
+    // fn verify_pin(&mut self, pin_auth: &Bytes<16>, client_data_hash: &Bytes<32>) -> bool {
     fn verify_pin(&mut self, pin_auth: &[u8; 16], data: &[u8]) -> Result<()> {
         let key = self.state.runtime.pin_token(&mut self.trussed);
         let tag = syscall!(self.trussed.sign_hmacsha256(key, data)).signature;
@@ -734,7 +734,7 @@ where UP: UserPresence,
         }
     }
 
-    fn verify_pin_auth(&mut self, shared_secret: KeyId, data: &[u8], pin_auth: &Bytes<consts::U16>)
+    fn verify_pin_auth(&mut self, shared_secret: KeyId, data: &[u8], pin_auth: &Bytes<16>)
         -> Result<()>
     {
         let expected_pin_auth = syscall!(self.trussed.sign_hmacsha256(shared_secret, data)).signature;
@@ -746,7 +746,7 @@ where UP: UserPresence,
         }
     }
 
-    // fn verify_pin_auth_using_token(&mut self, data: &[u8], pin_auth: &Bytes<consts::U16>)
+    // fn verify_pin_auth_using_token(&mut self, data: &[u8], pin_auth: &Bytes<16>)
     fn verify_pin_auth_using_token(
         &mut self,
         parameters: &ctap2::credential_management::Parameters
@@ -771,11 +771,8 @@ where UP: UserPresence,
 
                 // check pinAuth
                 let pin_token = self.state.runtime.pin_token(&mut self.trussed);
-                type BufSize = <
-                        heapless::consts::U256 as core::ops::Add<ctap_types::sizes::MAX_CREDENTIAL_ID_LENGTH>
-                    >::Output;
-                let mut data: Bytes<BufSize> =
-                    Bytes::try_from_slice(&[sub_command as u8]).unwrap();
+                let mut data: Bytes<MAX_CREDENTIAL_ID_LENGTH_PLUS_256> =
+                    Bytes::from_slice(&[sub_command as u8]).unwrap();
                 let len = 1 + match sub_command {
                     Subcommand::EnumerateCredentialsBegin |
                     Subcommand::DeleteCredential => {
@@ -1334,7 +1331,7 @@ where UP: UserPresence,
             let cred_random = syscall!(self.trussed.derive_key(
                 Mechanism::HmacSha256,
                 credential_key,
-                Some(Bytes::try_from_slice(&[get_assertion_state.uv_performed as u8]).unwrap()),
+                Some(Bytes::from_slice(&[get_assertion_state.uv_performed as u8]).unwrap()),
                 trussed::types::StorageAttributes::new().set_persistence(Location::Volatile)
             )).key;
 
@@ -1351,7 +1348,7 @@ where UP: UserPresence,
                 self.trussed.decrypt(Mechanism::Aes256Cbc, kek, &hmac_secret.salt_enc, b"", b"", b"")
             ).plaintext.ok_or(Error::InvalidOption)?;
 
-            let mut salt_output: Bytes<consts::U64> = Bytes::new();
+            let mut salt_output: Bytes<64> = Bytes::new();
 
             // output1 = hmac_sha256(credRandom, salt1)
             let output1 = syscall!(
@@ -1377,7 +1374,7 @@ where UP: UserPresence,
             ).ciphertext;
 
             Ok(Some(ctap2::get_assertion::ExtensionsOutput {
-                hmac_secret: Some(Bytes::try_from_slice(&output_enc).unwrap())
+                hmac_secret: Some(Bytes::from_slice(&output_enc).unwrap())
             }))
 
         } else {
@@ -1391,7 +1388,7 @@ where UP: UserPresence,
         -> Result<ctap2::get_assertion::Response>
     {
         let data = self.state.runtime.active_get_assertion.clone().unwrap();
-        let rp_id_hash = Bytes::try_from_slice(&data.rp_id_hash).unwrap();
+        let rp_id_hash = Bytes::from_slice(&data.rp_id_hash).unwrap();
 
         let (key, is_rk) = match credential.key.clone() {
             Key::ResidentKey(key) => (key, true),
@@ -1455,7 +1452,7 @@ where UP: UserPresence,
 
         let serialized_auth_data = authenticator_data.serialize();
 
-        let mut commitment = Bytes::<consts::U1024>::new();
+        let mut commitment = Bytes::<1024>::new();
         commitment.extend_from_slice(&serialized_auth_data).map_err(|_| Error::Other)?;
         commitment.extend_from_slice(&data.client_data_hash).map_err(|_| Error::Other)?;
 
@@ -1471,10 +1468,10 @@ where UP: UserPresence,
             Mechanism::Totp => {
                 let timestamp = u64::from_le_bytes(data.client_data_hash[..8].try_into().unwrap());
                 info!("TOTP with timestamp {:?}", &timestamp);
-                syscall!(self.trussed.sign_totp(key, timestamp)).signature.to_bytes()
+                syscall!(self.trussed.sign_totp(key, timestamp)).signature.to_bytes().unwrap()
             }
             _ => syscall!(self.trussed.sign(mechanism, key.clone(), &commitment, serialization)).signature
-                     .to_bytes(),
+                     .to_bytes().unwrap(),
         };
 
         if !is_rk {
@@ -1483,7 +1480,7 @@ where UP: UserPresence,
 
         let mut response = ctap2::get_assertion::Response {
             credential: Some(credential_id.into()),
-            auth_data: Bytes::try_from_slice(&serialized_auth_data).map_err(|_| Error::Other)?,
+            auth_data: Bytes::from_slice(&serialized_auth_data).map_err(|_| Error::Other)?,
             signature,
             user: None,
             number_of_credentials: num_credentials,
@@ -1546,7 +1543,7 @@ where UP: UserPresence,
     pub fn delete_resident_key_by_user_id(
         &mut self,
         rp_id_hash: &Bytes32,
-        user_id: &Bytes<consts::U64>,
+        user_id: &Bytes<64>,
     ) -> Result<()> {
 
         // Prepare to iterate over all credentials associated to RP.
@@ -1647,9 +1644,9 @@ where UP: UserPresence,
         Ok(())
     }
 
-    fn hash(&mut self, data: &[u8]) -> Bytes<consts::U32> {
+    fn hash(&mut self, data: &[u8]) -> Bytes<32> {
         let hash = syscall!(self.trussed.hash_sha256(&data)).hash;
-        hash.try_to_bytes().expect("hash should fit")
+        hash.to_bytes().expect("hash should fit")
     }
 
     fn make_credential(&mut self, parameters: &ctap2::make_credential::Parameters) -> Result<ctap2::make_credential::Response> {
@@ -1783,7 +1780,7 @@ where UP: UserPresence,
                 let fake_cose_pk = ctap_types::cose::TotpPublicKey {};
                 let fake_serialized_cose_pk = trussed::cbor_serialize_bytes(&fake_cose_pk)
                     .map_err(|_| Error::NotAllowed)?;
-                cose_public_key = fake_serialized_cose_pk; // Bytes::try_from_slice(&[0u8; 20]).unwrap();
+                cose_public_key = fake_serialized_cose_pk; // Bytes::from_slice(&[0u8; 20]).unwrap();
             }
         }
 
@@ -1805,12 +1802,12 @@ where UP: UserPresence,
 
                 // 32B key, 12B nonce, 16B tag + some info on algorithm (P256/Ed25519)
                 // Turns out it's size 92 (enum serialization not optimized yet...)
-                // let mut wrapped_key = Bytes::<consts::U60>::new();
+                // let mut wrapped_key = Bytes::<60>::new();
                 // wrapped_key.extend_from_slice(&wrapped_key_msg).unwrap();
-                let ret = Key::WrappedKey(wrapped_key.try_to_bytes().map_err(|_| Error::Other)?);
+                let ret = Key::WrappedKey(wrapped_key.to_bytes().map_err(|_| Error::Other)?);
                 ret
                 // debug!("len wrapped key = {}", wrapped_key.len());
-                // Key::WrappedKey(wrapped_key.try_to_bytes().unwrap())
+                // Key::WrappedKey(wrapped_key.to_bytes().unwrap())
 
             }
         };
@@ -1866,7 +1863,7 @@ where UP: UserPresence,
         let (attestation_maybe, aaguid)= self.state.identity.attestation(&mut self.trussed);
 
         let authenticator_data = ctap2::make_credential::AuthenticatorData {
-            rp_id_hash: rp_id_hash.try_to_bytes().map_err(|_| Error::Other)?,
+            rp_id_hash: rp_id_hash.to_bytes().map_err(|_| Error::Other)?,
 
             flags: {
                 let mut flags = Flags::USER_PRESENCE;
@@ -1887,9 +1884,9 @@ where UP: UserPresence,
             attested_credential_data: {
                 // debug!("acd in, cid len {}, pk len {}", credential_id.0.len(), cose_public_key.len());
                 let attested_credential_data = ctap2::make_credential::AttestedCredentialData {
-                    aaguid: Bytes::try_from_slice(&aaguid).unwrap(),
-                    credential_id: credential_id.0.try_to_bytes().unwrap(),
-                    credential_public_key: cose_public_key.try_to_bytes().unwrap(),
+                    aaguid: Bytes::from_slice(&aaguid).unwrap(),
+                    credential_id: credential_id.0.to_bytes().unwrap(),
+                    credential_public_key: cose_public_key.to_bytes().unwrap(),
                 };
                 // debug!("cose PK = {:?}", &attested_credential_data.credential_public_key);
                 Some(attested_credential_data)
@@ -1915,7 +1912,7 @@ where UP: UserPresence,
 
         // can we write Sum<M, N> somehow?
         // debug!("seeking commitment, {} + {}", serialized_auth_data.len(), parameters.client_data_hash.len());
-        let mut commitment = Bytes::<consts::U1024>::new();
+        let mut commitment = Bytes::<1024>::new();
         commitment.extend_from_slice(&serialized_auth_data).map_err(|_| Error::Other)?;
         // debug!("serialized_auth_data ={:?}", &serialized_auth_data);
         commitment.extend_from_slice(&parameters.client_data_hash).map_err(|_| Error::Other)?;
@@ -1935,13 +1932,13 @@ where UP: UserPresence,
                 match algorithm {
                     SupportedAlgorithm::Ed25519 => {
                         let signature = syscall!(self.trussed.sign_ed255(private_key, &commitment)).signature;
-                        (signature.try_to_bytes().map_err(|_| Error::Other)?, -8)
+                        (signature.to_bytes().map_err(|_| Error::Other)?, -8)
                     }
 
                     SupportedAlgorithm::P256 => {
                         // DO NOT prehash here, `trussed` does that
                         let der_signature = syscall!(self.trussed.sign_p256(private_key, &commitment, SignatureSerialization::Asn1Der)).signature;
-                        (der_signature.try_to_bytes().map_err(|_| Error::Other)?, -7)
+                        (der_signature.to_bytes().map_err(|_| Error::Other)?, -7)
                     }
                     SupportedAlgorithm::Totp => {
                         // maybe we can fake it here too, but seems kinda weird
@@ -1957,7 +1954,7 @@ where UP: UserPresence,
                             &hash,
                             SignatureSerialization::Asn1Der,
                         )).signature;
-                        (signature.try_to_bytes().map_err(|_| Error::Other)?, -7)
+                        (signature.to_bytes().map_err(|_| Error::Other)?, -7)
                     }
                 }
             } else {
@@ -1967,7 +1964,7 @@ where UP: UserPresence,
                     &commitment,
                     SignatureSerialization::Asn1Der,
                 )).signature;
-                (signature.try_to_bytes().map_err(|_| Error::Other)?, -7)
+                (signature.to_bytes().map_err(|_| Error::Other)?, -7)
             }
         };
         // debug!("SIG = {:?}", &signature);
@@ -1992,7 +1989,7 @@ where UP: UserPresence,
             },
         };
 
-        let fmt = String::<consts::U32>::from("packed");
+        let fmt = String::<32>::from("packed");
         let att_stmt = ctap2::make_credential::AttestationStatement::Packed(packed_attn_stmt);
 
         let attestation_object = ctap2::make_credential::Response {
@@ -2057,17 +2054,17 @@ where UP: UserPresence,
     fn get_info(&mut self) -> ctap2::get_info::Response {
 
         use core::str::FromStr;
-        let mut versions = Vec::<String<consts::U12>, consts::U3>::new();
+        let mut versions = Vec::<String<12>, 3>::new();
         versions.push(String::from_str("U2F_V2").unwrap()).unwrap();
         versions.push(String::from_str("FIDO_2_0").unwrap()).unwrap();
         // #[cfg(feature = "enable-fido-pre")]
         // versions.push(String::from_str("FIDO_2_1_PRE").unwrap()).unwrap();
 
-        let mut extensions = Vec::<String<consts::U11>, consts::U4>::new();
+        let mut extensions = Vec::<String<11>, 4>::new();
         // extensions.push(String::from_str("credProtect").unwrap()).unwrap();
         extensions.push(String::from_str("hmac-secret").unwrap()).unwrap();
 
-        let mut pin_protocols = Vec::<u8, consts::U1>::new();
+        let mut pin_protocols = Vec::<u8, 1>::new();
         pin_protocols.push(1).unwrap();
 
         let mut options = ctap2::get_info::CtapOptions::default();
@@ -2087,12 +2084,12 @@ where UP: UserPresence,
         ctap2::get_info::Response {
             versions,
             extensions: Some(extensions),
-            aaguid: Bytes::try_from_slice(&aaguid).unwrap(),
+            aaguid: Bytes::from_slice(&aaguid).unwrap(),
             options: Some(options),
             max_msg_size: Some(ctap_types::sizes::MESSAGE_SIZE),
             pin_protocols: Some(pin_protocols),
-            max_creds_in_list: Some(ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST_VALUE),
-            max_cred_id_length: Some(ctap_types::sizes::MAX_CREDENTIAL_ID_LENGTH_VALUE),
+            max_creds_in_list: Some(ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST),
+            max_cred_id_length: Some(ctap_types::sizes::MAX_CREDENTIAL_ID_LENGTH),
             ..ctap2::get_info::Response::default()
         }
     }

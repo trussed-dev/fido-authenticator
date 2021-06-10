@@ -11,9 +11,9 @@ documentation = "https://docs.rs/fido-authenticator"
 
 [dependencies]
 delog = "0.1.0"
-heapless = "0.6"
+heapless = "0.7"
 interchange = "0.2.0"
-littlefs2 = "0.2.1"
+littlefs2 = "0.3"
 serde = { version = "1.0", default-features = false }
 serde_cbor = { version = "0.11.0", default-features = false }
 serde-indexed = "0.1.0"

@@ -23,8 +23,8 @@ use littlefs2::path::PathBuf;
 use crate::Result;
 use crate::cbor_serialize_message;
 
-pub type MaxCredentialHeap = BinaryHeap<TimestampPath, MAX_CREDENTIAL_COUNT_IN_LIST, Max>;
-pub type MinCredentialHeap = BinaryHeap<TimestampPath, MAX_CREDENTIAL_COUNT_IN_LIST, Min>;
+pub type MaxCredentialHeap = BinaryHeap<TimestampPath, Max, MAX_CREDENTIAL_COUNT_IN_LIST>;
+pub type MinCredentialHeap = BinaryHeap<TimestampPath, Min, MAX_CREDENTIAL_COUNT_IN_LIST>;
 
 #[derive(Clone, Debug, /*uDebug, Eq, PartialEq,*/ serde::Deserialize, serde::Serialize)]
 pub struct State {

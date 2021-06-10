@@ -63,7 +63,7 @@ where
         AuthenticatorInfo {
             versions,
             extensions: Some(extensions),
-            aaguid: Bytes::try_from_slice(AAGUID).unwrap(),
+            aaguid: Bytes::from_slice(AAGUID).unwrap(),
             options: Some(options),
             max_msg_size: Some(MESSAGE_SIZE),
             ..AuthenticatorInfo::default()
