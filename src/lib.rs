@@ -1334,6 +1334,11 @@ where UP: UserPresence,
         credential_key: KeyId,
     ) -> Result<Option<ctap2::get_assertion::ExtensionsOutput>> {
         if let Some(hmac_secret) = &extensions.hmac_secret {
+            if let Some(pin_protocol) = hmac_secret.pin_protocol {
+                if pin_protocol != 1 {
+                    return Err(Error::InvalidParameter);
+                }
+            }
 
             // We derive credRandom as an hmac of the existing private key.
             // UV is used as input data since credRandom should depend UV
