@@ -950,6 +950,7 @@ where UP: UserPresence,
             // locate all denoted credentials present on this authenticator
             // and bound to the specified rpId."
             debug!("allowedList passed with {} creds", allowed_credentials.len());
+            let mut rk_count = 0;
             let mut applicable_credentials: CredentialList = allowed_credentials
                 .into_iter()
                 .filter(|credential| match credential.key.clone() {
@@ -958,7 +959,7 @@ where UP: UserPresence,
                     Key::WrappedKey(_) => true,
                     Key::ResidentKey(key) => {
                         debug!("checking if ResidentKey {:?} exists", &key);
-                        match credential.algorithm {
+                        let exists = match credential.algorithm {
                             -7 => syscall!(self.trussed.exists(Mechanism::P256, key)).exists,
                             -8 => syscall!(self.trussed.exists(Mechanism::Ed255, key)).exists,
                             -9 => {
@@ -967,7 +968,11 @@ where UP: UserPresence,
                                 exists
                             }
                             _ => false,
+                        };
+                        if exists {
+                            rk_count = rk_count + 1;
                         }
+                        exists
                     }
                 })
                 .filter(|credential| {
@@ -995,8 +1000,6 @@ where UP: UserPresence,
                 // let credential_id_hash = self.hash(&id.0.as_ref());
 
                 // let path = rk_path(&rp_id_hash, &credential_id_hash);
-
-
                 let timestamp_path = TimestampPath {
                     timestamp: credential.creation_time,
                     path: path.clone(),
@@ -1018,11 +1021,11 @@ where UP: UserPresence,
                 })?;
 
                 // attempt to read back
-                let data = syscall!(self.trussed.read_file(
-                    Location::Volatile,
-                    timestamp_path.path.clone(),
-                )).data;
-                crate::Credential::deserialize(&data).unwrap();
+                // let data = syscall!(self.trussed.read_file(
+                    // Location::Volatile,
+                    // timestamp_path.path.clone(),
+                // )).data;
+                // crate::Credential::deserialize(&data).unwrap();
 
 
                 if min_heap.capacity() > min_heap.len() {
@@ -1032,6 +1035,13 @@ where UP: UserPresence,
                         min_heap.pop().unwrap();
                         min_heap.push(timestamp_path).map_err(drop).unwrap();
                     }
+                }
+                // If more than one credential was located in step 1 and allowList is present and not empty,
+                // select any applicable credential and proceed to step 12. Otherwise, order the credentials
+                // by the time when they were created in reverse order.
+                // The first credential is the most recent credential that was created.
+                if rk_count > 1 {
+                    break
                 }
 
             }
