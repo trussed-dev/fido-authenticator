@@ -13,13 +13,13 @@ documentation = "https://docs.rs/fido-authenticator"
 delog = "0.1.0"
 heapless = "0.7"
 interchange = "0.2.0"
-littlefs2 = "0.3"
+littlefs2 = "0.3.1"
 serde = { version = "1.0", default-features = false }
 serde_cbor = { version = "0.11.0", default-features = false }
 serde-indexed = "0.1.0"
 
-ctap-types = { git = "https://github.com/solokeys/ctap-types", branch = "main" }
-trussed = { git = "https://github.com/trussed-dev/trussed", branch = "main" }
+ctap-types = { git = "https://github.com/solokeys/ctap-types" }
+trussed = { git = "https://github.com/trussed-dev/trussed" }
 
 [features]
 enable-fido-pre = []
