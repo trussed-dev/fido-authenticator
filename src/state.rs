@@ -139,7 +139,7 @@ impl Identity {
 
             (Some((key, cert)), aaguid.unwrap())
         } else {
-            info_now!("exist returns none");
+            info_now!("attestation key does not exist");
             (None, *b"AAGUID0123456789")
         }
     }

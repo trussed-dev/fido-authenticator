@@ -2077,6 +2077,7 @@ where UP: UserPresence,
 
         let mut extensions = Vec::<String<11>, 4>::new();
         // extensions.push(String::from_str("credProtect").unwrap()).unwrap();
+        extensions.push(String::from_str("credProtect").unwrap()).unwrap();
         extensions.push(String::from_str("hmac-secret").unwrap()).unwrap();
 
         let mut pin_protocols = Vec::<u8, 1>::new();
