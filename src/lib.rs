@@ -477,7 +477,7 @@ where UP: UserPresence,
             return Err(Error::InvalidParameter);
         }
 
-        Ok(match parameters.sub_command {
+        Ok( match parameters.sub_command {
 
             Subcommand::GetRetries => {
                 debug!("processing CP.GR");
@@ -660,6 +660,10 @@ where UP: UserPresence,
                 }
             }
 
+            _ => {
+                // todo!("not implemented yet")
+                return Err(Error::InvalidParameter);
+            }
         })
     }
 
@@ -2069,7 +2073,7 @@ where UP: UserPresence,
     fn get_info(&mut self) -> ctap2::get_info::Response {
 
         use core::str::FromStr;
-        let mut versions = Vec::<String<12>, 3>::new();
+        let mut versions = Vec::<String<12>, 4>::new();
         versions.push(String::from_str("U2F_V2").unwrap()).unwrap();
         versions.push(String::from_str("FIDO_2_0").unwrap()).unwrap();
         // #[cfg(feature = "enable-fido-pre")]
