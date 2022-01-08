@@ -89,7 +89,9 @@ pub struct CredentialData {
     pub key: Key,
 
     // extensions
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hmac_secret: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cred_protect: Option<CredentialProtectionPolicy>,
 
     // TODO: add `sig_counter: Option<CounterId>`,
