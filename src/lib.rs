@@ -35,6 +35,10 @@ use ctap_types::{
         Result as U2fResult,
         Error as U2fError,
     },
+    webauthn::{
+        PublicKeyCredentialRpEntity,
+        PublicKeyCredentialUserEntity
+    }
 };
 
 use littlefs2::path::{Path, PathBuf};
@@ -477,7 +481,7 @@ where UP: UserPresence,
             return Err(Error::InvalidParameter);
         }
 
-        Ok(match parameters.sub_command {
+        Ok( match parameters.sub_command {
 
             Subcommand::GetRetries => {
                 debug!("processing CP.GR");
@@ -660,6 +664,10 @@ where UP: UserPresence,
                 }
             }
 
+            _ => {
+                // todo!("not implemented yet")
+                return Err(Error::InvalidParameter);
+            }
         })
     }
 
@@ -1831,31 +1839,53 @@ where UP: UserPresence,
         let nonce = syscall!(self.trussed.random_bytes(12)).bytes.as_slice().try_into().unwrap();
         info!("nonce = {:?}", &nonce);
 
-        let credential = Credential::new(
-            credential::CtapVersion::Fido21Pre,
-            &parameters.rp,
-            &parameters.user,
-            algorithm as i32,
-            key_parameter,
-            self.state.persistent.timestamp(&mut self.trussed)?,
-            hmac_secret_requested.clone(),
-            cred_protect_requested,
-            nonce,
-        );
-
-        // info!("made credential {:?}", &credential);
-
         // 12.b generate credential ID { = AEAD(Serialize(Credential)) }
         let kek = self.state.persistent.key_encryption_key(&mut self.trussed)?;
-        let credential_id = credential.id_using_hash(&mut self.trussed, kek, &rp_id_hash)?;
 
         // store it.
         // TODO: overwrite, error handling with KeyStoreFull
 
-        let serialized_credential = credential.serialize()?;
+        // Introduce smaller Credential struct for ID, with extra metadata removed. This ensures
+        // ID will stay below 255 bytes.
+        let credential_thin = Credential::new(
+            credential::CtapVersion::Fido21Pre,
+            &PublicKeyCredentialRpEntity{
+                id: parameters.rp.id.clone(),
+                name: None,
+                url: None
+            },
+            &PublicKeyCredentialUserEntity {
+                id: parameters.user.id.clone(),
+                icon: None,
+                name: None,
+                display_name: None
+            },
+            algorithm as i32,
+            key_parameter.clone(),
+            self.state.persistent.timestamp(&mut self.trussed)?,
+            None,
+            None,
+            nonce,
+        );
 
+        let credential_id = credential_thin.id_using_hash(&mut self.trussed, kek, &rp_id_hash)?;
 
         if rk_requested {
+            // Create full credential for the Resident Key usage, and store it in local memory.
+            let credential = Credential::new(
+                credential::CtapVersion::Fido21Pre,
+                &parameters.rp,
+                &parameters.user,
+                algorithm as i32,
+                key_parameter,
+                self.state.persistent.timestamp(&mut self.trussed)?,
+                hmac_secret_requested.clone(),
+                cred_protect_requested,
+                nonce,
+            );
+            // info!("made credential {:?}", &credential);
+            let serialized_credential = credential.serialize()?;
+
             // first delete any other RK cred with same RP + UserId if there is one.
             self.delete_resident_key_by_user_id(&rp_id_hash, &credential.user.id).ok();
 
@@ -2069,7 +2099,7 @@ where UP: UserPresence,
     fn get_info(&mut self) -> ctap2::get_info::Response {
 
         use core::str::FromStr;
-        let mut versions = Vec::<String<12>, 3>::new();
+        let mut versions = Vec::<String<12>, 4>::new();
         versions.push(String::from_str("U2F_V2").unwrap()).unwrap();
         versions.push(String::from_str("FIDO_2_0").unwrap()).unwrap();
         // #[cfg(feature = "enable-fido-pre")]
