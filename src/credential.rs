@@ -167,41 +167,38 @@ impl Credential {
         }
     }
 
-    pub fn id_using_hash<'a, T: client::Chacha8Poly1305>(
-        &self,
-        crypto: &mut T,
-        key_encryption_key: KeyId,
-        rp_id_hash: &Bytes32,
-    )
-        -> Result<CredentialId>
-    {
-        let serialized_credential = self.serialize()?;
-        let message = &serialized_credential;
-
-        let associated_data = &rp_id_hash[..];
-        let nonce: [u8; 12] = self.nonce.as_slice().try_into().unwrap();
-        let encrypted_serialized_credential = EncryptedSerializedCredential(
-            syscall!(crypto.encrypt_chacha8poly1305(
-                    key_encryption_key, message, associated_data, Some(&nonce))));
-        let credential_id: CredentialId = encrypted_serialized_credential.try_into().unwrap();
-
-        Ok(credential_id)
-    }
-
+    // ID (or "keyhandle") for the credential.
+    //
+    // Originally, the entire data was serialized, and its encryption
+    // (binding RP as associated data) used as a keyhandle.
+    //
+    // However, this leads to problems with relying parties. According to the old U2F
+    // spec, the length of a keyhandle is encoded as one byte, whereas this procedure would
+    // generate keyhandles of length ~320 bytes.
+    //
+    // Therefore, inessential metadata is stripped before serialization, ensuring
+    // the ID will stay below 255 bytes.
+    //
+    // Existing keyhandles can still be decoded
     pub fn id<'a, T: client::Chacha8Poly1305 + client::Sha256>(
         &self,
         trussed: &mut T,
         key_encryption_key: KeyId,
+        rp_id_hash: Option<&Bytes32>,
     )
         -> Result<CredentialId>
     {
-        let serialized_credential = self.serialize()?;
+        let serialized_credential = self.strip().serialize()?;
         let message = &serialized_credential;
-        // info!("ser cred = {:?}", message).ok();
+        // info!("serialized cred = {:?}", message).ok();
 
-        let rp_id_hash: Bytes32 = syscall!(trussed.hash_sha256(&self.rp.id.as_ref()))
-            .hash
-            .to_bytes().map_err(|_| Error::Other)?;
+        let rp_id_hash: Bytes32 = if let Some(hash) = rp_id_hash {
+            hash.clone()
+        } else {
+            syscall!(trussed.hash_sha256(&self.rp.id.as_ref()))
+                .hash
+                .to_bytes().map_err(|_| Error::Other)?
+        };
 
         let associated_data = &rp_id_hash[..];
         let nonce: [u8; 12] = self.nonce.as_slice().try_into().unwrap();
@@ -271,32 +268,23 @@ impl Credential {
         Ok(credential)
     }
 
-    // Does not work, as it would use a new, different nonce!
+    // Remove inessential metadata from credential.
     //
-    // pub fn id(&self) -> Result<CredentialId> {
-    //     let serialized_credential = self.serialize()?;
-    //     let key = &self.key_encryption_key()?;
-    //     let message = &serialized_credential;
-    //     let associated_data = parameters.rp.id.as_bytes();
-    //     let encrypted_serialized_credential = EncryptedSerializedCredential(
-    //         syscall!(self.trussed.encrypt_chacha8poly1305(key, message, associated_data)));
-    //     let credential_id: CredentialId = encrypted_serialized_credential.try_into().unwrap();
-    //     credential_id
-    // }
+    // Called by the `id` method, see its documentation.
+    pub fn strip(&self) -> Self {
+        let mut stripped = self.clone();
+        let data = &mut stripped.data;
 
-    // pub fn store(&self) -> Result<gt
-    //     let serialized_credential = self.serialize()?;
-    //     let mut prefix = trussed::types::ShortData::new();
-    //     prefix.extend_from_slice(b"rk").map_err(|_| Error::Other)?;
-    //     let prefix = Some(trussed::types::Letters::try_from(prefix).map_err(|_| Error::Other)?);
-    //     let blob_id = syscall!(self.trussed.store_blob(
-    //         prefix.clone(),
-    //         // credential_id.0.clone(),
-    //         serialized_credential.clone(),
-    //         Location::Internal,
-    //         Some(rp_id_hash.clone()),
-    //     )).blob;
+        data.rp.name = None;
+        data.rp.url = None;
 
-    //     blob_id
-    // }
+        data.user.icon = None;
+        data.user.name = None;
+        data.user.display_name = None;
+
+        // data.hmac_secret = None;
+        // data.cred_protect = None;
+
+        stripped
+    }
 }

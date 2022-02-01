@@ -413,7 +413,7 @@ where UP: UserPresence,
         let authnr = &mut self.authnr;
         let kek = authnr.state.persistent.key_encryption_key(&mut authnr.trussed)?;
 
-        let credential_id =  credential.id(&mut self.trussed, kek)?;
+        let credential_id =  credential.id(&mut self.trussed, kek, None)?;
         response.credential_id = Some(credential_id.into());
 
         use crate::credential::Key;
