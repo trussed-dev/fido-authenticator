@@ -22,11 +22,7 @@ use trussed::{
 
 use ctap_types::{
     Bytes, Bytes32, String, Vec,
-    // cose::EcdhEsHkdf256PublicKey as CoseEcdhEsHkdf256PublicKey,
-    // cose::PublicKey as CosePublicKey,
     operation::VendorOperation,
-    // rpc::CtapInterchange,
-    // authenticator::ctap1,
     authenticator::{ctap2, Error, Request, Response},
     ctap1::{
         self,
@@ -35,10 +31,6 @@ use ctap_types::{
         Result as U2fResult,
         Error as U2fError,
     },
-    webauthn::{
-        PublicKeyCredentialRpEntity,
-        PublicKeyCredentialUserEntity
-    }
 };
 
 use littlefs2::path::{Path, PathBuf};
@@ -238,7 +230,7 @@ where UP: UserPresence,
 
                 // 12.b generate credential ID { = AEAD(Serialize(Credential)) }
                 let kek = self.state.persistent.key_encryption_key(&mut self.trussed).map_err(|_| U2fError::NotEnoughMemory)?;
-                let credential_id = credential.id_using_hash(&mut self.trussed, kek, &reg.app_id).map_err(|_| U2fError::NotEnoughMemory)?;
+                let credential_id = credential.id(&mut self.trussed, kek, Some(&reg.app_id)).map_err(|_| U2fError::NotEnoughMemory)?;
                 syscall!(self.trussed.delete(public_key));
                 syscall!(self.trussed.delete(private_key));
 
@@ -481,7 +473,7 @@ where UP: UserPresence,
             return Err(Error::InvalidParameter);
         }
 
-        Ok( match parameters.sub_command {
+        Ok(match parameters.sub_command {
 
             Subcommand::GetRetries => {
                 debug!("processing CP.GR");
@@ -1102,7 +1094,7 @@ where UP: UserPresence,
             let kek = self.state.persistent.key_encryption_key(&mut self.trussed)?;
 
             if keep {
-                let id = credential.id_using_hash(&mut self.trussed, kek, rp_id_hash)?;
+                let id = credential.id(&mut self.trussed, kek, Some(rp_id_hash))?;
                 let credential_id_hash = self.hash(&id.0.as_ref());
 
                 let timestamp_path = TimestampPath {
@@ -1132,7 +1124,7 @@ where UP: UserPresence,
 
                 if keep {
 
-                    let id = credential.id_using_hash(&mut self.trussed, kek, rp_id_hash)?;
+                    let id = credential.id(&mut self.trussed, kek, Some(rp_id_hash))?;
                     let credential_id_hash = self.hash(&id.0.as_ref());
 
                     let timestamp_path = TimestampPath {
@@ -1445,7 +1437,7 @@ where UP: UserPresence,
 
         // info!("signing with credential {:?}", &credential);
         let kek = self.state.persistent.key_encryption_key(&mut self.trussed)?;
-        let credential_id = credential.id_using_hash(&mut self.trussed, kek, &rp_id_hash)?;
+        let credential_id = credential.id(&mut self.trussed, kek, Some(&rp_id_hash))?;
 
         use ctap2::AuthenticatorDataFlags as Flags;
 
@@ -1628,9 +1620,6 @@ where UP: UserPresence,
         &mut self,
         rk_path: &Path,
     )
-        // rp_id_hash: &Bytes32,
-        // credential_id_hash: &Bytes32,
-    // )
         -> Result<()>
     {
         info!("deleting RK {:?}", &rk_path);
@@ -1845,45 +1834,22 @@ where UP: UserPresence,
         // store it.
         // TODO: overwrite, error handling with KeyStoreFull
 
-        // Introduce smaller Credential struct for ID, with extra metadata removed. This ensures
-        // ID will stay below 255 bytes.
-        let credential_thin = Credential::new(
+        let credential = Credential::new(
             credential::CtapVersion::Fido21Pre,
-            &PublicKeyCredentialRpEntity{
-                id: parameters.rp.id.clone(),
-                name: None,
-                url: None
-            },
-            &PublicKeyCredentialUserEntity {
-                id: parameters.user.id.clone(),
-                icon: None,
-                name: None,
-                display_name: None
-            },
+            &parameters.rp,
+            &parameters.user,
             algorithm as i32,
-            key_parameter.clone(),
+            key_parameter,
             self.state.persistent.timestamp(&mut self.trussed)?,
-            None,
-            None,
+            hmac_secret_requested.clone(),
+            cred_protect_requested,
             nonce,
         );
 
-        let credential_id = credential_thin.id_using_hash(&mut self.trussed, kek, &rp_id_hash)?;
+        let credential_id = credential.id(&mut self.trussed, kek, Some(&rp_id_hash))?;
 
         if rk_requested {
-            // Create full credential for the Resident Key usage, and store it in local memory.
-            let credential = Credential::new(
-                credential::CtapVersion::Fido21Pre,
-                &parameters.rp,
-                &parameters.user,
-                algorithm as i32,
-                key_parameter,
-                self.state.persistent.timestamp(&mut self.trussed)?,
-                hmac_secret_requested.clone(),
-                cred_protect_requested,
-                nonce,
-            );
-            // info!("made credential {:?}", &credential);
+            // serialization with all metadata
             let serialized_credential = credential.serialize()?;
 
             // first delete any other RK cred with same RP + UserId if there is one.
@@ -1899,13 +1865,14 @@ where UP: UserPresence,
                 None,
             )).map_err(|_| Error::KeyStoreFull)?;
         }
+
         // 13. generate and return attestation statement using clientDataHash
 
         // 13.a AuthenticatorData and its serialization
         use ctap2::AuthenticatorDataFlags as Flags;
         info!("MC created cred id");
 
-        let (attestation_maybe, aaguid)= self.state.identity.attestation(&mut self.trussed);
+        let (attestation_maybe, aaguid) = self.state.identity.attestation(&mut self.trussed);
 
         let authenticator_data = ctap2::make_credential::AuthenticatorData {
             rp_id_hash: rp_id_hash.to_bytes().map_err(|_| Error::Other)?,
@@ -2046,56 +2013,6 @@ where UP: UserPresence,
         Ok(attestation_object)
     }
 
-    // fn credential_id(credential: &Credential) -> CredentialId {
-    // }
-
-    // fn get_assertion(&mut self, ...)
-    //     // let unwrapped_key = syscall!(self.trussed.unwrap_key_chacha8poly1305(
-    //     //     &wrapping_key,
-    //     //     &wrapped_key,
-    //     //     b"",
-    //     //     Location::Volatile,
-    //     // )).key;
-        // // test public key ser/de
-        // let ser_pk = syscall!(self.trussed.serialize_key(
-        //     Mechanism::P256, public_key.clone(), KeySerialization::Raw
-        // )).serialized_key;
-        // debug!("ser pk = {:?}", &ser_pk);
-
-        // let cose_ser_pk = syscall!(self.trussed.serialize_key(
-        //     Mechanism::P256, public_key.clone(), KeySerialization::Cose
-        // )).serialized_key;
-        // debug!("COSE ser pk = {:?}", &cose_ser_pk);
-
-        // let deser_pk = syscall!(self.trussed.deserialize_key(
-        //     Mechanism::P256, ser_pk.clone(), KeySerialization::Raw,
-        //     StorageAttributes::new().set_persistence(Location::Volatile)
-        // )).key;
-        // debug!("deser pk = {:?}", &deser_pk);
-
-        // let cose_deser_pk = syscall!(self.trussed.deserialize_key(
-        //     Mechanism::P256, cose_ser_pk.clone(), KeySerialization::Cose,
-        //     StorageAttributes::new().set_persistence(Location::Volatile)
-        // )).key;
-        // debug!("COSE deser pk = {:?}", &cose_deser_pk);
-        // debug!("raw ser of COSE deser pk = {:?}",
-        //           syscall!(self.trussed.serialize_key(Mechanism::P256, cose_deser_pk.clone(), KeySerialization::Raw)).
-        //           serialized_key);
-
-        // debug!("priv {:?}", &private_key);
-        // debug!("pub {:?}", &public_key);
-
-        // let _loaded_credential = syscall!(self.trussed.load_blob(
-        //     prefix.clone(),
-        //     blob_id,
-        //     Location::Volatile,
-        // )).data;
-        // // debug!("loaded credential = {:?}", &loaded_credential);
-
-        // debug!("credential = {:?}", &Credential::deserialize(&serialized_credential)?);
-
-    //     // debug!("unwrapped_key = {:?}", &unwrapped_key);
-
     fn get_info(&mut self) -> ctap2::get_info::Response {
 
         use core::str::FromStr;
@@ -2139,72 +2056,6 @@ where UP: UserPresence,
             ..ctap2::get_info::Response::default()
         }
     }
-
-//     fn get_or_create_counter_handle(trussed_client: &mut TrussedClient) -> Result<CounterId> {
-
-//         // there should be either 0 or 1 counters with this name. if not, it's a logic error.
-//         let attributes = Attributes {
-//             kind: Counter,
-//             label: Self::GLOBAL_COUNTER_NAME.into(),
-//         };
-
-//         // let reply = syscall!(FindObjects, attributes)?;
-
-//         let reply = block!(
-//             request::FindObjects { attributes }
-//                 .submit(&mut trussed_client)
-//                 // no pending requests
-//                 .map_err(drop)
-//                 .unwrap()
-//         )?;
-
-//         // how should this API look like.
-//         match reply.num_objects() {
-//             // the happy case
-//             1 => Ok(reply.object_handles[0]),
-
-//             // first run - create counter
-//             0 => {
-//                 let reply = block!(
-//                     request::FindObjects { attributes }
-//                         .submit(&mut trussed_client)
-//                         // no pending requests
-//                         .map_err(drop)
-//                         .unwrap()
-//                 )?;
-//                 Ok(reply::ReadCounter::from(reply).object_handle)
-//             }
-
-//             // should not occur
-//             _ => Err(Error::TooManyCounters),
-//         }
-//     }
-
-//     fn get_or_create_counter_handle(trussed_client: &mut TrussedClient) -> Result<CounterId> {
-//         todo!("not implemented yet, follow counter code");
-//     }
-
-// }
-
-// impl authenticator::Api for Authenticator
-// {
-//     fn get_info(&mut self) -> AuthenticatorInfo {
-//         todo!();
-//     }
-
-//     fn reset(&mut self) -> Result<()> {
-//         todo!();
-//     }
-
-
-//     fn get_assertions(&mut self, params: &GetAssertionParameters) -> Result<AssertionResponses> {
-//         todo!();
-//     }
-
-//     fn make_credential(&mut self, params: &MakeCredentialParameters) -> Result<AttestationObject> {
-//         todo!();
-//     }
-
 }
 
 #[cfg(test)]
