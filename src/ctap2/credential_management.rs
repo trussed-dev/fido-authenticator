@@ -1,9 +1,8 @@
-//! TODO: There is potential need for `fsck`
+//! TODO: T
 
 use core::convert::TryFrom;
 
 use trussed::{
-    client,
     syscall,
     types::{
         DirEntry,
@@ -40,9 +39,10 @@ use crate::{
         CredentialManagementEnumerateRps,
         CredentialManagementEnumerateCredentials,
     },
+    TrussedRequirements,
 };
 
-pub struct CredentialManagement<'a, UP, T>
+pub(crate) struct CredentialManagement<'a, UP, T>
 where UP: UserPresence,
 {
     authnr: &'a mut Authenticator<UP, T>,
@@ -75,15 +75,7 @@ where UP: UserPresence,
 
 impl<UP, T> CredentialManagement<'_, UP, T>
 where UP: UserPresence,
-      T: client::Client
-       + client::P256
-       + client::Chacha8Poly1305
-       + client::Aes256Cbc
-       + client::Sha256
-       + client::HmacSha256
-       + client::Ed255
-       + client::Totp
-       + client::P256
+      T: TrussedRequirements,
 {
     pub fn get_creds_metadata(&mut self) -> Result<Response> {
         info!("get metadata");
@@ -204,8 +196,11 @@ where UP: UserPresence,
             if let Some(total_rps) = response.total_rps {
                 if total_rps > 1 {
                     let rp_id_hash = response.rp_id_hash.as_ref().unwrap().clone();
-                    self.state.runtime.cache_rp = Some(
-                        CredentialManagementEnumerateRps(total_rps - 1, rp_id_hash));
+                    self.state.runtime.cached_rp = Some(
+                        CredentialManagementEnumerateRps {
+                            remaining: total_rps - 1,
+                            rp_id_hash,
+                        });
                 }
             }
         }
@@ -216,12 +211,10 @@ where UP: UserPresence,
     pub fn next_relying_party(&mut self) -> Result<Response> {
         info!("next rp");
 
-        let (remaining, last_rp_id_hash) = match self.state.runtime.cache_rp {
-            Some(CredentialManagementEnumerateRps(
-                    remaining, ref rp_id_hash)) =>
-                (remaining, rp_id_hash),
-            _ => return Err(Error::NotAllowed),
-        };
+        let CredentialManagementEnumerateRps {
+            remaining,
+            rp_id_hash: last_rp_id_hash,
+        } = self.state.runtime.cached_rp.clone().ok_or_else(|| Error::NotAllowed)?;
 
         let dir = PathBuf::from(b"rk");
 
@@ -272,16 +265,17 @@ where UP: UserPresence,
                     // cache state for next call
                     if remaining > 1 {
                         let rp_id_hash = response.rp_id_hash.as_ref().unwrap().clone();
-                        self.state.runtime.cache_rp = Some(CredentialManagementEnumerateRps(
-                            remaining - 1, rp_id_hash
-                        ));
+                        self.state.runtime.cached_rp = Some(CredentialManagementEnumerateRps {
+                            remaining: remaining - 1,
+                            rp_id_hash,
+                        });
                     } else {
-                        self.state.runtime.cache_rp = None;
+                        self.state.runtime.cached_rp = None;
                     }
                 }
             }
         } else {
-            self.state.runtime.cache_rp = None;
+            self.state.runtime.cached_rp = None;
         }
 
         Ok(response)
@@ -307,7 +301,7 @@ where UP: UserPresence,
     pub fn first_credential(&mut self, rp_id_hash: &Bytes32) -> Result<Response> {
         info!("first credential");
 
-        self.state.runtime.cache_rk = None;
+        self.state.runtime.cached_rk = None;
 
         let mut hex = [b'0'; 16];
         super::format_hex(&rp_id_hash[..8], &mut hex);
@@ -324,11 +318,11 @@ where UP: UserPresence,
         if let Some(num_rks) = response.total_credentials {
             if num_rks > 1 {
                 // let rp_id_hash = response.rp_id_hash.as_ref().unwrap().clone();
-                self.state.runtime.cache_rk = Some(CredentialManagementEnumerateCredentials(
-                    num_rks - 1,
-                    first_rk.path().parent().unwrap(),
-                    PathBuf::from(first_rk.file_name()),
-                ));
+                self.state.runtime.cached_rk = Some(CredentialManagementEnumerateCredentials {
+                    remaining: num_rks - 1,
+                    rp_dir: first_rk.path().parent().unwrap(),
+                    prev_filename: PathBuf::from(first_rk.file_name()),
+                });
             }
         }
 
@@ -338,14 +332,19 @@ where UP: UserPresence,
     pub fn next_credential(&mut self) -> Result<Response> {
         info!("next credential");
 
-        let (remaining, rp_dir, prev_filename) = match self.state.runtime.cache_rk {
-            Some(CredentialManagementEnumerateCredentials(
-                    x, ref y, ref z))
-                 => (x, y.clone(), z.clone()),
-            _ => return Err(Error::NotAllowed),
-        };
+        let CredentialManagementEnumerateCredentials {
+            remaining,
+            rp_dir,
+            prev_filename,
+        } = self.state.runtime.cached_rk.clone().ok_or(Error::NotAllowed)?;
+        // let (remaining, rp_dir, prev_filename) = match self.state.runtime.cached_rk {
+        //     Some(CredentialManagementEnumerateCredentials(
+        //             x, ref y, ref z))
+        //          => (x, y.clone(), z.clone()),
+        //     _ => return Err(Error::NotAllowed),
+        // };
 
-        self.state.runtime.cache_rk = None;
+        self.state.runtime.cached_rk = None;
 
         // let mut hex = [b'0'; 16];
         // super::format_hex(&rp_id_hash[..8], &mut hex);
@@ -372,11 +371,11 @@ where UP: UserPresence,
 
                 // cache state for next call
                 if remaining > 1 {
-                    self.state.runtime.cache_rk = Some(CredentialManagementEnumerateCredentials(
-                        remaining - 1,
-                        rk.path().parent().unwrap(),
-                        PathBuf::from(rk.file_name()),
-                    ));
+                    self.state.runtime.cached_rk = Some(CredentialManagementEnumerateCredentials {
+                        remaining: remaining - 1,
+                        rp_dir: rk.path().parent().unwrap(),
+                        prev_filename: PathBuf::from(rk.file_name()),
+                    });
                 }
 
                 Ok(response)
@@ -422,12 +421,12 @@ where UP: UserPresence,
             _ => return Err(Error::InvalidCredential),
         };
 
-        use crate::SupportedAlgorithm;
+        use crate::SigningAlgorithm;
         use trussed::types::{KeySerialization, Mechanism};
 
-        let algorithm = SupportedAlgorithm::try_from(credential.algorithm)?;
+        let algorithm = SigningAlgorithm::try_from(credential.algorithm)?;
         let cose_public_key =  match algorithm {
-            SupportedAlgorithm::P256 => {
+            SigningAlgorithm::P256 => {
                 let public_key = syscall!(self.trussed.derive_p256_public_key(private_key, Location::Volatile)).key;
                 let cose_public_key = syscall!(self.trussed.serialize_key(
                     Mechanism::P256, public_key.clone(),
@@ -439,7 +438,7 @@ where UP: UserPresence,
                     ctap_types::serde::cbor_deserialize(&cose_public_key)
                     .unwrap())
             }
-            SupportedAlgorithm::Ed25519 => {
+            SigningAlgorithm::Ed25519 => {
                 let public_key = syscall!(self.trussed.derive_ed255_public_key(
                     private_key, Location::Volatile)).key;
                 let cose_public_key = syscall!(self.trussed.serialize_ed255_key(
@@ -450,9 +449,9 @@ where UP: UserPresence,
                     ctap_types::serde::cbor_deserialize(&cose_public_key)
                     .unwrap())
             }
-            SupportedAlgorithm::Totp => {
-                PublicKey::TotpKey(Default::default())
-            }
+            // SigningAlgorithm::Totp => {
+            //     PublicKey::TotpKey(Default::default())
+            // }
         };
         response.public_key = Some(cose_public_key);
         response.cred_protect = match credential.cred_protect {

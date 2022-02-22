@@ -1,3 +1,5 @@
+//! Constants.
+
 use trussed::types::{CertId, KeyId};
 
 pub const FIDO2_UP_TIMEOUT: u32 = 30_000;
