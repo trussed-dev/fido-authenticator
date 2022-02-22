@@ -1,3 +1,5 @@
+//! Internal `Credential` and external `CredentialId` ("keyhandle").
+
 use core::convert::{TryFrom, TryInto};
 
 use trussed::{
@@ -21,24 +23,27 @@ use crate::{
 };
 
 
+/// As signaled in `get_info`.
+///
+/// Eventual goal is full support for the CTAP2.1 specification.
 #[derive(Copy, Clone, Debug, serde::Deserialize, serde::Serialize)]
-// #[derive(Copy, Clone, Debug, serde_indexed::DeserializeIndexed, serde_indexed::SerializeIndexed)]
 pub enum CtapVersion {
     U2fV2,
     Fido20,
     Fido21Pre,
 }
 
+/// External ID of a credential, commonly known as "keyhandle".
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CredentialId(pub Bytes<MAX_CREDENTIAL_ID_LENGTH>);
 
 // TODO: how to determine necessary size?
 // pub type SerializedCredential = Bytes<512>;
 // pub type SerializedCredential = Bytes<256>;
-pub type SerializedCredential = trussed::types::Message;
+pub(crate) type SerializedCredential = trussed::types::Message;
 
 #[derive(Clone, Debug)]
-pub struct EncryptedSerializedCredential(pub trussed::api::reply::Encrypt);
+struct EncryptedSerializedCredential(pub trussed::api::reply::Encrypt);
 
 impl TryFrom<EncryptedSerializedCredential> for CredentialId {
     type Error = Error;
@@ -61,18 +66,23 @@ impl TryFrom<CredentialId> for EncryptedSerializedCredential {
     }
 }
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+/// Credential keys can either be "discoverable" or not.
+///
+/// The FIDO Alliance likes to refer to "resident keys" as "(client-side) discoverable public key
+/// credential sources" now ;)
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Key {
     ResidentKey(KeyId),
     // THIS USED TO BE 92 NOW IT'S 96 or 97 or so... waddup?
     WrappedKey(Bytes<128>),
 }
 
-#[derive(Clone, Debug, serde_indexed::DeserializeIndexed, serde_indexed::SerializeIndexed)]
+/// The main content of a `Credential`.
+#[derive(Clone, Debug, PartialEq, serde_indexed::DeserializeIndexed, serde_indexed::SerializeIndexed)]
 pub struct CredentialData {
     // id, name, url
     pub rp: ctap_types::webauthn::PublicKeyCredentialRpEntity,
-    // id, name, display_name
+    // id, icon, name, display_name
     pub user: ctap_types::webauthn::PublicKeyCredentialUserEntity,
 
     // can be just a counter, need to be able to determine "latest"
@@ -100,13 +110,21 @@ pub struct CredentialData {
 
 // TODO: figure out sizes
 // We may or may not follow https://github.com/satoshilabs/slips/blob/master/slip-0022.md
+/// The core structure this authenticator creates and uses.
 #[derive(Clone, Debug, serde_indexed::DeserializeIndexed, serde_indexed::SerializeIndexed)]
-// #[serde_indexed(offset = 1)]
 pub struct Credential {
     ctap: CtapVersion,
     pub data: CredentialData,
     nonce: Bytes<12>,
 }
+
+// Alas... it would be more symmetrical to have Credential { meta, data },
+// but let's not break binary compatibility for this.
+//
+// struct Metadata {
+//     ctap: CtapVersion,
+//     nonce: Bytes<12>,
+// }
 
 impl core::ops::Deref for Credential {
     type Target = CredentialData;
@@ -116,7 +134,7 @@ impl core::ops::Deref for Credential {
     }
 }
 
-pub type CredentialList = Vec<Credential, {ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST}>;
+pub(crate) type CredentialList = Vec<Credential, {ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST}>;
 
 impl Into<PublicKeyCredentialDescriptor> for CredentialId {
     fn into(self) -> PublicKeyCredentialDescriptor {
@@ -272,6 +290,7 @@ impl Credential {
     //
     // Called by the `id` method, see its documentation.
     pub fn strip(&self) -> Self {
+        info_now!(":: stripping ID");
         let mut stripped = self.clone();
         let data = &mut stripped.data;
 
@@ -287,4 +306,177 @@ impl Credential {
 
         stripped
     }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn credential_data() -> CredentialData {
+        use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
+
+        let credential_data = CredentialData {
+            rp: PublicKeyCredentialRpEntity {
+                id: String::from("John Doe"),
+                name: None,
+                url: None,
+            },
+            user: PublicKeyCredentialUserEntity {
+                id: Bytes::from_slice(&[1,2,3]).unwrap(),
+                icon: None,
+                name: None,
+                display_name: None,
+            },
+            creation_time: 123,
+            use_counter: false,
+            algorithm: -7,
+            key: Key::WrappedKey(Bytes::from_slice(&[1,2,3]).unwrap()),
+            hmac_secret: Some(false),
+            cred_protect: None,
+        };
+        credential_data
+    }
+
+    fn random_bytes<const N: usize>() -> Bytes<N> {
+        use rand::{RngCore, distributions::{Distribution, Uniform}, rngs::OsRng};
+        let mut bytes = Bytes::default();
+
+        let between = Uniform::from(0..(N + 1));
+        let n = between.sample(&mut OsRng);
+
+        bytes.resize_default(n).unwrap();
+
+        OsRng.fill_bytes(&mut bytes);
+        bytes
+    }
+
+    #[allow(dead_code)]
+    fn maybe_random_bytes<const N: usize>() -> Option<Bytes<N>> {
+        use rand::{RngCore, rngs::OsRng};
+        if OsRng.next_u32() & 1 != 0 {
+            Some(random_bytes())
+        } else {
+            None
+        }
+    }
+
+    fn random_string<const N: usize>() -> String<N> {
+        use std::str::FromStr;
+        use rand::{Rng, distributions::{Alphanumeric, Distribution, Uniform}, rngs::OsRng};
+
+        let between = Uniform::from(0..(N + 1));
+        let n = between.sample(&mut OsRng);
+
+        let std_string: std::string::String = OsRng.sample_iter(&Alphanumeric).take(n).map(char::from).collect();
+        String::from_str(&std_string).unwrap()
+    }
+
+    fn maybe_random_string<const N: usize>() -> Option<String<N>> {
+        use rand::{RngCore, rngs::OsRng};
+        if OsRng.next_u32() & 1 != 0 {
+            Some(random_string())
+        } else {
+            None
+        }
+    }
+
+    fn random_credential_data() -> CredentialData {
+        use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
+
+        let credential_data = CredentialData {
+            rp: PublicKeyCredentialRpEntity {
+                id: random_string(),
+                name: maybe_random_string(),
+                url: maybe_random_string(),
+            },
+            user: PublicKeyCredentialUserEntity {
+                id: random_bytes(),//Bytes::from_slice(&[1,2,3]).unwrap(),
+                icon: maybe_random_string(),
+                name: maybe_random_string(),
+                display_name: maybe_random_string(),
+            },
+            creation_time: 123,
+            use_counter: false,
+            algorithm: -7,
+            key: Key::WrappedKey(random_bytes()),
+            hmac_secret: Some(false),
+            cred_protect: None,
+        };
+        credential_data
+    }
+
+    #[test]
+    fn skip_credential_data_options() {
+        use trussed::{cbor_deserialize as deserialize, cbor_serialize_bytes as serialize};
+
+        let credential_data = credential_data();
+        let serialization: Bytes<1024> = serialize(&credential_data).unwrap();
+        let deserialized: CredentialData = deserialize(&serialization).unwrap();
+
+        assert_eq!(credential_data, deserialized);
+
+        let credential_data = random_credential_data();
+        let serialization: Bytes<1024> = serialize(&credential_data).unwrap();
+        let deserialized: CredentialData = deserialize(&serialization).unwrap();
+
+        assert_eq!(credential_data, deserialized);
+    }
+
+    // use quickcheck::TestResult;
+    // quickcheck::quickcheck! {
+    //   fn prop(
+    //       rp_id: std::string::String,
+    //       rp_name: Option<std::string::String>,
+    //       rp_url: Option<std::string::String>,
+    //       user_id: std::vec::Vec<u8>,
+    //       user_name: Option<std::string::String>,
+    //       creation_time: u32,
+    //       use_counter: bool,
+    //       algorithm: i32
+    //     ) -> TestResult {
+    //     use std::str::FromStr;
+    //     use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
+    //     use trussed::{cbor_deserialize as deserialize, cbor_serialize_bytes as serialize};
+
+    //     let rp_name = &rp_name.as_ref().map(|string| string.as_str());
+    //     let rp_url = &rp_url.as_ref().map(|string| string.as_str());
+    //     let user_name = &user_name.as_ref().map(|string| string.as_str());
+    //     let discard = [
+    //         rp_id.len() > 256,
+    //         rp_name.unwrap_or(&"").len() > 64,
+    //         rp_url.unwrap_or(&"").len() > 64,
+    //         user_id.len() > 64,
+    //         user_name.unwrap_or(&"").len() > 64,
+
+    //     ];
+    //     if discard.iter().any(|&x| x) {
+    //         return TestResult::discard();
+    //     }
+
+    //     let credential_data = CredentialData {
+    //         rp: PublicKeyCredentialRpEntity {
+    //             id: String::from_str(&rp_id).unwrap(),
+    //             name: rp_name.map(|rp_name| String::from_str(rp_name).unwrap()),
+    //             url: rp_url.map(|rp_url| String::from_str(rp_url).unwrap()),
+    //         },
+    //         user: PublicKeyCredentialUserEntity {
+    //             id: Bytes::from_slice(&user_id).unwrap(),
+    //             icon: maybe_random_string(),
+    //             name: user_name.map(|user_name| String::from_str(user_name).unwrap()),
+    //             display_name: maybe_random_string(),
+    //         },
+    //         creation_time,
+    //         use_counter,
+    //         algorithm,
+    //         key: Key::WrappedKey(random_bytes()),
+    //         hmac_secret: Some(false),
+    //         cred_protect: None,
+    //     };
+
+    //     let serialization: Bytes<1024> = serialize(&credential_data).unwrap();
+    //     let deserialized: CredentialData = deserialize(&serialization).unwrap();
+
+    //     TestResult::from_bool(credential_data == deserialized)
+    // }
+  // }
 }

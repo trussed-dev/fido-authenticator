@@ -1,3 +1,7 @@
+//! Various state of the authenticator.
+//!
+//! Needs cleanup.
+
 use core::cmp::Ordering;
 
 use trussed::{
@@ -20,14 +24,19 @@ use ctap_types::{
 use heapless::binary_heap::{BinaryHeap, Max, Min};
 use littlefs2::path::PathBuf;
 
-use crate::Result;
-use crate::cbor_serialize_message;
+use crate::{
+    cbor_serialize_message,
+    credential::Credential,
+    Result,
+};
 
 pub type MaxCredentialHeap = BinaryHeap<TimestampPath, Max, MAX_CREDENTIAL_COUNT_IN_LIST>;
 pub type MinCredentialHeap = BinaryHeap<TimestampPath, Min, MAX_CREDENTIAL_COUNT_IN_LIST>;
 
 #[derive(Clone, Debug, /*uDebug, Eq, PartialEq,*/ serde::Deserialize, serde::Serialize)]
 pub struct State {
+
+    /// Batch device identity (aaguid, certificate, key).
     pub identity: Identity,
     pub persistent: PersistentState,
     pub runtime: RuntimeState,
@@ -73,6 +82,7 @@ impl State {
 
 }
 
+/// Batch device identity (aaguid, certificate, key).
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Identity {
     // can this be [u8; 16] or need Bytes for serialization?
@@ -119,6 +129,7 @@ impl Identity {
         Some(aaguid)
     }
 
+    /// Lookup batch key and certificate, together with AAUGID.
     pub fn attestation<T: TrussedClient>(&mut self, trussed: &mut T) -> (Option<(KeyId, Certificate)>, Aaguid)
     {
         let key = crate::constants::ATTESTATION_KEY_ID;
@@ -147,10 +158,17 @@ impl Identity {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct CredentialManagementEnumerateRps(pub u32, pub Bytes32);
+pub struct CredentialManagementEnumerateRps {
+    pub remaining: u32,
+    pub rp_id_hash: Bytes32,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct CredentialManagementEnumerateCredentials(pub u32, pub PathBuf, pub PathBuf);
+pub struct CredentialManagementEnumerateCredentials {
+    pub remaining: u32,
+    pub rp_dir: PathBuf,
+    pub prev_filename: PathBuf,
+}
 
 #[derive(Clone, Debug, /*uDebug,*/ Default, /*PartialEq,*/ serde::Deserialize, serde::Serialize)]
 pub struct ActiveGetAssertionData {
@@ -171,11 +189,11 @@ pub struct RuntimeState {
     consecutive_pin_mismatches: u8,
 
     // both of these are a cache for previous Get{Next,}Assertion call
-    credentials: Option<MaxCredentialHeap>,
+    cached_credentials: Option<MaxCredentialHeap>,
     pub active_get_assertion: Option<ActiveGetAssertionData>,
     channel: Option<u32>,
-    pub cache_rp: Option<CredentialManagementEnumerateRps>,
-    pub cache_rk: Option<CredentialManagementEnumerateCredentials>,
+    pub cached_rp: Option<CredentialManagementEnumerateRps>,
+    pub cached_rk: Option<CredentialManagementEnumerateCredentials>,
 }
 
 // TODO: Plan towards future extensibility
@@ -401,21 +419,21 @@ impl RuntimeState {
     }
 
     pub fn credential_heap(&mut self) -> &mut MaxCredentialHeap {
-        if self.credentials.is_none() {
+        // Can't seem to avoid both borrow checker + unwrap
+        if self.cached_credentials.is_none() {
             self.create_credential_heap()
         } else {
-            self.credentials.as_mut().unwrap()
+            self.cached_credentials.as_mut().unwrap()
         }
     }
 
     fn create_credential_heap(&mut self) -> &mut MaxCredentialHeap {
-        self.credentials = Some(MaxCredentialHeap::new());
-        self.credentials.as_mut().unwrap()
+        self.cached_credentials = Some(MaxCredentialHeap::new());
+        self.cached_credentials.as_mut().unwrap()
     }
 
     pub fn free_credential_heap<T: client::FilesystemClient>(&mut self, trussed: &mut T) -> () {
-        if self.credentials.is_some() {
-            let max_heap = self.credential_heap();
+        if let Some(max_heap) = self.cached_credentials.as_mut() {
             while max_heap.len() > 0 {
                 let timestamp_path = max_heap.pop().unwrap();
                 // Only assume that runtime credentials are still valid.
@@ -430,7 +448,7 @@ impl RuntimeState {
         }
     }
 
-    pub fn pop_credential_from_heap<T: client::FilesystemClient>(&mut self, trussed: &mut T) -> crate::Credential {
+    pub fn pop_credential_from_heap<T: client::FilesystemClient>(&mut self, trussed: &mut T) -> Credential {
         let max_heap = self.credential_heap();
         let timestamp_hash = max_heap.pop().unwrap();
         info!("{:?} @ {} {:?}", &timestamp_hash.path, timestamp_hash.timestamp, timestamp_hash.location);
@@ -445,7 +463,7 @@ impl RuntimeState {
                 timestamp_hash.path,
             ));
         }
-        crate::Credential::deserialize(&data).unwrap()
+        Credential::deserialize(&data).unwrap()
     }
 
     pub fn key_agreement_key<T: client::P256>(&mut self, trussed: &mut T) -> KeyId {
@@ -493,7 +511,7 @@ impl RuntimeState {
         self.rotate_pin_token(trussed);
         self.rotate_key_agreement_key(trussed);
 
-        self.credentials = None;
+        self.cached_credentials = None;
         self.active_get_assertion = None;
     }
 
