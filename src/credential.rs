@@ -1,6 +1,6 @@
 //! Internal `Credential` and external `CredentialId` ("keyhandle").
 
-use core::convert::{TryFrom, TryInto};
+use core::cmp::Ordering;
 
 use trussed::{
     client, syscall, try_syscall,
@@ -131,6 +131,44 @@ impl core::ops::Deref for Credential {
 
     fn deref(&self) -> &Self::Target {
         &self.data
+    }
+}
+
+/// Compare credentials based on key + timestamp.
+///
+/// Likely comparison based on timestamp would be good enough?
+impl PartialEq for Credential {
+    fn eq(&self, other: &Self) -> bool {
+        (self.creation_time == other.creation_time)
+            &&
+        (self.key == other.key)
+    }
+}
+
+impl PartialEq<&Credential> for Credential {
+    fn eq(&self, other: &&Self) -> bool {
+        self == *other
+    }
+}
+
+impl Eq for Credential {}
+
+impl Ord for Credential {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.data.creation_time.cmp(&other.data.creation_time)
+    }
+}
+
+/// Order by timestamp of creation.
+impl PartialOrd for Credential {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialOrd<&Credential> for Credential {
+    fn partial_cmp(&self, other: &&Self) -> Option<Ordering> {
+        Some(self.cmp(*other))
     }
 }
 

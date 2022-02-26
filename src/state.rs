@@ -2,8 +2,6 @@
 //!
 //! Needs cleanup.
 
-use core::cmp::Ordering;
-
 use trussed::{
     client, syscall, try_syscall,
     Client as TrussedClient,
@@ -30,8 +28,8 @@ use crate::{
     Result,
 };
 
-pub type MaxCredentialHeap = BinaryHeap<TimestampPath, Max, MAX_CREDENTIAL_COUNT_IN_LIST>;
-pub type MinCredentialHeap = BinaryHeap<TimestampPath, Min, MAX_CREDENTIAL_COUNT_IN_LIST>;
+pub type MaxCredentialHeap = BinaryHeap<Credential, Max, MAX_CREDENTIAL_COUNT_IN_LIST>;
+pub type MinCredentialHeap = BinaryHeap<Credential, Min, MAX_CREDENTIAL_COUNT_IN_LIST>;
 
 #[derive(Clone, Debug, /*uDebug, Eq, PartialEq,*/ serde::Deserialize, serde::Serialize)]
 pub struct State {
@@ -432,38 +430,16 @@ impl RuntimeState {
         self.cached_credentials.as_mut().unwrap()
     }
 
-    pub fn free_credential_heap<T: client::FilesystemClient>(&mut self, trussed: &mut T) -> () {
-        if let Some(max_heap) = self.cached_credentials.as_mut() {
-            while max_heap.len() > 0 {
-                let timestamp_path = max_heap.pop().unwrap();
-                // Only assume that runtime credentials are still valid.
-                if timestamp_path.location == Location::Volatile {
-                    syscall!(trussed.remove_file(
-                        Location::Volatile,
-                        timestamp_path.path,
-                    ));
-                }
-
-            }
+    pub fn free_credential_heap(&mut self) {
+        let heap = self.cached_credentials.take();
+        if let Some(mut heap) = heap {
+            heap.clear();
         }
     }
 
-    pub fn pop_credential_from_heap<T: client::FilesystemClient>(&mut self, trussed: &mut T) -> Credential {
+    pub fn pop_credential_from_heap(&mut self) -> Credential {
         let max_heap = self.credential_heap();
-        let timestamp_hash = max_heap.pop().unwrap();
-        info!("{:?} @ {} {:?}", &timestamp_hash.path, timestamp_hash.timestamp, timestamp_hash.location);
-        let data = syscall!(trussed.read_file(
-            timestamp_hash.location,
-            timestamp_hash.path.clone(),
-        )).data;
-        // Remove any volatile creds
-        if timestamp_hash.location == Location::Volatile {
-            syscall!(trussed.remove_file(
-                timestamp_hash.location,
-                timestamp_hash.path,
-            ));
-        }
-        Credential::deserialize(&data).unwrap()
+        max_heap.pop().unwrap()
     }
 
     pub fn key_agreement_key<T: client::P256>(&mut self, trussed: &mut T) -> KeyId {
@@ -546,22 +522,22 @@ impl RuntimeState {
 
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct TimestampPath {
-    pub timestamp: u32,
-    pub path: PathBuf,
-    pub location: Location,
-}
+// #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+// pub struct TimestampPath {
+//     pub timestamp: u32,
+//     pub path: PathBuf,
+//     pub location: Location,
+// }
 
-impl Ord for TimestampPath {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.timestamp.cmp(&other.timestamp)
-    }
-}
+// impl Ord for TimestampPath {
+//     fn cmp(&self, other: &Self) -> Ordering {
+//         self.timestamp.cmp(&other.timestamp)
+//     }
+// }
 
-impl PartialOrd for TimestampPath {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
+// impl PartialOrd for TimestampPath {
+//     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+//         Some(self.cmp(other))
+//     }
+// }
 
