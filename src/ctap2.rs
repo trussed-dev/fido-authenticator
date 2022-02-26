@@ -42,7 +42,6 @@ use crate::{
     state::{
         self,
         MinCredentialHeap,
-        TimestampPath,
     },
     Result,
 
@@ -73,7 +72,7 @@ where UP: UserPresence,
 {
     /// Dispatches the enum of possible requests into the ctap2 [`Authenticator`] trait methods.
     pub fn call_ctap2(&mut self, request: &Request) -> Result<Response> {
-        info!("called u2f");
+        info_now!("called ctap2");
         self.state.persistent.load_if_not_initialised(&mut self.trussed);
 
         // match request {
@@ -90,19 +89,19 @@ where UP: UserPresence,
         match request {
             // 0x4
             Request::GetInfo => {
-                debug!("GI");
+                debug_now!("GI");
                 Ok(Response::GetInfo(self.get_info()))
             }
 
             // 0x2
             Request::MakeCredential(parameters) => {
-                debug!("MC request");
+                debug_now!("MC request");
                 Ok(Response::MakeCredential(self.make_credential(&parameters)?))
             }
 
             // 0x1
             Request::GetAssertion(parameters) => {
-                debug!("GA request");
+                debug_now!("GA request");
                 let response = self.get_assertion(&parameters);
                 match response {
                     Ok(response) => Ok(Response::GetAssertion(response)),
@@ -115,7 +114,7 @@ where UP: UserPresence,
 
             // 0x8
             Request::GetNextAssertion => {
-                debug!("GNA request");
+                debug_now!("GNA request");
                 let response = self.get_next_assertion();
                 match response {
                     Ok(response) => Ok(Response::GetNextAssertion(response)),
@@ -125,7 +124,7 @@ where UP: UserPresence,
 
             // 0x7
             Request::Reset => {
-                debug!("Reset request");
+                debug_now!("Reset request");
                 let response = self.reset();
                 match response {
                     Ok(()) => Ok(Response::Reset),
@@ -136,19 +135,19 @@ where UP: UserPresence,
 
             // 0x6
             Request::ClientPin(parameters) => {
-                debug!("CP request");
+                debug_now!("CP request");
                 Ok(Response::ClientPin(self.client_pin(&parameters)?))
             }
 
             // 0xA
             Request::CredentialManagement(parameters) => {
-                debug!("CM request");
+                debug_now!("CM request");
                 Ok(Response::CredentialManagement(self.credential_management(&parameters)?))
             }
 
 
             Request::Vendor(op) => {
-                debug!("Vendor request");
+                debug_now!("Vendor request");
                 self.vendor(*op)?;
                 Ok(Response::Vendor)
             }
@@ -226,20 +225,20 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // are stored in state.runtime.credential_heap
         self.locate_credentials(&rp_id_hash, &parameters.allow_list, uv_performed)?;
 
-        let credential = self.state.runtime.pop_credential_from_heap(&mut self.trussed);
+        let credential = self.state.runtime.pop_credential_from_heap();
         let num_credentials = match self.state.runtime.credential_heap().len() {
             0 => None,
             n => Some(n as u32 + 1),
         };
-        info!("FIRST cred: {:?}",&credential);
-        info!("FIRST NUM creds: {:?}",num_credentials);
+        info_now!("FIRST cred: {:?}",&credential);
+        info_now!("FIRST NUM creds: {:?}",num_credentials);
 
         // NB: misleading, if we have "1" we return "None"
         let human_num_credentials = match num_credentials {
             Some(n) => n,
             None => 1,
         };
-        info!("found {:?} applicable credentials", human_num_credentials);
+        info_now!("found {:?} applicable credentials", human_num_credentials);
 
         // 6. process any options present
 
@@ -252,11 +251,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         // 7. collect user presence
         let up_performed = if do_up {
-            info!("asking for up");
+            info_now!("asking for up");
             self.up.user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
             true
         } else {
-            info!("not asking for up");
+            info_now!("not asking for up");
             false
         };
 
@@ -290,7 +289,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // 3. previous GA/GNA >30s ago -> discard stat
         // this is optional over NFC
         if false {
-            self.state.runtime.free_credential_heap(&mut self.trussed);
+            self.state.runtime.free_credential_heap();
             return Err(Error::NotAllowed);
         }
 
@@ -299,7 +298,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         //     timestamp_hash.location,
         //     timestamp_hash.path,
         // )).data;
-        let credential = self.state.runtime.pop_credential_from_heap(&mut self.trussed);
+        let credential = self.state.runtime.pop_credential_from_heap();
         // Credential::deserialize(&data).unwrap();
 
         // 5. suppress PII if no UV was performed in original GA
@@ -339,7 +338,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     use credential::CredentialProtectionPolicy;
                     // If UV is not performed, than CredProtectRequired credentials should not be visibile.
                     if !(excluded_cred.cred_protect == Some(CredentialProtectionPolicy::Required) && !uv_performed) {
-                        info!("Excluded!");
+                        info_now!("Excluded!");
                         self.up.user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
                         return Err(Error::CredentialExcluded);
                     }
@@ -360,12 +359,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         }
         let algorithm = match algorithm {
             Some(algorithm) => {
-                info!("algo: {:?}", algorithm as i32);
+                info_now!("algo: {:?}", algorithm as i32);
                 algorithm
             },
             None => { return Err(Error::UnsupportedAlgorithm); }
         };
-        // debug!("making credential, eddsa = {}", eddsa);
+        // debug_now!("making credential, eddsa = {}", eddsa);
 
 
         // 8. process options; on known but unsupported error UnsupportedOption
@@ -375,7 +374,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let mut _uv_requested = false;
         let _up_requested = true; // can't be toggled
 
-        info!("MC options: {:?}", &parameters.options);
+        info_now!("MC options: {:?}", &parameters.options);
         if let Some(ref options) = &parameters.options {
             if Some(true) == options.rk {
                 rk_requested = true;
@@ -398,7 +397,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }
         }
 
-        // debug!("hmac-secret = {:?}, credProtect = {:?}", hmac_secret_requested, cred_protect_requested);
+        // debug_now!("hmac-secret = {:?}, credProtect = {:?}", hmac_secret_requested, cred_protect_requested);
 
         // 10. get UP, if denied error OperationDenied
         self.up.user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
@@ -420,7 +419,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     Mechanism::P256, public_key.clone(), KeySerialization::Cose
                 )).serialized_key;
                 let _success = syscall!(self.trussed.delete(public_key)).success;
-                info!("deleted public P256 key: {}", _success);
+                info_now!("deleted public P256 key: {}", _success);
             }
             SigningAlgorithm::Ed25519 => {
                 private_key = syscall!(self.trussed.generate_ed255_private_key(location)).key;
@@ -429,7 +428,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     Mechanism::Ed255, public_key.clone(), KeySerialization::Cose
                 )).serialized_key;
                 let _success = syscall!(self.trussed.delete(public_key)).success;
-                info!("deleted public Ed25519 key: {}", _success);
+                info_now!("deleted public Ed25519 key: {}", _success);
             }
             // SigningAlgorithm::Totp => {
             //     if parameters.client_data_hash.len() != 32 {
@@ -439,7 +438,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             //     let totp_secret: [u8; 20] = parameters.client_data_hash[6..26].try_into().unwrap();
             //     private_key = syscall!(self.trussed.unsafe_inject_shared_key(
             //         &totp_secret, Location::Internal)).key;
-            //     // info!("totes injected");
+            //     // info_now!("totes injected");
             //     let fake_cose_pk = ctap_types::cose::TotpPublicKey {};
             //     let fake_serialized_cose_pk = trussed::cbor_serialize_bytes(&fake_cose_pk)
             //         .map_err(|_| Error::NotAllowed)?;
@@ -455,13 +454,13 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             false => {
                 // WrappedKey version
                 let wrapping_key = self.state.persistent.key_wrapping_key(&mut self.trussed)?;
-                debug!("wrapping private key");
+                debug_now!("wrapping private key");
                 let wrapped_key = syscall!(self.trussed.wrap_key_chacha8poly1305(
                     wrapping_key,
                     private_key,
                     &rp_id_hash,
                 )).wrapped_key;
-                // debug!("wrapped_key = {:?}", &wrapped_key);
+                // debug_now!("wrapped_key = {:?}", &wrapped_key);
 
                 // 32B key, 12B nonce, 16B tag + some info on algorithm (P256/Ed25519)
                 // Turns out it's size 92 (enum serialization not optimized yet...)
@@ -469,7 +468,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 // wrapped_key.extend_from_slice(&wrapped_key_msg).unwrap();
                 let ret = Key::WrappedKey(wrapped_key.to_bytes().map_err(|_| Error::Other)?);
                 ret
-                // debug!("len wrapped key = {}", wrapped_key.len());
+                // debug_now!("len wrapped key = {}", wrapped_key.len());
                 // Key::WrappedKey(wrapped_key.to_bytes().unwrap())
 
             }
@@ -477,7 +476,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         // injecting this is a bit mehhh..
         let nonce = syscall!(self.trussed.random_bytes(12)).bytes.as_slice().try_into().unwrap();
-        info!("nonce = {:?}", &nonce);
+        info_now!("nonce = {:?}", &nonce);
 
         // 12.b generate credential ID { = AEAD(Serialize(Credential)) }
         let kek = self.state.persistent.key_encryption_key(&mut self.trussed)?;
@@ -521,7 +520,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         // 13.a AuthenticatorData and its serialization
         use ctap2::AuthenticatorDataFlags as Flags;
-        info!("MC created cred id");
+        info_now!("MC created cred id");
 
         let (attestation_maybe, aaguid) = self.state.identity.attestation(&mut self.trussed);
 
@@ -545,13 +544,13 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             sign_count: self.state.persistent.timestamp(&mut self.trussed)?,
 
             attested_credential_data: {
-                // debug!("acd in, cid len {}, pk len {}", credential_id.0.len(), cose_public_key.len());
+                // debug_now!("acd in, cid len {}, pk len {}", credential_id.0.len(), cose_public_key.len());
                 let attested_credential_data = ctap2::make_credential::AttestedCredentialData {
                     aaguid: Bytes::from_slice(&aaguid).unwrap(),
                     credential_id: credential_id.0.to_bytes().unwrap(),
                     credential_public_key: cose_public_key.to_bytes().unwrap(),
                 };
-                // debug!("cose PK = {:?}", &attested_credential_data.credential_public_key);
+                // debug_now!("cose PK = {:?}", &attested_credential_data.credential_public_key);
                 Some(attested_credential_data)
             },
 
@@ -567,20 +566,20 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 }
             },
         };
-        // debug!("authData = {:?}", &authenticator_data);
+        // debug_now!("authData = {:?}", &authenticator_data);
 
         let serialized_auth_data = authenticator_data.serialize();
 
         // 13.b The Signature
 
         // can we write Sum<M, N> somehow?
-        // debug!("seeking commitment, {} + {}", serialized_auth_data.len(), parameters.client_data_hash.len());
+        // debug_now!("seeking commitment, {} + {}", serialized_auth_data.len(), parameters.client_data_hash.len());
         let mut commitment = Bytes::<1024>::new();
         commitment.extend_from_slice(&serialized_auth_data).map_err(|_| Error::Other)?;
-        // debug!("serialized_auth_data ={:?}", &serialized_auth_data);
+        // debug_now!("serialized_auth_data ={:?}", &serialized_auth_data);
         commitment.extend_from_slice(&parameters.client_data_hash).map_err(|_| Error::Other)?;
-        // debug!("client_data_hash = {:?}", &parameters.client_data_hash);
-        // debug!("commitment = {:?}", &commitment);
+        // debug_now!("client_data_hash = {:?}", &parameters.client_data_hash);
+        // debug_now!("commitment = {:?}", &commitment);
 
         // NB: the other/normal one is called "basic" or "batch" attestation,
         // because it attests the authenticator is part of a batch: the model
@@ -630,11 +629,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 (signature.to_bytes().map_err(|_| Error::Other)?, -7)
             }
         };
-        // debug!("SIG = {:?}", &signature);
+        // debug_now!("SIG = {:?}", &signature);
 
         if !rk_requested {
             let _success = syscall!(self.trussed.delete(private_key)).success;
-            info!("deleted private credential key: {}", _success);
+            info_now!("deleted private credential key: {}", _success);
         }
 
         let packed_attn_stmt = ctap2::make_credential::PackedAttestationStatement {
@@ -694,8 +693,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
     fn client_pin(&mut self, parameters: &ctap2::client_pin::Parameters) -> Result<ctap2::client_pin::Response> {
         use ctap2::client_pin::PinV1Subcommand as Subcommand;
-        debug!("processing CP");
-        // info!("{:?}", parameters);
+        debug_now!("processing CP");
+        // info_now!("{:?}", parameters);
 
         if parameters.pin_protocol != 1{
             return Err(Error::InvalidParameter);
@@ -704,7 +703,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         Ok(match parameters.sub_command {
 
             Subcommand::GetRetries => {
-                debug!("processing CP.GR");
+                debug_now!("processing CP.GR");
 
                 ctap2::client_pin::Response {
                     key_agreement: None,
@@ -714,7 +713,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }
 
             Subcommand::GetKeyAgreement => {
-                debug!("processing CP.GKA");
+                debug_now!("processing CP.GKA");
 
                 let private_key = self.state.runtime.key_agreement_key(&mut self.trussed);
                 let public_key = syscall!(self.trussed.derive_p256_public_key(private_key, Location::Volatile)).key;
@@ -732,7 +731,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }
 
             Subcommand::SetPin => {
-                debug!("processing CP.SP");
+                debug_now!("processing CP.SP");
                 // 1. check mandatory parameters
                 let platform_kek = match parameters.key_agreement.as_ref() {
                     Some(key) => key,
@@ -779,7 +778,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }
 
             Subcommand::ChangePin => {
-                debug!("processing CP.CP");
+                debug_now!("processing CP.CP");
 
                 // 1. check mandatory parameters
                 let platform_kek = match parameters.key_agreement.as_ref() {
@@ -836,7 +835,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }
 
             Subcommand::GetPinToken => {
-                debug!("processing CP.GPT");
+                debug_now!("processing CP.GPT");
 
                 // 1. check mandatory parameters
                 let platform_kek = match parameters.key_agreement.as_ref() {
@@ -865,8 +864,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
                 // 7. return encrypted pinToken
                 let pin_token = self.state.runtime.pin_token(&mut self.trussed);
-                debug!("wrapping pin token");
-                // info!("exists? {}", syscall!(self.trussed.exists(shared_secret)).exists);
+                debug_now!("wrapping pin token");
+                // info_now!("exists? {}", syscall!(self.trussed.exists(shared_secret)).exists);
                 let pin_token_enc = syscall!(self.trussed.wrap_key_aes256cbc(shared_secret, pin_token)).wrapped_key;
 
                 syscall!(self.trussed.delete(shared_secret));
@@ -884,7 +883,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 }
             }
 
-            _ => {
+            Subcommand::GetPinUvAuthTokenUsingUvWithPermissions |
+            Subcommand::GetUVRetries |
+            Subcommand::GetPinUvAuthTokenUsingPinWithPermissions => {
                 // todo!("not implemented yet")
                 return Err(Error::InvalidParameter);
             }
@@ -942,13 +943,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                         .ok_or(Error::MissingParameter)?,
                     )
             }
-
-            // _ => todo!("not implemented yet"),
         }
     }
 
     fn vendor(&mut self, op: VendorOperation) -> Result<()> {
-        info!("hello VO {:?}", &op);
+        info_now!("hello VO {:?}", &op);
         match op.into() {
             0x79 => syscall!(self.trussed.debug_dump_store()),
             _ => return Err(Error::InvalidCommand),
@@ -1009,7 +1008,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
 
         // // temp
         // let pin_length = pin.iter().position(|&b| b == b'\0').unwrap_or(pin.len());
-        // info!("pin.len() = {}, pin_length = {}, = {:?}",
+        // info_now!("pin.len() = {}, pin_length = {}, = {:?}",
         //           pin.len(), pin_length, &pin);
         // chop off null bytes
         let pin_length = pin.iter().position(|&b| b == b'\0').unwrap_or(pin.len());
@@ -1052,7 +1051,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
         parameters: &ctap2::credential_management::Parameters
     ) -> Result<()> {
 
-        // info!("CM params: {:?}", parameters);
+        // info_now!("CM params: {:?}", parameters);
         use ctap2::credential_management::Subcommand;
         match parameters.sub_command {
             // are we Haskell yet lol
@@ -1088,7 +1087,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
                     _ => 0,
                 };
 
-                // info!("input to hmacsha256: {:?}", &data[..len]);
+                // info_now!("input to hmacsha256: {:?}", &data[..len]);
                 let expected_pin_auth = syscall!(self.trussed.sign_hmacsha256(
                     pin_token,
                     &data[..len],
@@ -1098,24 +1097,28 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
                     .pin_auth.as_ref().ok_or(Error::MissingParameter)?;
 
                 if &expected_pin_auth[..16] == &pin_auth[..] {
-                    info!("passed pinauth");
+                    info_now!("passed pinauth");
                     Ok(())
                 } else {
-                    info!("failed pinauth!");
+                    info_now!("failed pinauth!");
                     self.state.decrement_retries(&mut self.trussed)?;
                     let maybe_blocked = self.state.pin_blocked();
                     if maybe_blocked.is_err() {
-                        info!("blocked");
+                        info_now!("blocked");
                         maybe_blocked
                     } else {
-                        info!("pinAuthInvalid");
+                        info_now!("pinAuthInvalid");
                         Err(Error::PinAuthInvalid)
                     }
 
                 }
             }
 
-            _ => Ok(()),
+            // don't need the PIN auth, they're continuations
+            // of already checked CredMgmt subcommands
+            Subcommand::EnumerateRpsGetNextRp |
+            Subcommand::EnumerateCredentialsGetNextCredential
+                => Ok(()),
         }
     }
 
@@ -1220,51 +1223,62 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
         -> Result<()>
     {
         // validate allowList
+        info_now!("locating");
+        let x = 0;
+        info_now!("addr(x) = {:p}", &x);
         let mut allow_list_len = 0;
         let allowed_credentials = if let Some(allow_list) = allow_list.as_ref() {
+            info_now!("x");
             allow_list_len = allow_list.len();
-            allow_list.into_iter()
+            info_now!("len: {}", allow_list_len);
+            allow_list.into_iter().enumerate()
                 // discard not properly serialized encrypted credentials
-                .filter_map(|credential_descriptor| {
-                    info!(
-                        "GA try from cred id: {}",
+                .filter_map(|(i, credential_descriptor)| {
+                    info_now!(
+                        "GA try from {}th cred id: {}", i,
                         hex_str!(&credential_descriptor.id),
                     );
                     let cred_maybe = Credential::try_from(
                         self, rp_id_hash, credential_descriptor)
                         .ok();
-                    info!("cred_maybe: {:?}", &cred_maybe);
+                    info_now!("cred_maybe: {:?}", &cred_maybe);
                     cred_maybe
                 } )
                 .collect()
         } else {
+            info_now!("y");
             CredentialList::new()
         };
 
+        info_now!("new min_heap");
         let mut min_heap = MinCredentialHeap::new();
 
         let allowed_credentials_passed = allowed_credentials.len() > 0;
+        info_now!("a");
 
         if allowed_credentials_passed {
+            info_now!("if");
             // "If an allowList is present and is non-empty,
             // locate all denoted credentials present on this authenticator
             // and bound to the specified rpId."
-            debug!("allowedList passed with {} creds", allowed_credentials.len());
+            debug_now!("allowedList passed with {} creds", allowed_credentials.len());
             let mut rk_count = 0;
+            info_now!("1");
             let mut applicable_credentials: CredentialList = allowed_credentials
-                .into_iter()
+                .into_iter().enumerate()
+                .map(|(i, credential)| { info_now!("{}th", i); credential })
                 .filter(|credential| match credential.key.clone() {
                     // TODO: should check if wrapped key is valid AEAD
                     // On the other hand, we already decrypted a valid AEAD
                     Key::WrappedKey(_) => true,
                     Key::ResidentKey(key) => {
-                        debug!("checking if ResidentKey {:?} exists", &key);
+                        debug_now!("checking if ResidentKey {:?} exists", &key);
                         let exists = match credential.algorithm {
                             -7 => syscall!(self.trussed.exists(Mechanism::P256, key)).exists,
                             -8 => syscall!(self.trussed.exists(Mechanism::Ed255, key)).exists,
                             // -9 => {
                             //     let exists = syscall!(self.trussed.exists(Mechanism::Totp, key)).exists;
-                            //     info!("found it");
+                            //     info_now!("found it");
                             //     exists
                             // }
                             _ => false,
@@ -1277,7 +1291,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
                 })
                 .filter(|credential| {
                     use credential::CredentialProtectionPolicy as Policy;
-                    debug!("CredentialProtectionPolicy {:?}", &credential.cred_protect);
+                    debug_now!("CredentialProtectionPolicy {:?}", &credential.cred_protect);
                     match credential.cred_protect {
                         None | Some(Policy::Optional) => true,
                         Some(Policy::OptionalWithCredentialIdList) => allowed_credentials_passed || uv_performed,
@@ -1286,54 +1300,18 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
                     }
                 })
                 .collect();
+            info_now!("2");
             while applicable_credentials.len() > 0 {
                 // Store all other applicable credentials in volatile storage and add to our
                 // credential heap.
                 let credential = applicable_credentials.pop().unwrap();
-                let serialized = credential.serialize()?;
-
-                let mut path = [b'0', b'0'];
-                format_hex(&[applicable_credentials.len() as u8], &mut path);
-                let path = PathBuf::from(&path);
-                // let kek = self.state.persistent.key_encryption_key(&mut self.trussed)?;
-                // let id = credential.id_using_hash(&mut self.trussed, kek, rp_id_hash)?;
-                // let credential_id_hash = self.hash(&id.0.as_ref());
-
-                // let path = rk_path(&rp_id_hash, &credential_id_hash);
-                let timestamp_path = TimestampPath {
-                    timestamp: credential.creation_time,
-                    path: path.clone(),
-                    location: Location::Volatile,
-                };
-
-
-                info!("added volatile cred: {:?}", &timestamp_path);
-                info!("{}",hex_str!(&serialized));
-
-
-                try_syscall!(self.trussed.write_file(
-                    Location::Volatile,
-                    path.clone(),
-                    serialized,
-                    None,
-                )).map_err(|_| {
-                    Error::KeyStoreFull
-                })?;
-
-                // attempt to read back
-                // let data = syscall!(self.trussed.read_file(
-                    // Location::Volatile,
-                    // timestamp_path.path.clone(),
-                // )).data;
-                // crate::Credential::deserialize(&data).unwrap();
-
 
                 if min_heap.capacity() > min_heap.len() {
-                    min_heap.push(timestamp_path).map_err(drop).unwrap();
+                    min_heap.push(credential).map_err(drop).unwrap();
                 } else {
-                    if timestamp_path.timestamp > min_heap.peek().unwrap().timestamp {
+                    if credential > min_heap.peek().unwrap() {
                         min_heap.pop().unwrap();
-                        min_heap.push(timestamp_path).map_err(drop).unwrap();
+                        min_heap.push(credential).map_err(drop).unwrap();
                     }
                 }
                 // If more than one credential was located in step 1 and allowList is present and not empty,
@@ -1346,6 +1324,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
 
             }
         } else if allow_list_len == 0 {
+            info_now!("else");
             // If an allowList is not present,
             // locate all credentials that are present on this authenticator
             // and bound to the specified rpId; sorted by reverse creation time
@@ -1367,7 +1346,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
             // - these then go into a CredentialList
             // - (we don't need to keep that around even)
             //
-            debug!("no allowedList passed");
+            debug_now!("no allowedList passed");
 
             // let mut credentials = CredentialList::new();
 
@@ -1391,20 +1370,9 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
                 Some(Policy::Required) => uv_performed,
             };
 
-            let kek = self.state.persistent.key_encryption_key(&mut self.trussed)?;
-
             if keep {
-                let id = credential.id(&mut self.trussed, kek, Some(rp_id_hash))?;
-                let credential_id_hash = self.hash(&id.0.as_ref());
-
-                let timestamp_path = TimestampPath {
-                    timestamp: credential.creation_time,
-                    path: rk_path(&rp_id_hash, &credential_id_hash),
-                    location: Location::Internal,
-                };
-
-                min_heap.push(timestamp_path).map_err(drop).unwrap();
-                // info!("first: {:?}", &self.hash(&id.0));
+                min_heap.push(credential).map_err(drop).unwrap();
+                // info_now!("first: {:?}", &self.hash(&id.0));
             }
 
             loop {
@@ -1424,27 +1392,19 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
 
                 if keep {
 
-                    let id = credential.id(&mut self.trussed, kek, Some(rp_id_hash))?;
-                    let credential_id_hash = self.hash(&id.0.as_ref());
-
-                    let timestamp_path = TimestampPath {
-                        timestamp: credential.creation_time,
-                        path: rk_path(&rp_id_hash, &credential_id_hash),
-                        location: Location::Internal,
-                    };
-
                     if min_heap.capacity() > min_heap.len() {
-                        min_heap.push(timestamp_path).map_err(drop).unwrap();
+                        min_heap.push(credential).map_err(drop).unwrap();
                     } else {
-                        if timestamp_path.timestamp > min_heap.peek().unwrap().timestamp {
+                        if credential > min_heap.peek().unwrap() {
                             min_heap.pop().unwrap();
-                            min_heap.push(timestamp_path).map_err(drop).unwrap();
+                            min_heap.push(credential).map_err(drop).unwrap();
                         }
                     }
                 }
             }
 
         };
+        info_now!("near end of locating");
 
         // "If no applicable credentials were found, return CTAP2_ERR_NO_CREDENTIALS"
         if min_heap.is_empty() {
@@ -1452,11 +1412,14 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
         }
 
         // now sort them
-        self.state.runtime.free_credential_heap(&mut self.trussed);
+        info_now!("freeing heap");
+        self.state.runtime.free_credential_heap();
+        info_now!("freed");
         let max_heap = self.state.runtime.credential_heap();
         while !min_heap.is_empty() {
             max_heap.push(min_heap.pop().unwrap()).map_err(drop).unwrap();
         }
+        info_now!("aight");
 
         Ok(())
     }
@@ -1544,7 +1507,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
             Key::ResidentKey(key) => (key, true),
             Key::WrappedKey(bytes) => {
                 let wrapping_key = self.state.persistent.key_wrapping_key(&mut self.trussed)?;
-                // info!("unwrapping {:?} with wrapping key {:?}", &bytes, &wrapping_key);
+                // info_now!("unwrapping {:?} with wrapping key {:?}", &bytes, &wrapping_key);
                 let key_result = syscall!(self.trussed.unwrap_key_chacha8poly1305(
                     wrapping_key,
                     &bytes,
@@ -1552,8 +1515,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
                     // &rp_id_hash,
                     Location::Volatile,
                 )).key;
-                // debug!("key result: {:?}", &key_result);
-                info!("key result");
+                // debug_now!("key result: {:?}", &key_result);
+                info_now!("key result");
                 match key_result {
                     Some(key) => (key, false),
                     None => { return Err(Error::Other); }
@@ -1570,7 +1533,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
 
         // 9./10. sign clientDataHash || authData with "first" credential
 
-        // info!("signing with credential {:?}", &credential);
+        // info_now!("signing with credential {:?}", &credential);
         let kek = self.state.persistent.key_encryption_key(&mut self.trussed)?;
         let credential_id = credential.id(&mut self.trussed, kek, Some(&rp_id_hash))?;
 
@@ -1609,15 +1572,15 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
         let (mechanism, serialization) = match credential.algorithm {
             -7 => (Mechanism::P256, SignatureSerialization::Asn1Der),
             -8 => (Mechanism::Ed255, SignatureSerialization::Raw),
-            -9 => (Mechanism::Totp, SignatureSerialization::Raw),
+            // -9 => (Mechanism::Totp, SignatureSerialization::Raw),
             _ => { return Err(Error::Other); }
         };
 
-        debug!("signing with {:?}, {:?}", &mechanism, &serialization);
+        debug_now!("signing with {:?}, {:?}", &mechanism, &serialization);
         let signature = match mechanism {
             // Mechanism::Totp => {
             //     let timestamp = u64::from_le_bytes(data.client_data_hash[..8].try_into().unwrap());
-            //     info!("TOTP with timestamp {:?}", &timestamp);
+            //     info_now!("TOTP with timestamp {:?}", &timestamp);
             //     syscall!(self.trussed.sign_totp(key, timestamp)).signature.to_bytes().unwrap()
             // }
             _ => syscall!(self.trussed.sign(mechanism, key.clone(), &commitment, serialization)).signature
@@ -1667,7 +1630,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
         )).entry;
 
         loop {
-            info!("this may be an RK: {:?}", &entry);
+            info_now!("this may be an RK: {:?}", &entry);
             let rk_path = match entry {
                 // no more RKs left
                 // break breaks inner loop here
@@ -1675,7 +1638,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
                 Some(entry) => PathBuf::from(entry.path()),
             };
 
-            info!("checking RK {:?} for userId ", &rk_path);
+            info_now!("checking RK {:?} for userId ", &rk_path);
             let credential_data = syscall!(self.trussed.read_file(
                 Location::Internal,
                 PathBuf::from(rk_path.clone()),
@@ -1686,11 +1649,11 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
                 if old_credential.user.id == user_id {
                     match old_credential.key {
                         credential::Key::ResidentKey(key) => {
-                            info!(":: deleting resident key");
+                            info_now!(":: deleting resident key");
                             syscall!(self.trussed.delete(key));
                         }
                         _ => {
-                            warn!(":: WARNING: unexpected server credential in rk.");
+                            warn_now!(":: WARNING: unexpected server credential in rk.");
                         }
                     }
                     syscall!(self.trussed.remove_file(
@@ -1698,7 +1661,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
                         PathBuf::from(rk_path),
                     ));
 
-                    info!("Overwriting previous rk tied to this userId.");
+                    info_now!("Overwriting previous rk tied to this userId.");
                     break;
                 }
             } else {
@@ -1719,20 +1682,20 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
     )
         -> Result<()>
     {
-        info!("deleting RK {:?}", &rk_path);
+        info_now!("deleting RK {:?}", &rk_path);
         let credential_data = syscall!(self.trussed.read_file(
             Location::Internal,
             PathBuf::from(rk_path),
         )).data;
         let credential_maybe = Credential::deserialize(&credential_data);
-        // info!("deleting credential {:?}", &credential);
+        // info_now!("deleting credential {:?}", &credential);
 
 
         if let Ok(credential) = credential_maybe {
 
             match credential.key {
                 credential::Key::ResidentKey(key) => {
-                    info!(":: deleting resident key");
+                    info_now!(":: deleting resident key");
                     syscall!(self.trussed.delete(key));
                 }
                 credential::Key::WrappedKey(_) => {}
@@ -1740,10 +1703,10 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
         } else {
             // If for some reason there becomes a corrupt credential,
             // we can still at least orphan the key rather then crash.
-            info!("Warning!  Orpaning a key.");
+            info_now!("Warning!  Orpaning a key.");
         }
 
-        info!(":: deleting RK file {:?} itself", &rk_path);
+        info_now!(":: deleting RK file {:?} itself", &rk_path);
         syscall!(self.trussed.remove_file(
             Location::Internal,
             PathBuf::from(rk_path),

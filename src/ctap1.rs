@@ -55,7 +55,7 @@ where UP: UserPresence,
 {
     /// Dispatches the enum of possible requests into the ctap1 [`Authenticator`] trait methods.
     pub fn call_ctap1(&mut self, request: &Request) -> Result<Response> {
-        info!("called u2f");
+        info!("called ctap1");
         self.state.persistent.load_if_not_initialised(&mut self.trussed);
 
         match request {
