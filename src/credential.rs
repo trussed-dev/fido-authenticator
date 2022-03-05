@@ -8,7 +8,7 @@ use trussed::{
 };
 
 pub(crate) use ctap_types::{
-    Bytes, Bytes32, String, Vec,
+    Bytes, String,
     // authenticator::{ctap1, ctap2, Error, Request, Response},
     ctap2::credential_management::CredentialProtectionPolicy,
     sizes::*,
@@ -172,7 +172,8 @@ impl PartialOrd<&Credential> for Credential {
     }
 }
 
-pub(crate) type CredentialList = Vec<Credential, {ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST}>;
+// Bad idea - huge stack
+// pub(crate) type CredentialList = Vec<Credential, {ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST}>;
 
 impl Into<PublicKeyCredentialDescriptor> for CredentialId {
     fn into(self) -> PublicKeyCredentialDescriptor {
@@ -240,7 +241,7 @@ impl Credential {
         &self,
         trussed: &mut T,
         key_encryption_key: KeyId,
-        rp_id_hash: Option<&Bytes32>,
+        rp_id_hash: Option<&Bytes<32>>,
     )
         -> Result<CredentialId>
     {
@@ -248,7 +249,7 @@ impl Credential {
         let message = &serialized_credential;
         // info!("serialized cred = {:?}", message).ok();
 
-        let rp_id_hash: Bytes32 = if let Some(hash) = rp_id_hash {
+        let rp_id_hash: Bytes<32> = if let Some(hash) = rp_id_hash {
             hash.clone()
         } else {
             syscall!(trussed.hash_sha256(&self.rp.id.as_ref()))

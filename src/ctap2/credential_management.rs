@@ -11,21 +11,14 @@ use trussed::{
 };
 
 use ctap_types::{
-    Bytes32,
-    authenticator::{
-        Error,
-        ctap2::{
-            self,
-            credential_management::{
-                CredentialProtectionPolicy,
-                Response,
-            },
-        },
+    heapless_bytes::Bytes,
+    Error,
+    ctap2::credential_management::{
+        CredentialProtectionPolicy,
+        Response,
     },
     cose::PublicKey,
-    webauthn::{
-        PublicKeyCredentialDescriptor,
-    },
+    webauthn::PublicKeyCredentialDescriptor,
 };
 
 use littlefs2::path::{Path, PathBuf};
@@ -79,7 +72,7 @@ where UP: UserPresence,
 {
     pub fn get_creds_metadata(&mut self) -> Result<Response> {
         info!("get metadata");
-        let mut response: ctap2::credential_management::Response =
+        let mut response: Response =
             Default::default();
 
         let guesstimate = self.state.persistent
@@ -139,8 +132,7 @@ where UP: UserPresence,
         // rpIDHash (0x04) : RP ID SHA-256 hash.
         // totalRPs (0x05) : Total number of RPs present on the authenticator.
 
-        let mut response: ctap2::credential_management::Response =
-            Default::default();
+        let mut response: Response = Default::default();
 
         let dir = PathBuf::from(b"rk");
 
@@ -235,7 +227,7 @@ where UP: UserPresence,
             return Err(Error::NotAllowed);
         }
 
-        let mut response: ctap2::credential_management::Response = Default::default();
+        let mut response: Response = Default::default();
 
         if let Some(rp) = maybe_next_rp {
             // load credential and extract rp and rpIdHash
@@ -298,7 +290,7 @@ where UP: UserPresence,
         Ok((num_rks, first_rk))
     }
 
-    pub fn first_credential(&mut self, rp_id_hash: &Bytes32) -> Result<Response> {
+    pub fn first_credential(&mut self, rp_id_hash: &Bytes<32>) -> Result<Response> {
         info!("first credential");
 
         self.state.runtime.cached_rk = None;
@@ -403,8 +395,7 @@ where UP: UserPresence,
             .map_err(|_| Error::InvalidCredential)?;
 
         // now fill response
-        let mut response: ctap2::credential_management::Response =
-            Default::default();
+        let mut response: Response = Default::default();
 
         response.user = Some(credential.data.user.clone());
 
@@ -509,7 +500,7 @@ where UP: UserPresence,
                       );
         }
         // just return OK
-        let response: ctap2::credential_management::Response = Default::default();
+        let response = Default::default();
         Ok(response)
     }
 }

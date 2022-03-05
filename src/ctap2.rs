@@ -1,16 +1,14 @@
 //! The `ctap2::Authenticator` trait and its implementation.
 
 use ctap_types::{
-    Bytes, Bytes32, String, Vec,
-    authenticator::{
-        ctap2::{
-            Request,
-            Response,
-        },
-        Error,
+    heapless::{String, Vec},
+    Error,
+    ctap2::{
+        self,
+        Authenticator,
+        VendorOperation,
     },
-    ctap2::self,
-    operation::VendorOperation,
+    heapless_bytes::Bytes,
     sizes,
 };
 
@@ -34,14 +32,15 @@ use crate::{
     credential::{
         self,
         Credential,
-        CredentialList,
+        // CredentialList,
         Key,
     },
     constants,
     format_hex,
     state::{
         self,
-        MinCredentialHeap,
+        // // (2022-02-27): 9288 bytes
+        // MinCredentialHeap,
     },
     Result,
 
@@ -50,121 +49,25 @@ use crate::{
     TrussedRequirements,
 };
 
+#[allow(unused_imports)]
+use crate::msp;
+
 pub mod credential_management;
-
-/// CTAP2 authenticator API
-//
-// TODO: Lift into ctap-types?
-pub trait Authenticator {
-    fn get_info(&mut self) -> ctap2::get_info::Response;
-    fn make_credential(&mut self, request: &ctap2::make_credential::Parameters) -> Result<ctap2::make_credential::Response>;
-    fn get_assertion(&mut self, request: &ctap2::get_assertion::Parameters) -> Result<ctap2::get_assertion::Response>;
-    fn get_next_assertion(&mut self) -> Result<ctap2::get_next_assertion::Response>;
-    fn reset(&mut self) -> Result<()>;
-    fn client_pin(&mut self, request: &ctap2::client_pin::Parameters) -> Result<ctap2::client_pin::Response>;
-    fn credential_management(&mut self, request: &ctap2::credential_management::Parameters) -> Result<ctap2::credential_management::Response>;
-    fn vendor(&mut self, op: VendorOperation) -> Result<()>;
-}
-
-impl<UP, T> crate::Authenticator<UP, T>
-where UP: UserPresence,
-      T: TrussedRequirements,
-{
-    /// Dispatches the enum of possible requests into the ctap2 [`Authenticator`] trait methods.
-    pub fn call_ctap2(&mut self, request: &Request) -> Result<Response> {
-        info_now!("called ctap2");
-        self.state.persistent.load_if_not_initialised(&mut self.trussed);
-
-        // match request {
-        //     Command::Register(reg) =>
-        //         Ok(Response::Register(self.register(reg)?)),
-
-        //     Command::Authenticate(auth) =>
-        //         Ok(Response::Authenticate(self.authenticate(auth)?)),
-
-        //     Command::Version =>
-        //         Ok(ctap1::Response::Version(Self::version())),
-
-        // }
-        match request {
-            // 0x4
-            Request::GetInfo => {
-                debug_now!("GI");
-                Ok(Response::GetInfo(self.get_info()))
-            }
-
-            // 0x2
-            Request::MakeCredential(parameters) => {
-                debug_now!("MC request");
-                Ok(Response::MakeCredential(self.make_credential(&parameters)?))
-            }
-
-            // 0x1
-            Request::GetAssertion(parameters) => {
-                debug_now!("GA request");
-                let response = self.get_assertion(&parameters);
-                match response {
-                    Ok(response) => Ok(Response::GetAssertion(response)),
-                    Err(error) => {
-                        info_now!("GA request failed, error {:?}", &error);
-                        Err(error)
-                    }
-                }
-            }
-
-            // 0x8
-            Request::GetNextAssertion => {
-                debug_now!("GNA request");
-                let response = self.get_next_assertion();
-                match response {
-                    Ok(response) => Ok(Response::GetNextAssertion(response)),
-                    Err(error) => Err(error)
-                }
-            }
-
-            // 0x7
-            Request::Reset => {
-                debug_now!("Reset request");
-                let response = self.reset();
-                match response {
-                    Ok(()) => Ok(Response::Reset),
-                    Err(error) => Err(error)
-                }
-            }
-
-
-            // 0x6
-            Request::ClientPin(parameters) => {
-                debug_now!("CP request");
-                Ok(Response::ClientPin(self.client_pin(&parameters)?))
-            }
-
-            // 0xA
-            Request::CredentialManagement(parameters) => {
-                debug_now!("CM request");
-                Ok(Response::CredentialManagement(self.credential_management(&parameters)?))
-            }
-
-
-            Request::Vendor(op) => {
-                debug_now!("Vendor request");
-                self.vendor(*op)?;
-                Ok(Response::Vendor)
-            }
-        }
-    }
-}
+// pub mod pin;
 
 /// Implement `ctap2::Authenticator` for our Authenticator.
 impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenticator<UP, T> {
+    #[inline(never)]
     fn get_info(&mut self) -> ctap2::get_info::Response {
+
+        debug_now!("remaining stack size: {} bytes", msp() - 0x2000_0000);
 
         use core::str::FromStr;
         let mut versions = Vec::<String<12>, 4>::new();
         versions.push(String::from_str("U2F_V2").unwrap()).unwrap();
         versions.push(String::from_str("FIDO_2_0").unwrap()).unwrap();
         // #[cfg(feature = "enable-fido-pre")]
-        // versions.push(String::from_str("FIDO_2_1_PRE").unwrap()).unwrap();
+        versions.push(String::from_str("FIDO_2_1_PRE").unwrap()).unwrap();
 
         let mut extensions = Vec::<String<11>, 4>::new();
         // extensions.push(String::from_str("credProtect").unwrap()).unwrap();
@@ -193,7 +96,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             extensions: Some(extensions),
             aaguid: Bytes::from_slice(&aaguid).unwrap(),
             options: Some(options),
-            max_msg_size: Some(ctap_types::sizes::MESSAGE_SIZE),
+            // 1200
+            max_msg_size: Some(ctap_types::sizes::REALISTIC_MAX_MESSAGE_SIZE),
             pin_protocols: Some(pin_protocols),
             max_creds_in_list: Some(ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST),
             max_cred_id_length: Some(ctap_types::sizes::MAX_CREDENTIAL_ID_LENGTH),
@@ -201,105 +105,27 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         }
     }
 
-    fn get_assertion(&mut self, parameters: &ctap2::get_assertion::Parameters) -> Result<ctap2::get_assertion::Response> {
-
-        let rp_id_hash = self.hash(&parameters.rp_id.as_ref());
-
-        // 1-4.
-        let uv_performed = match self.pin_prechecks(
-                &parameters.options, &parameters.pin_auth, &parameters.pin_protocol,
-                &parameters.client_data_hash.as_ref(),
-        ) {
-            Ok(b) => b,
-            Err(Error::PinRequired) => {
-                // UV is optional for get_assertion
-                false
-            }
-            Err(err) => return Err(err),
-        };
-
-        // 5. Locate eligible credentials
-        //
-        // Note: If allowList is passed, credential is Some(credential)
-        // If no allowList is passed, credential is None and the retrieved credentials
-        // are stored in state.runtime.credential_heap
-        self.locate_credentials(&rp_id_hash, &parameters.allow_list, uv_performed)?;
-
-        let credential = self.state.runtime.pop_credential_from_heap();
-        let num_credentials = match self.state.runtime.credential_heap().len() {
-            0 => None,
-            n => Some(n as u32 + 1),
-        };
-        info_now!("FIRST cred: {:?}",&credential);
-        info_now!("FIRST NUM creds: {:?}",num_credentials);
-
-        // NB: misleading, if we have "1" we return "None"
-        let human_num_credentials = match num_credentials {
-            Some(n) => n,
-            None => 1,
-        };
-        info_now!("found {:?} applicable credentials", human_num_credentials);
-
-        // 6. process any options present
-
-        // UP occurs by default, but option could specify not to.
-        let do_up = if parameters.options.is_some() {
-            parameters.options.as_ref().unwrap().up.unwrap_or(true)
-        } else {
-            true
-        };
-
-        // 7. collect user presence
-        let up_performed = if do_up {
-            info_now!("asking for up");
-            self.up.user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
-            true
-        } else {
-            info_now!("not asking for up");
-            false
-        };
-
-        let multiple_credentials = human_num_credentials > 1;
-        self.state.runtime.active_get_assertion = Some(state::ActiveGetAssertionData {
-            rp_id_hash: {
-                let mut buf = [0u8; 32];
-                buf.copy_from_slice(&rp_id_hash);
-                buf
-            },
-            client_data_hash: {
-                let mut buf = [0u8; 32];
-                buf.copy_from_slice(&parameters.client_data_hash);
-                buf
-            },
-            uv_performed,
-            up_performed,
-            multiple_credentials,
-            extensions: parameters.extensions.clone(),
-        });
-
-        self.assert_with_credential(num_credentials, credential)
-    }
-
+    #[inline(never)]
     fn get_next_assertion(&mut self) -> Result<ctap2::get_assertion::Response> {
-        // 1./2. don't remember / don't have left any credentials
-        if self.state.runtime.credential_heap().is_empty() {
-            return Err(Error::NotAllowed);
-        }
-
         // 3. previous GA/GNA >30s ago -> discard stat
         // this is optional over NFC
         if false {
-            self.state.runtime.free_credential_heap();
+            self.state.runtime.clear_credential_cache();
+            self.state.runtime.active_get_assertion = None;
             return Err(Error::NotAllowed);
         }
-
+        //
+        // 1./2. don't remember / don't have left any credentials
         // 4. select credential
         // let data = syscall!(self.trussed.read_file(
         //     timestamp_hash.location,
         //     timestamp_hash.path,
         // )).data;
-        let credential = self.state.runtime.pop_credential_from_heap();
-        // Credential::deserialize(&data).unwrap();
+        if self.state.runtime.active_get_assertion.is_none() {
+            return Err(Error::NotAllowed);
+        }
+        let credential = self.state.runtime.pop_credential(&mut self.trussed)
+            .ok_or(Error::NotAllowed)?;
 
         // 5. suppress PII if no UV was performed in original GA
 
@@ -310,7 +136,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         self.assert_with_credential(None, credential)
     }
 
-    fn make_credential(&mut self, parameters: &ctap2::make_credential::Parameters) -> Result<ctap2::make_credential::Response> {
+    #[inline(never)]
+    fn make_credential(&mut self, parameters: &ctap2::make_credential::Request) -> Result<ctap2::make_credential::Response> {
 
         let rp_id_hash = self.hash(&parameters.rp.id.as_ref());
 
@@ -364,7 +191,6 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             },
             None => { return Err(Error::UnsupportedAlgorithm); }
         };
-        // debug_now!("making credential, eddsa = {}", eddsa);
 
 
         // 8. process options; on known but unsupported error UnsupportedOption
@@ -454,23 +280,17 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             false => {
                 // WrappedKey version
                 let wrapping_key = self.state.persistent.key_wrapping_key(&mut self.trussed)?;
-                debug_now!("wrapping private key");
                 let wrapped_key = syscall!(self.trussed.wrap_key_chacha8poly1305(
                     wrapping_key,
                     private_key,
                     &rp_id_hash,
                 )).wrapped_key;
-                // debug_now!("wrapped_key = {:?}", &wrapped_key);
 
                 // 32B key, 12B nonce, 16B tag + some info on algorithm (P256/Ed25519)
                 // Turns out it's size 92 (enum serialization not optimized yet...)
                 // let mut wrapped_key = Bytes::<60>::new();
                 // wrapped_key.extend_from_slice(&wrapped_key_msg).unwrap();
-                let ret = Key::WrappedKey(wrapped_key.to_bytes().map_err(|_| Error::Other)?);
-                ret
-                // debug_now!("len wrapped key = {}", wrapped_key.len());
-                // Key::WrappedKey(wrapped_key.to_bytes().unwrap())
-
+                Key::WrappedKey(wrapped_key.to_bytes().map_err(|_| Error::Other)?)
             }
         };
 
@@ -496,6 +316,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             nonce,
         );
 
+        // note that this does the "stripping" of OptionalUI etc.
         let credential_id = credential.id(&mut self.trussed, kek, Some(&rp_id_hash))?;
 
         if rk_requested {
@@ -505,6 +326,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             // first delete any other RK cred with same RP + UserId if there is one.
             self.delete_resident_key_by_user_id(&rp_id_hash, &credential.user.id).ok();
 
+            // then store key, making it resident
             let credential_id_hash = self.hash(&credential_id.0.as_ref());
             try_syscall!(self.trussed.write_file(
                 Location::Internal,
@@ -663,6 +485,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         Ok(attestation_object)
     }
 
+    #[inline(never)]
     fn reset(&mut self) -> Result<()> {
         // 1. >10s after bootup -> NotAllowed
         let uptime = syscall!(self.trussed.uptime()).uptime;
@@ -691,11 +514,13 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         Ok(())
     }
 
-    fn client_pin(&mut self, parameters: &ctap2::client_pin::Parameters) -> Result<ctap2::client_pin::Response> {
+    #[inline(never)]
+    fn client_pin(&mut self, parameters: &ctap2::client_pin::Request) -> Result<ctap2::client_pin::Response> {
         use ctap2::client_pin::PinV1Subcommand as Subcommand;
-        debug_now!("processing CP");
+        debug_now!("CTAP2.PIN...");
         // info_now!("{:?}", parameters);
 
+        // TODO: Handle pin protocol V2
         if parameters.pin_protocol != 1{
             return Err(Error::InvalidParameter);
         }
@@ -703,7 +528,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         Ok(match parameters.sub_command {
 
             Subcommand::GetRetries => {
-                debug_now!("processing CP.GR");
+                debug_now!("CTAP2.Pin.GetRetries");
 
                 ctap2::client_pin::Response {
                     key_agreement: None,
@@ -713,7 +538,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }
 
             Subcommand::GetKeyAgreement => {
-                debug_now!("processing CP.GKA");
+                debug_now!("CTAP2.Pin.GetKeyAgreement");
 
                 let private_key = self.state.runtime.key_agreement_key(&mut self.trussed);
                 let public_key = syscall!(self.trussed.derive_p256_public_key(private_key, Location::Volatile)).key;
@@ -731,7 +556,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }
 
             Subcommand::SetPin => {
-                debug_now!("processing CP.SP");
+                debug_now!("CTAP2.Pin.SetPin");
                 // 1. check mandatory parameters
                 let platform_kek = match parameters.key_agreement.as_ref() {
                     Some(key) => key,
@@ -778,7 +603,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }
 
             Subcommand::ChangePin => {
-                debug_now!("processing CP.CP");
+                debug_now!("CTAP2.Pin.ChangePin");
 
                 // 1. check mandatory parameters
                 let platform_kek = match parameters.key_agreement.as_ref() {
@@ -835,7 +660,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }
 
             Subcommand::GetPinToken => {
-                debug_now!("processing CP.GPT");
+                debug_now!("CTAP2.Pin.GetPinToken");
 
                 // 1. check mandatory parameters
                 let platform_kek = match parameters.key_agreement.as_ref() {
@@ -892,7 +717,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         })
     }
 
-    fn credential_management(&mut self, parameters: &ctap2::credential_management::Parameters)
+    #[inline(never)]
+    fn credential_management(&mut self, parameters: &ctap2::credential_management::Request)
         -> Result<ctap2::credential_management::Response> {
 
         use ctap2::credential_management::Subcommand;
@@ -946,6 +772,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         }
     }
 
+    #[inline(never)]
     fn vendor(&mut self, op: VendorOperation) -> Result<()> {
         info_now!("hello VO {:?}", &op);
         match op.into() {
@@ -957,11 +784,176 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
     }
 
 
+    #[inline(never)]
+    fn get_assertion(&mut self, parameters: &ctap2::get_assertion::Request) -> Result<ctap2::get_assertion::Response> {
+
+        debug_now!("remaining stack size: {} bytes", msp() - 0x2000_0000);
+
+        let rp_id_hash = self.hash(&parameters.rp_id.as_ref());
+
+        // 1-4.
+        let uv_performed = match self.pin_prechecks(
+                &parameters.options, &parameters.pin_auth, &parameters.pin_protocol,
+                &parameters.client_data_hash.as_ref(),
+        ) {
+            Ok(b) => b,
+            Err(Error::PinRequired) => {
+                // UV is optional for get_assertion
+                false
+            }
+            Err(err) => return Err(err),
+        };
+
+        // 5. Locate eligible credentials
+        //
+        // Note: If allowList is passed, credential is Some(credential)
+        // If no allowList is passed, credential is None and the retrieved credentials
+        // are stored in state.runtime.credential_heap
+        let (credential, num_credentials) = self.prepare_credentials(
+            &rp_id_hash, &parameters.allow_list, uv_performed
+        ).ok_or(Error::NoCredentials)?;
+
+        info_now!("found {:?} applicable credentials", num_credentials);
+
+        // 6. process any options present
+
+        // UP occurs by default, but option could specify not to.
+        let do_up = if parameters.options.is_some() {
+            parameters.options.as_ref().unwrap().up.unwrap_or(true)
+        } else {
+            true
+        };
+
+        // 7. collect user presence
+        let up_performed = if do_up {
+            info_now!("asking for up");
+            self.up.user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
+            true
+        } else {
+            info_now!("not asking for up");
+            false
+        };
+
+        let multiple_credentials = num_credentials > 1;
+        self.state.runtime.active_get_assertion = Some(state::ActiveGetAssertionData {
+            rp_id_hash: {
+                let mut buf = [0u8; 32];
+                buf.copy_from_slice(&rp_id_hash);
+                buf
+            },
+            client_data_hash: {
+                let mut buf = [0u8; 32];
+                buf.copy_from_slice(&parameters.client_data_hash);
+                buf
+            },
+            uv_performed,
+            up_performed,
+            multiple_credentials,
+            extensions: parameters.extensions.clone(),
+        });
+
+        let num_credentials = match num_credentials {
+            1 => None,
+            n => Some(n as u32),
+        };
+
+        self.assert_with_credential(num_credentials, credential)
+    }
+
 }
 
 // impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenticator<UP, T>
 impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
 {
+    #[inline(never)]
+    fn check_credential_applicable(&mut self, credential: &Credential, allowlist_passed: bool, uv_performed: bool) -> bool {
+
+        if !self.check_key_exists(credential.algorithm, &credential.key) {
+            return false;
+        }
+
+       if !{
+           use credential::CredentialProtectionPolicy as Policy;
+           debug_now!("CredentialProtectionPolicy {:?}", &credential.cred_protect);
+           match credential.cred_protect {
+               None | Some(Policy::Optional) => true,
+               Some(Policy::OptionalWithCredentialIdList) => allowlist_passed || uv_performed,
+               Some(Policy::Required) => uv_performed,
+
+           }
+       } {
+           return false;
+       }
+       return true;
+    }
+
+    #[inline(never)]
+    fn prepare_credentials(
+        &mut self, rp_id_hash: &Bytes<32>,
+        allow_list: &Option<ctap2::get_assertion::AllowList>,
+        uv_performed: bool,
+    ) -> Option<(Credential, u32)>
+    {
+        debug_now!("remaining stack size: {} bytes", msp() - 0x2000_0000);
+
+        self.state.runtime.clear_credential_cache();
+        self.state.runtime.active_get_assertion = None;
+
+        if let Some(allow_list) = allow_list {
+            // we will have at most one credential, and an empty cache.
+
+            for credential_id in allow_list {
+                let credential = match Credential::try_from(self, rp_id_hash, credential_id) {
+                    Ok(credential) => credential,
+                    _ => continue,
+                };
+
+                if !self.check_credential_applicable(&credential, true, uv_performed) {
+                    continue;
+                }
+
+                return Some((credential, 1));
+            }
+            return None;
+        } else {
+            // we are only dealing with discoverable credentials.
+
+            let mut maybe_path = syscall!(self.trussed.read_dir_first(
+                Location::Internal,
+                rp_rk_dir(&rp_id_hash),
+                None,
+            )).entry.map(|entry| PathBuf::try_from(entry.file_name()).unwrap());
+
+            use core::str::FromStr;
+            use crate::state::CachedCredential;
+
+            while let Some(path) = maybe_path {
+                let credential_data = syscall!(self.trussed.read_file(
+                    Location::Internal,
+                    path.clone(),
+                 )).data;
+
+                let credential = Credential::deserialize(&credential_data).ok()?;
+
+                if self.check_credential_applicable(&credential, false, uv_performed) {
+                    self.state.runtime.push_credential(CachedCredential {
+                        timestamp: credential.creation_time,
+                        path: String::from_str(&path.as_str_ref_with_trailing_nul()).ok()?,
+                    });
+                }
+
+                maybe_path = syscall!(self.trussed.read_dir_next())
+                    .entry.map(|entry| PathBuf::try_from(entry.file_name()).unwrap());
+            }
+
+            let num_credentials = self.state.runtime.remaining_credentials();
+            let credential = self.state.runtime.pop_credential(&mut self.trussed);
+            credential.map(|credential| (credential, num_credentials))
+
+        }
+
+    }
+
     fn decrypt_pin_hash_and_maybe_escalate(&mut self, shared_secret: KeyId, pin_hash_enc: &Bytes<64>)
         -> Result<()>
     {
@@ -1048,7 +1040,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
     // fn verify_pin_auth_using_token(&mut self, data: &[u8], pin_auth: &Bytes<16>)
     fn verify_pin_auth_using_token(
         &mut self,
-        parameters: &ctap2::credential_management::Parameters
+        parameters: &ctap2::credential_management::Request
     ) -> Result<()> {
 
         // info_now!("CM params: {:?}", parameters);
@@ -1209,219 +1201,26 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
         Ok(false)
     }
 
-    /// If allow_list is some, select the first one (latest timestamp) that is usable,
-    /// and return Some(it).
-    ///
-    /// If allow_list is none, pull applicable credentials, store
-    /// in state's credential_heap, and return none
     #[inline(never)]
-    fn locate_credentials(
-        &mut self, rp_id_hash: &Bytes32,
-        allow_list: &Option<ctap2::get_assertion::AllowList>,
-        uv_performed: bool,
-    )
-        -> Result<()>
-    {
-        // validate allowList
-        info_now!("locating");
-        let x = 0;
-        info_now!("addr(x) = {:p}", &x);
-        let mut allow_list_len = 0;
-        let allowed_credentials = if let Some(allow_list) = allow_list.as_ref() {
-            info_now!("x");
-            allow_list_len = allow_list.len();
-            info_now!("len: {}", allow_list_len);
-            allow_list.into_iter().enumerate()
-                // discard not properly serialized encrypted credentials
-                .filter_map(|(i, credential_descriptor)| {
-                    info_now!(
-                        "GA try from {}th cred id: {}", i,
-                        hex_str!(&credential_descriptor.id),
-                    );
-                    let cred_maybe = Credential::try_from(
-                        self, rp_id_hash, credential_descriptor)
-                        .ok();
-                    info_now!("cred_maybe: {:?}", &cred_maybe);
-                    cred_maybe
-                } )
-                .collect()
-        } else {
-            info_now!("y");
-            CredentialList::new()
-        };
-
-        info_now!("new min_heap");
-        let mut min_heap = MinCredentialHeap::new();
-
-        let allowed_credentials_passed = allowed_credentials.len() > 0;
-        info_now!("a");
-
-        if allowed_credentials_passed {
-            info_now!("if");
-            // "If an allowList is present and is non-empty,
-            // locate all denoted credentials present on this authenticator
-            // and bound to the specified rpId."
-            debug_now!("allowedList passed with {} creds", allowed_credentials.len());
-            let mut rk_count = 0;
-            info_now!("1");
-            let mut applicable_credentials: CredentialList = allowed_credentials
-                .into_iter().enumerate()
-                .map(|(i, credential)| { info_now!("{}th", i); credential })
-                .filter(|credential| match credential.key.clone() {
-                    // TODO: should check if wrapped key is valid AEAD
-                    // On the other hand, we already decrypted a valid AEAD
-                    Key::WrappedKey(_) => true,
-                    Key::ResidentKey(key) => {
-                        debug_now!("checking if ResidentKey {:?} exists", &key);
-                        let exists = match credential.algorithm {
-                            -7 => syscall!(self.trussed.exists(Mechanism::P256, key)).exists,
-                            -8 => syscall!(self.trussed.exists(Mechanism::Ed255, key)).exists,
-                            // -9 => {
-                            //     let exists = syscall!(self.trussed.exists(Mechanism::Totp, key)).exists;
-                            //     info_now!("found it");
-                            //     exists
-                            // }
-                            _ => false,
-                        };
-                        if exists {
-                            rk_count = rk_count + 1;
-                        }
-                        exists
-                    }
-                })
-                .filter(|credential| {
-                    use credential::CredentialProtectionPolicy as Policy;
-                    debug_now!("CredentialProtectionPolicy {:?}", &credential.cred_protect);
-                    match credential.cred_protect {
-                        None | Some(Policy::Optional) => true,
-                        Some(Policy::OptionalWithCredentialIdList) => allowed_credentials_passed || uv_performed,
-                        Some(Policy::Required) => uv_performed,
-
-                    }
-                })
-                .collect();
-            info_now!("2");
-            while applicable_credentials.len() > 0 {
-                // Store all other applicable credentials in volatile storage and add to our
-                // credential heap.
-                let credential = applicable_credentials.pop().unwrap();
-
-                if min_heap.capacity() > min_heap.len() {
-                    min_heap.push(credential).map_err(drop).unwrap();
-                } else {
-                    if credential > min_heap.peek().unwrap() {
-                        min_heap.pop().unwrap();
-                        min_heap.push(credential).map_err(drop).unwrap();
-                    }
-                }
-                // If more than one credential was located in step 1 and allowList is present and not empty,
-                // select any applicable credential and proceed to step 12. Otherwise, order the credentials
-                // by the time when they were created in reverse order.
-                // The first credential is the most recent credential that was created.
-                if rk_count > 1 {
-                    break
-                }
-
-            }
-        } else if allow_list_len == 0 {
-            info_now!("else");
-            // If an allowList is not present,
-            // locate all credentials that are present on this authenticator
-            // and bound to the specified rpId; sorted by reverse creation time
-
-            // let rp_id_hash = self.hash(rp_id.as_ref());
-
-            //
-            // So here's the idea:
-            //
-            // - credentials can be pretty big
-            // - we declare N := MAX_CREDENTIAL_COUNT_IN_LIST in GetInfo
-            // - potentially there are more RKs for a given RP (a bit academic ofc)
-            //
-            // - first, we use a min-heap to keep only the topN credentials:
-            //   if our "next" one is larger/later than the min of the heap,
-            //   pop this min and push ours
-            //
-            // - then, we use a max-heap to sort the remaining <=N credentials
-            // - these then go into a CredentialList
-            // - (we don't need to keep that around even)
-            //
-            debug_now!("no allowedList passed");
-
-            // let mut credentials = CredentialList::new();
-
-            let data = syscall!(self.trussed.read_dir_files_first(
-                Location::Internal,
-                rp_rk_dir(&rp_id_hash),
-                None,
-            )).data;
-
-            let data = match data {
-                Some(data) => data,
-                None => return Err(Error::NoCredentials),
-            };
-
-            let credential = Credential::deserialize(&data).unwrap();
-
-            use credential::CredentialProtectionPolicy as Policy;
-            let keep = match credential.cred_protect {
-                None | Some(Policy::Optional) => true,
-                Some(Policy::OptionalWithCredentialIdList) => allowed_credentials_passed || uv_performed,
-                Some(Policy::Required) => uv_performed,
-            };
-
-            if keep {
-                min_heap.push(credential).map_err(drop).unwrap();
-                // info_now!("first: {:?}", &self.hash(&id.0));
-            }
-
-            loop {
-                let data = syscall!(self.trussed.read_dir_files_next()).data;
-                let data = match data {
-                    Some(data) => data,
-                    None => break,
-                };
-
-                let credential = Credential::deserialize(&data).unwrap();
-
-                let keep = match credential.cred_protect {
-                    None | Some(Policy::Optional) => true,
-                    Some(Policy::OptionalWithCredentialIdList) => allowed_credentials_passed || uv_performed,
-                    Some(Policy::Required) => uv_performed,
-                };
-
-                if keep {
-
-                    if min_heap.capacity() > min_heap.len() {
-                        min_heap.push(credential).map_err(drop).unwrap();
-                    } else {
-                        if credential > min_heap.peek().unwrap() {
-                            min_heap.pop().unwrap();
-                            min_heap.push(credential).map_err(drop).unwrap();
-                        }
-                    }
+    fn check_key_exists(&mut self, alg: i32, key: &Key) -> bool {
+        match key {
+            // TODO: should check if wrapped key is valid AEAD
+            // On the other hand, we already decrypted a valid AEAD
+            Key::WrappedKey(_) => true,
+            Key::ResidentKey(key) => {
+                debug_now!("checking if ResidentKey {:?} exists", key);
+                match alg {
+                    -7 => syscall!(self.trussed.exists(Mechanism::P256, key.clone())).exists,
+                    -8 => syscall!(self.trussed.exists(Mechanism::Ed255, key.clone())).exists,
+                    // -9 => {
+                    //     let exists = syscall!(self.trussed.exists(Mechanism::Totp, key)).exists;
+                    //     info_now!("found it");
+                    //     exists
+                    // }
+                    _ => false,
                 }
             }
-
-        };
-        info_now!("near end of locating");
-
-        // "If no applicable credentials were found, return CTAP2_ERR_NO_CREDENTIALS"
-        if min_heap.is_empty() {
-            return Err(Error::NoCredentials);
         }
-
-        // now sort them
-        info_now!("freeing heap");
-        self.state.runtime.free_credential_heap();
-        info_now!("freed");
-        let max_heap = self.state.runtime.credential_heap();
-        while !min_heap.is_empty() {
-            max_heap.push(min_heap.pop().unwrap()).map_err(drop).unwrap();
-        }
-        info_now!("aight");
-
-        Ok(())
     }
 
     #[inline(never)]
@@ -1497,6 +1296,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
     }
 
 
+    #[inline(never)]
     fn assert_with_credential(&mut self, num_credentials: Option<u32>, credential: Credential)
         -> Result<ctap2::get_assertion::Response>
     {
@@ -1615,9 +1415,10 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
         Ok(response)
     }
 
+    #[inline(never)]
     fn delete_resident_key_by_user_id(
         &mut self,
-        rp_id_hash: &Bytes32,
+        rp_id_hash: &Bytes<32>,
         user_id: &Bytes<64>,
     ) -> Result<()> {
 
@@ -1676,6 +1477,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
 
     }
 
+    #[inline(never)]
     pub(crate) fn delete_resident_key_by_path(
         &mut self,
         rk_path: &Path,

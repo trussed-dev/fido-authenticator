@@ -19,6 +19,21 @@ As used in the [SoloKeys][solokeys] [Solo 2][solo2] and [Nitrokey 3][nitro3].
 [ctap21ps]: https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html
 [webauthnl2]: https://www.w3.org/TR/webauthn-2/
 
+### Setup
+
+For attestation to work, the authenticator's state needs to be provisioned with a batch
+attestation key and certificate. They are expected in files `/fido/sec/00` and `/fido/x5c/00`,
+respectively.
+
+In the context of the SoloKeys Solo 2, "secure" devices are pre-provisioned; for "unlocked" devices,
+if the firmware contains the provisioner app, this can be done with the CLI:
+
+```sh
+solo2 pki dev fido batch.key batch.cert
+solo2 app provision store-fido-batch-key batch.key
+solo2 app provision store-fido-batch-cert batch.cert
+```
+
 #### License
 
 `fido-authenticator` is fully open source.
