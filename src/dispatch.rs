@@ -27,7 +27,7 @@ where
     UP: UserPresence,
 {
     debug_now!("handle CTAP1: remaining stack: {} bytes", msp() - 0x2000_0000);
-    debug_now!("1A SP: {:X}", msp());
+    // debug_now!("1A SP: {:X}", msp());
     match try_handle_ctap1(authenticator, data, response) {
         Ok(()) => {
             debug!("U2F response {} bytes", response.len());
@@ -41,7 +41,7 @@ where
             response.extend_from_slice(&code).ok();
         },
     }
-    debug_now!("1B SP: {:X}", msp());
+    // debug_now!("1B SP: {:X}", msp());
     debug_now!("end handle CTAP1");
 }
 
@@ -53,12 +53,12 @@ where
     UP: UserPresence,
 {
     debug_now!("handle CTAP2: remaining stack: {} bytes", msp() - 0x2000_0000);
-    debug_now!("2A SP: {:X}", msp());
+    // debug_now!("2A SP: {:X}", msp());
     if let Err(error) = try_handle_ctap2(authenticator, data, response) {
         debug_now!("CTAP2 error: {})", error);
         response.push(error).ok();
     }
-    debug_now!("2B SP: {:X}", msp());
+    // debug_now!("2B SP: {:X}", msp());
     debug_now!("end handle CTAP2");
 }
 
@@ -83,13 +83,13 @@ where
         let ctap_request = {
             let command = apdu_dispatch::Command::try_from(data)
                 .map_err(|_| Status::IncorrectDataParameter)?;
-            debug_now!("1a SP: {:X}", msp());
+            // debug_now!("1a SP: {:X}", msp());
             ctap1::Request::try_from(&command)
                 .map_err(|_| Status::IncorrectDataParameter)?
         };
         ctap1::Authenticator::call_ctap1(authenticator, &ctap_request)?
     };
-    debug_now!("1b SP: {:X}", msp());
+    // debug_now!("1b SP: {:X}", msp());
 
     ctap_response.serialize(response).ok();
     Ok(())
@@ -129,7 +129,6 @@ where
     authenticator.state.persistent.load_if_not_initialised(&mut authenticator.trussed);
 
     debug_now!("try_get CTAP2: remaining stack: {} bytes", msp() - 0x2000_0000);
-    debug_now!("size(Request): {} bytes", core::mem::size_of::<ctap2::Request>());
 
     // Goal of these nested scopes is to keep stack small.
     let ctap_request = ctap2::Request::deserialize(data)

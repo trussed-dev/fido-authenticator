@@ -814,6 +814,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         ).ok_or(Error::NoCredentials)?;
 
         info_now!("found {:?} applicable credentials", num_credentials);
+        info_now!("{:?}", &credential);
 
         // 6. process any options present
 
@@ -900,6 +901,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
         self.state.runtime.active_get_assertion = None;
 
         if let Some(allow_list) = allow_list {
+            debug_now!("Allowlist passed, filtering");
             // we will have at most one credential, and an empty cache.
 
             for credential_id in allow_list {
@@ -917,12 +919,13 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
             return None;
         } else {
             // we are only dealing with discoverable credentials.
+            debug_now!("Allowlist not passed, fetching RKs");
 
             let mut maybe_path = syscall!(self.trussed.read_dir_first(
                 Location::Internal,
                 rp_rk_dir(&rp_id_hash),
                 None,
-            )).entry.map(|entry| PathBuf::try_from(entry.file_name()).unwrap());
+            )).entry.map(|entry| PathBuf::try_from(entry.path()).unwrap());
 
             use core::str::FromStr;
             use crate::state::CachedCredential;
@@ -943,7 +946,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
                 }
 
                 maybe_path = syscall!(self.trussed.read_dir_next())
-                    .entry.map(|entry| PathBuf::try_from(entry.file_name()).unwrap());
+                    .entry.map(|entry| PathBuf::try_from(entry.path()).unwrap());
             }
 
             let num_credentials = self.state.runtime.remaining_credentials();
