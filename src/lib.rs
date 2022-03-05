@@ -21,23 +21,22 @@ use trussed::{
 };
 
 use ctap_types::{
-    Bytes,
+    heapless_bytes::Bytes,
     authenticator::{Request, Response},
 };
 
 /// Re-export of `ctap-types` authenticator errors.
-pub use ctap_types::authenticator::Error;
+pub use ctap_types::Error;
 
 pub mod ctap1;
 pub mod ctap2;
 
+#[cfg(feature="dispatch")]
+pub mod dispatch;
+
 pub mod constants;
 pub mod credential;
 pub mod state;
-
-pub use ctap1::Authenticator as Ctap1Authenticator;
-pub use ctap2::Authenticator as Ctap2Authenticator;
-
 
 /// Results with our [`Error`].
 pub type Result<T> = core::result::Result<T, Error>;
@@ -102,6 +101,22 @@ fn format_hex(data: &[u8], mut buffer: &mut [u8]) {
         buffer = &mut buffer[2..];
     }
 }
+
+// NB: to actually use this, replace the constant implementation with the inline assembly.
+// Once we move to a new cortex-m release, can use the version from there.
+//
+// use core::arch::asm;
+
+// #[inline]
+// pub fn msp() -> u32 {
+//     let r;
+//     unsafe { asm!("mrs {}, MSP", out(reg) r, options(nomem, nostack, preserves_flags)) };
+//     r
+// }
+
+#[inline]
+#[allow(dead_code)]
+pub(crate) fn msp() -> u32 { 0x2000_000 }
 
 /// Currently Ed25519 and P256.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -184,15 +199,16 @@ where UP: UserPresence,
 
         match request {
             Request::Ctap2(request) => {
+                use ctap_types::ctap2::Authenticator as _;
                 Ok(Response::Ctap2(self.call_ctap2(request)?))
             }
             Request::Ctap1(_request) => {
-                // ctap_types::authenticator::ctap1::Request redefineds
+                // ctap_types::authenticator::ctap1::Request redefines
                 // the already existing ctap_types::ctap1::Command
                 //
                 // need to merge
                 todo!();
-                // Ok(Response::Ctap1(self.call_u2f(request)?))
+                // Ok(Response::Ctap1(self.call_ctap1(request)?))
             }
         }
     }

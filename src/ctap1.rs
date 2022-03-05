@@ -1,14 +1,14 @@
 //! The `ctap1::Authenticator` trait and its implementation.
 
 use ctap_types::{
-    Bytes,
     ctap1::{
-        self,
-        Command as Request,
-        Response,
+        Authenticator,
+        ControlByte,
+        register, authenticate,
         Result,
         Error,
     },
+    heapless_bytes::Bytes,
 };
 
 use trussed::{
@@ -33,58 +33,25 @@ use crate::{
     UserPresence,
 };
 
-/// CTAP1 (U2F) authenticator API
-///
-/// Ahh... life could be so simple!
-//
-// TODO: Lift into ctap-types?
-pub trait Authenticator {
-    /// Register a U2F credential.
-    fn register(&mut self, request: &ctap1::Register) -> Result<ctap1::RegisterResponse>;
-    /// Authenticate with a U2F credential.
-    fn authenticate(&mut self, request: &ctap1::Authenticate) -> Result<ctap1::AuthenticateResponse>;
-    /// Supported U2F version.
-    fn version() -> [u8; 6] {
-        *b"U2F_V2"
-    }
-}
-
-impl<UP, T> crate::Authenticator<UP, T>
-where UP: UserPresence,
-      T: TrussedRequirements,
-{
-    /// Dispatches the enum of possible requests into the ctap1 [`Authenticator`] trait methods.
-    pub fn call_ctap1(&mut self, request: &Request) -> Result<Response> {
-        info!("called ctap1");
-        self.state.persistent.load_if_not_initialised(&mut self.trussed);
-
-        match request {
-            Request::Register(reg) =>
-                Ok(Response::Register(self.register(reg)?)),
-
-            Request::Authenticate(auth) =>
-                Ok(Response::Authenticate(self.authenticate(auth)?)),
-
-            Request::Version =>
-                Ok(ctap1::Response::Version(Self::version())),
-
-        }
-    }
-
-    // #[deprecated(note="please use `call_ctap1` instead")]
-    /// Alias of `call_ctap1`, may be deprecated in the future.
-    pub fn call_u2f(&mut self, request: &Request) -> Result<Response> {
-        self.call_ctap1(request)
-    }
-
-}
-
 type Commitment = Bytes::<324>;
 
 /// Implement `ctap1::Authenticator` for our Authenticator.
+///
+/// ## References
+/// The "proposed standard" of U2F V1.2 applies to CTAP1.
+/// - [Message formats](https://fidoalliance.org/specs/fido-u2f-v1.2-ps-20170411/fido-u2f-raw-message-formats-v1.2-ps-20170411.html)
+/// - [App ID](https://fidoalliance.org/specs/fido-u2f-v1.2-ps-20170411/fido-appid-and-facets-v1.2-ps-20170411.html)
 impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenticator<UP, T>
 {
-    fn register(&mut self, reg: &ctap1::Register) -> Result<ctap1::RegisterResponse> {
+    /// Register a new credential, this always uses P-256 keys.
+    ///
+    /// Note that attestation is mandatory in CTAP1/U2F, so if the state
+    /// is not provisioned with a key/cert, this method will fail.
+    /// <https://fidoalliance.org/specs/fido-u2f-v1.2-ps-20170411/fido-u2f-raw-message-formats-v1.2-ps-20170411.html#registration-request-message---u2f_register>
+    ///
+    /// Also note that CTAP1 credentials should be assertable over CTAP2. I believe this is
+    /// currently not the case.
+    fn register(&mut self, reg: &register::Request) -> Result<register::Response> {
         self.up.user_present(&mut self.trussed, constants::U2F_UP_TIMEOUT)
             .map_err(|_| Error::ConditionsOfUseNotSatisfied)?;
 
@@ -95,12 +62,14 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let serialized_cose_public_key = syscall!(self.trussed.serialize_p256_key(
             public_key, KeySerialization::EcdhEsHkdf256
         )).serialized_key;
+        syscall!(self.trussed.delete(public_key));
         let cose_key: ctap_types::cose::EcdhEsHkdf256PublicKey
             = trussed::cbor_deserialize(&serialized_cose_public_key).unwrap();
 
         let wrapping_key = self.state.persistent.key_wrapping_key(&mut self.trussed)
             .map_err(|_| Error::UnspecifiedCheckingError)?;
-        debug!("wrapping u2f private key");
+        // debug!("wrapping u2f private key");
+
         let wrapped_key = syscall!(self.trussed.wrap_key_chacha8poly1305(
             wrapping_key,
             private_key,
@@ -108,12 +77,16 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         )).wrapped_key;
         // debug!("wrapped_key = {:?}", &wrapped_key);
 
+        syscall!(self.trussed.delete(private_key));
+
         let key = Key::WrappedKey(wrapped_key.to_bytes().map_err(|_| Error::UnspecifiedCheckingError)?);
         let nonce = syscall!(self.trussed.random_bytes(12)).bytes.as_slice().try_into().unwrap();
 
         let mut rp_id = heapless::String::new();
 
         // We do not know the rpId string in U2F.  Just using placeholder.
+        // TODO: Is this true?
+        // <https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#cross-version-credentials>
         rp_id.push_str("u2f").ok();
         let rp = ctap_types::webauthn::PublicKeyCredentialRpEntity{
             id: rp_id,
@@ -146,8 +119,6 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // 12.b generate credential ID { = AEAD(Serialize(Credential)) }
         let kek = self.state.persistent.key_encryption_key(&mut self.trussed).map_err(|_| Error::NotEnoughMemory)?;
         let credential_id = credential.id(&mut self.trussed, kek, Some(&reg.app_id)).map_err(|_| Error::NotEnoughMemory)?;
-        syscall!(self.trussed.delete(public_key));
-        syscall!(self.trussed.delete(private_key));
 
         let mut commitment = Commitment::new();
 
@@ -183,7 +154,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         };
 
 
-        Ok(ctap1::RegisterResponse::new(
+        Ok(register::Response::new(
             0x05,
             &cose_key,
             &credential_id.0,
@@ -192,11 +163,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         ))
     }
 
-    fn authenticate(&mut self, auth: &ctap1::Authenticate) -> Result<ctap1::AuthenticateResponse> {
+    fn authenticate(&mut self, auth: &authenticate::Request) -> Result<authenticate::Response> {
         let cred = Credential::try_from_bytes(self, &auth.app_id, &auth.key_handle);
 
         let user_presence_byte = match auth.control_byte {
-            ctap1::ControlByte::CheckOnly => {
+            ControlByte::CheckOnly => {
                 // if the control byte is set to 0x07 by the FIDO Client,
                 // the U2F token is supposed to simply check whether the
                 // provided key handle was originally created by this token
@@ -206,12 +177,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     Err(Error::IncorrectDataParameter)
                 };
             },
-            ctap1::ControlByte::EnforceUserPresenceAndSign => {
+            ControlByte::EnforceUserPresenceAndSign => {
                 self.up.user_present(&mut self.trussed, constants::U2F_UP_TIMEOUT)
                     .map_err(|_| Error::ConditionsOfUseNotSatisfied)?;
                 0x01
             },
-            ctap1::ControlByte::DontEnforceUserPresenceAndSign => 0x00,
+            ControlByte::DontEnforceUserPresenceAndSign => 0x00,
         };
 
         let cred = cred.map_err(|_| Error::IncorrectDataParameter)?;
@@ -262,11 +233,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             SignatureSerialization::Asn1Der
         )).signature.to_bytes().unwrap();
 
-        Ok(ctap1::AuthenticateResponse::new(
-            user_presence_byte,
-            sig_count,
+        Ok(authenticate::Response {
+            user_presence: user_presence_byte,
+            count: sig_count,
             signature,
-        ))
+        })
     }
 
 }

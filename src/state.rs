@@ -13,13 +13,14 @@ use trussed::{
     },
 };
 use ctap_types::{
-    Bytes32,
-    authenticator::Error,
+    Bytes, String,
+    Error,
     cose::EcdhEsHkdf256PublicKey as CoseEcdhEsHkdf256PublicKey,
+    // 2022-02-27: 10 credentials
     sizes::MAX_CREDENTIAL_COUNT_IN_LIST, // U8 currently
 };
 
-use heapless::binary_heap::{BinaryHeap, Max, Min};
+use heapless::binary_heap::{BinaryHeap, Max};
 use littlefs2::path::PathBuf;
 
 use crate::{
@@ -28,8 +29,55 @@ use crate::{
     Result,
 };
 
-pub type MaxCredentialHeap = BinaryHeap<Credential, Max, MAX_CREDENTIAL_COUNT_IN_LIST>;
-pub type MinCredentialHeap = BinaryHeap<Credential, Min, MAX_CREDENTIAL_COUNT_IN_LIST>;
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct CachedCredential {
+    pub timestamp: u32,
+    // PathBuf has length 255 + 1, we only need 36 + 1
+    // with `rk/<16B rp_id>/<16B cred_id>` = 4 + 2*32
+    pub path: String<37>,
+}
+
+impl PartialOrd for CachedCredential {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CachedCredential {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.timestamp.cmp(&other.timestamp)
+    }
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+pub struct CredentialCacheGeneric<const N: usize>(BinaryHeap<CachedCredential, Max, N>);
+impl<const N: usize> CredentialCacheGeneric<N> {
+    pub fn push(&mut self, item: CachedCredential) {
+        if self.0.len() == self.0.capacity() {
+            self.0.pop();
+        }
+        // self.0.push(item).ok();
+        self.0.push(item).map_err(drop).unwrap();
+    }
+
+    pub fn pop(&mut self) -> Option<CachedCredential> {
+        self.0.pop()
+    }
+
+    pub fn len(&self) -> u32 {
+        self.0.len() as u32
+    }
+
+    pub fn is_empty(&mut self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear()
+    }
+}
+
+pub type CredentialCache = CredentialCacheGeneric<MAX_CREDENTIAL_COUNT_IN_LIST>;
 
 #[derive(Clone, Debug, /*uDebug, Eq, PartialEq,*/ serde::Deserialize, serde::Serialize)]
 pub struct State {
@@ -158,7 +206,7 @@ impl Identity {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CredentialManagementEnumerateRps {
     pub remaining: u32,
-    pub rp_id_hash: Bytes32,
+    pub rp_id_hash: Bytes<32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -187,7 +235,7 @@ pub struct RuntimeState {
     consecutive_pin_mismatches: u8,
 
     // both of these are a cache for previous Get{Next,}Assertion call
-    cached_credentials: Option<MaxCredentialHeap>,
+    cached_credentials: CredentialCache,
     pub active_get_assertion: Option<ActiveGetAssertionData>,
     channel: Option<u32>,
     pub cached_rp: Option<CredentialManagementEnumerateRps>,
@@ -416,30 +464,35 @@ impl RuntimeState {
         self.consecutive_pin_mismatches >= Self::POWERCYCLE_RETRIES
     }
 
-    pub fn credential_heap(&mut self) -> &mut MaxCredentialHeap {
-        // Can't seem to avoid both borrow checker + unwrap
-        if self.cached_credentials.is_none() {
-            self.create_credential_heap()
-        } else {
-            self.cached_credentials.as_mut().unwrap()
-        }
+    // pub fn cached_credentials(&mut self) -> &mut CredentialCache {
+    //     &mut self.cached_credentials
+    //     // if let Some(cache) = self.cached_credentials.as_mut() {
+    //     //     return cache
+    //     // }
+    //     // self.cached_credentials.insert(CredentialCache::new())
+    // }
+
+    pub fn clear_credential_cache(&mut self) {
+        self.cached_credentials.clear()
     }
 
-    fn create_credential_heap(&mut self) -> &mut MaxCredentialHeap {
-        self.cached_credentials = Some(MaxCredentialHeap::new());
-        self.cached_credentials.as_mut().unwrap()
+    pub fn push_credential(&mut self, credential: CachedCredential) {
+        self.cached_credentials.push(credential);
     }
 
-    pub fn free_credential_heap(&mut self) {
-        let heap = self.cached_credentials.take();
-        if let Some(mut heap) = heap {
-            heap.clear();
-        }
+    pub fn pop_credential<T: client::FilesystemClient>(&mut self, trussed: &mut T) -> Option<Credential> {
+        let cached_credential = self.cached_credentials.pop()?;
+
+        let credential_data = syscall!(trussed.read_file(
+            Location::Internal,
+            PathBuf::from(cached_credential.path.as_str()),
+         )).data;
+
+        Credential::deserialize(&credential_data).ok()
     }
 
-    pub fn pop_credential_from_heap(&mut self) -> Credential {
-        let max_heap = self.credential_heap();
-        max_heap.pop().unwrap()
+    pub fn remaining_credentials(&self) -> u32 {
+        self.cached_credentials.len() as _
     }
 
     pub fn key_agreement_key<T: client::P256>(&mut self, trussed: &mut T) -> KeyId {
@@ -482,13 +535,12 @@ impl RuntimeState {
     pub fn reset<T: client::HmacSha256 + client::P256 + client::FilesystemClient>(&mut self, trussed: &mut T) {
         // Could use `free_credential_heap`, but since we're deleting everything here, this is quicker.
         syscall!(trussed.delete_all(Location::Volatile));
-        self.credential_heap().clear();
+        self.clear_credential_cache();
+        self.active_get_assertion = None;
 
         self.rotate_pin_token(trussed);
         self.rotate_key_agreement_key(trussed);
 
-        self.cached_credentials = None;
-        self.active_get_assertion = None;
     }
 
     pub fn generate_shared_secret<T: client::P256>(&mut self, trussed: &mut T, platform_key_agreement_key: &CoseEcdhEsHkdf256PublicKey) -> Result<KeyId> {
@@ -521,23 +573,3 @@ impl RuntimeState {
     }
 
 }
-
-// #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-// pub struct TimestampPath {
-//     pub timestamp: u32,
-//     pub path: PathBuf,
-//     pub location: Location,
-// }
-
-// impl Ord for TimestampPath {
-//     fn cmp(&self, other: &Self) -> Ordering {
-//         self.timestamp.cmp(&other.timestamp)
-//     }
-// }
-
-// impl PartialOrd for TimestampPath {
-//     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-//         Some(self.cmp(other))
-//     }
-// }
-
