@@ -77,17 +77,35 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let mut pin_protocols = Vec::<u8, 1>::new();
         pin_protocols.push(1).unwrap();
 
-        let mut options = ctap2::get_info::CtapOptions::default();
-        options.rk = true;
-        options.up = true;
-        options.uv = None; // "uv" here refers to "in itself", e.g. biometric
-        // options.plat = false;
-        options.cred_mgmt = Some(true);
-        // options.client_pin = None; // not capable of PIN
-        options.client_pin = match self.state.persistent.pin_is_set() {
-            true => Some(true),
-            false => Some(false),
+        let options = ctap2::get_info::CtapOptions {
+            ep: Some(true),
+            rk: true,
+            up: true,
+            uv: None,
+            plat: Some(false),
+            cred_mgmt: Some(true),
+            client_pin:  match self.state.persistent.pin_is_set() {
+                true => Some(true),
+                false => Some(false),
+            },
+            credential_mgmt_preview: Some(true),
+            ..Default::default()
         };
+        // options.rk = true;
+        // options.up = true;
+        // options.uv = None; // "uv" here refers to "in itself", e.g. biometric
+        // options.plat = Some(false);
+        // options.cred_mgmt = Some(true);
+        // options.credential_mgmt_preview = Some(true);
+        // // options.client_pin = None; // not capable of PIN
+        // options.client_pin = match self.state.persistent.pin_is_set() {
+        //     true => Some(true),
+        //     false => Some(false),
+        // };
+
+        let mut transports = Vec::new();
+        transports.push(String::from("nfc")).unwrap();
+        transports.push(String::from("usb")).unwrap();
 
         let (_, aaguid)= self.state.identity.attestation(&mut self.trussed);
 
@@ -96,8 +114,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             extensions: Some(extensions),
             aaguid: Bytes::from_slice(&aaguid).unwrap(),
             options: Some(options),
+            transports: Some(transports),
             // 1200
-            max_msg_size: Some(ctap_types::sizes::REALISTIC_MAX_MESSAGE_SIZE),
+            max_msg_size: Some(self.config.max_msg_size),
             pin_protocols: Some(pin_protocols),
             max_creds_in_list: Some(ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST),
             max_cred_id_length: Some(ctap_types::sizes::MAX_CREDENTIAL_ID_LENGTH),
@@ -489,6 +508,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
     fn reset(&mut self) -> Result<()> {
         // 1. >10s after bootup -> NotAllowed
         let uptime = syscall!(self.trussed.uptime()).uptime;
+        debug_now!("uptime: {:?}", uptime);
         if uptime.as_secs() > 10 {
             #[cfg(not(feature = "disable-reset-time-window"))]
             return Err(Error::NotAllowed);
@@ -512,6 +532,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         self.state.runtime.reset(&mut self.trussed);
 
         Ok(())
+    }
+
+    fn selection(&mut self) -> Result<()> {
+        self.up.user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)
     }
 
     #[inline(never)]
@@ -900,61 +924,76 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
         self.state.runtime.clear_credential_cache();
         self.state.runtime.active_get_assertion = None;
 
+        // NB: CTAP 2.1 specifies to return the first applicable credential, and set
+        // numberOfCredentials to None.
+        // However, CTAP 2.0 says to send numberOfCredentials that are applicable,
+        // which implies we'd have to respond to GetNextAssertion.
+        //
+        // We are using CTAP 2.1 behaviour here, as it allows us not to cache the (length)
+        // credential IDs. Presumably, most clients use this to just get any old signatures,
+        // but we did change the github.com/solokeys/fido2-tests to accommodate this change
+        // of behaviour.
         if let Some(allow_list) = allow_list {
-            debug_now!("Allowlist passed, filtering");
+            debug_now!("Allowlist of len {} passed, filtering", allow_list.len());
             // we will have at most one credential, and an empty cache.
 
-            for credential_id in allow_list {
-                let credential = match Credential::try_from(self, rp_id_hash, credential_id) {
-                    Ok(credential) => credential,
-                    _ => continue,
-                };
+            // client is not supposed to send Some(empty list):
+            // <https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#:~:text=A%20platform%20MUST%20NOT%20send%20an%20empty%20allowList%E2%80%94if%20it%20would%20be%20empty%20it%20MUST%20be%20omitted>
+            // but some still do (and CTAP 2.0 does not rule it out).
+            // they probably meant to send None.
+            if allow_list.len() > 0 {
+                for credential_id in allow_list {
+                    let credential = match Credential::try_from(self, rp_id_hash, credential_id) {
+                        Ok(credential) => credential,
+                        _ => continue,
+                    };
 
-                if !self.check_credential_applicable(&credential, true, uv_performed) {
-                    continue;
+                    if !self.check_credential_applicable(&credential, true, uv_performed) {
+                        continue;
+                    }
+
+                    return Some((credential, 1));
                 }
 
-                return Some((credential, 1));
+                // we don't recognize any credentials in the allowlist
+                return None;
             }
-            return None;
-        } else {
-            // we are only dealing with discoverable credentials.
-            debug_now!("Allowlist not passed, fetching RKs");
-
-            let mut maybe_path = syscall!(self.trussed.read_dir_first(
-                Location::Internal,
-                rp_rk_dir(&rp_id_hash),
-                None,
-            )).entry.map(|entry| PathBuf::try_from(entry.path()).unwrap());
-
-            use core::str::FromStr;
-            use crate::state::CachedCredential;
-
-            while let Some(path) = maybe_path {
-                let credential_data = syscall!(self.trussed.read_file(
-                    Location::Internal,
-                    path.clone(),
-                 )).data;
-
-                let credential = Credential::deserialize(&credential_data).ok()?;
-
-                if self.check_credential_applicable(&credential, false, uv_performed) {
-                    self.state.runtime.push_credential(CachedCredential {
-                        timestamp: credential.creation_time,
-                        path: String::from_str(&path.as_str_ref_with_trailing_nul()).ok()?,
-                    });
-                }
-
-                maybe_path = syscall!(self.trussed.read_dir_next())
-                    .entry.map(|entry| PathBuf::try_from(entry.path()).unwrap());
-            }
-
-            let num_credentials = self.state.runtime.remaining_credentials();
-            let credential = self.state.runtime.pop_credential(&mut self.trussed);
-            credential.map(|credential| (credential, num_credentials))
-
         }
 
+        // we are only dealing with discoverable credentials.
+        debug_now!("Allowlist not passed, fetching RKs");
+
+        let mut maybe_path = syscall!(self.trussed.read_dir_first(
+            Location::Internal,
+            rp_rk_dir(&rp_id_hash),
+            None,
+        )).entry.map(|entry| PathBuf::try_from(entry.path()).unwrap());
+
+        use core::str::FromStr;
+        use crate::state::CachedCredential;
+
+        while let Some(path) = maybe_path {
+            let credential_data = syscall!(self.trussed.read_file(
+                Location::Internal,
+                path.clone(),
+             )).data;
+
+            let credential = Credential::deserialize(&credential_data).ok()?;
+
+            if self.check_credential_applicable(&credential, false, uv_performed) {
+                self.state.runtime.push_credential(CachedCredential {
+                    timestamp: credential.creation_time,
+                    path: String::from_str(&path.as_str_ref_with_trailing_nul()).ok()?,
+                });
+            }
+
+            maybe_path = syscall!(self.trussed.read_dir_next())
+                .entry.map(|entry| PathBuf::try_from(entry.path()).unwrap());
+        }
+
+        let num_credentials = self.state.runtime.remaining_credentials();
+        let credential = self.state.runtime.pop_credential(&mut self.trussed);
+        credential.map(|credential| (credential, num_credentials))
     }
 
     fn decrypt_pin_hash_and_maybe_escalate(&mut self, shared_secret: KeyId, pin_hash_enc: &Bytes<64>)
@@ -1255,6 +1294,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
             self.verify_pin_auth(kek, &hmac_secret.salt_enc, &hmac_secret.salt_auth).map_err(|_| Error::ExtensionFirst)?;
 
             if hmac_secret.salt_enc.len() != 32 && hmac_secret.salt_enc.len() != 64 {
+                debug_now!("invalid hmac-secret length");
                 return Err(Error::InvalidLength);
             }
 

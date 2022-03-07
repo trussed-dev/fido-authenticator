@@ -71,6 +71,25 @@ where T:
     // + client::Totp
 {}
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct Config {
+    /// Typically determined by surrounding USB-level decoder.
+    /// For Solo 2, this is usbd-ctaphid (and its buffer size).
+    pub max_msg_size: usize,
+    // pub max_creds_in_list: usize,
+    // pub max_cred_id_length: usize,
+}
+
+// impl Default for Config {
+//     fn default() -> Self {
+//         Self {
+//             max_message_size: ctap_types::sizes::REALISTIC_MAX_MESSAGE_SIZE,
+//             max_credential_count_in_list: ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST,
+//             max_credential_id_length: ctap_types::sizes::MAX_CREDENTIAL_ID_LENGTH,
+//         }
+//     }
+// }
+
 /// Trussed® app implementing a FIDO authenticator.
 ///
 /// It implements [`ctap1::Authenticator`] and [`ctap2::Authenticator`] traits,
@@ -90,6 +109,7 @@ where
     trussed: T,
     state: state::State,
     up: UP,
+    config: Config,
 }
 
 // EWW.. this is a bit unsafe isn't it
@@ -172,7 +192,8 @@ impl UserPresence for Conforming {
     fn user_present<T: TrussedClient>(self, trussed: &mut T, timeout_milliseconds: u32) -> Result<()> {
         let result = syscall!(trussed.confirm_user_present(timeout_milliseconds)).result;
         result.map_err(|err| match err {
-            trussed::types::consent::Error::TimedOut => Error::KeepaliveCancel,
+            trussed::types::consent::Error::TimedOut => Error::UserActionTimeout,
+            // trussed::types::consent::Error::TimedOut => Error::KeepaliveCancel,
             _ => Error::OperationDenied,
         })
     }
@@ -186,10 +207,10 @@ impl<UP, T> Authenticator<UP, T>
 where UP: UserPresence,
       T: TrussedRequirements,
 {
-    pub fn new(trussed: T, up: UP) -> Self {
+    pub fn new(trussed: T, up: UP, config: Config) -> Self {
 
         let state = state::State::new();
-        let authenticator = Self { trussed, state, up };
+        let authenticator = Self { trussed, state, up, config };
 
         authenticator
     }

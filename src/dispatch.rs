@@ -55,7 +55,7 @@ where
     debug_now!("handle CTAP2: remaining stack: {} bytes", msp() - 0x2000_0000);
     // debug_now!("2A SP: {:X}", msp());
     if let Err(error) = try_handle_ctap2(authenticator, data, response) {
-        debug_now!("CTAP2 error: {})", error);
+        debug_now!("CTAP2 error: {:02X}", error);
         response.push(error).ok();
     }
     // debug_now!("2B SP: {:X}", msp());
@@ -76,7 +76,9 @@ where
     //     .map_err(|_| Status::IncorrectDataParameter)?;
     // let ctap_request = ctap1::Request::try_from(&command)
     //     .map_err(|_| Status::IncorrectDataParameter)?;
+    // drop(command);
     // let ctap_response = ctap1::Authenticator::call_ctap1(authenticator, &ctap_request)?;
+    // drop(ctap_request);
 
     // Goal of these nested scopes is to keep stack small.
     let ctap_response = {
@@ -84,8 +86,7 @@ where
             let command = apdu_dispatch::Command::try_from(data)
                 .map_err(|_| Status::IncorrectDataParameter)?;
             // debug_now!("1a SP: {:X}", msp());
-            ctap1::Request::try_from(&command)
-                .map_err(|_| Status::IncorrectDataParameter)?
+            ctap1::Request::try_from(&command)?
         };
         ctap1::Authenticator::call_ctap1(authenticator, &ctap_request)?
     };
