@@ -19,6 +19,7 @@ where UP: UserPresence,
         debug_now!("ctaphid-dispatch: remaining stack: {} bytes", msp() - 0x2000_0000);
 
         if request.len() < 1 {
+            debug_now!("invalid request length in ctaphid.call");
             return Err(ctaphid::Error::InvalidLength);
         }
 
