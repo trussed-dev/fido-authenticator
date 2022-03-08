@@ -78,7 +78,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         pin_protocols.push(1).unwrap();
 
         let options = ctap2::get_info::CtapOptions {
-            ep: Some(true),
+            ep: None,
             rk: true,
             up: true,
             uv: None,
