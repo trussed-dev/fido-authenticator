@@ -2,8 +2,11 @@
 //!
 //! The core structure is [`Authenticator`], a Trussed® application.
 //!
-//! It implements [`ctap1::Authenticator`] and [`ctap2::Authenticator`] traits,
+//! It implements the [`ctap_types::ctap1::Authenticator`] and [`ctap_types::ctap2::Authenticator`] traits,
 //! which express the interface defined in the CTAP specification.
+//!
+//! With feature `dispatch` activated, it also implements the `App` traits
+//! of [`apdu_dispatch`] and [`ctaphid_dispatch`].
 
 #![cfg_attr(not(test), no_std)]
 // #![warn(missing_docs)]
@@ -28,11 +31,11 @@ use ctap_types::{
 /// Re-export of `ctap-types` authenticator errors.
 pub use ctap_types::Error;
 
-pub mod ctap1;
-pub mod ctap2;
+mod ctap1;
+mod ctap2;
 
 #[cfg(feature="dispatch")]
-pub mod dispatch;
+mod dispatch;
 
 pub mod constants;
 pub mod credential;
@@ -72,6 +75,7 @@ where T:
 {}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+/// Externally defined configuration.
 pub struct Config {
     /// Typically determined by surrounding USB-level decoder.
     /// For Solo 2, this is usbd-ctaphid (and its buffer size).
@@ -92,7 +96,7 @@ pub struct Config {
 
 /// Trussed® app implementing a FIDO authenticator.
 ///
-/// It implements [`ctap1::Authenticator`] and [`ctap2::Authenticator`] traits,
+/// It implements the [`ctap_types::ctap1::Authenticator`] and [`ctap_types::ctap2::Authenticator`] traits,
 /// which, in turn, express the interfaces defined in the CTAP specification.
 ///
 /// The type parameter `T` selects a Trussed® client implementation, which
@@ -136,7 +140,7 @@ fn format_hex(data: &[u8], mut buffer: &mut [u8]) {
 
 #[inline]
 #[allow(dead_code)]
-pub(crate) fn msp() -> u32 { 0x2000_000 }
+pub(crate) fn msp() -> u32 { 0x2000_0000 }
 
 /// Currently Ed25519 and P256.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -169,6 +173,7 @@ pub trait UserPresence: Copy {
 }
 
 #[deprecated(note="use `Silent` directly`")]
+#[doc(hidden)]
 pub type SilentAuthenticator = Silent;
 
 /// No user presence verification.
@@ -182,6 +187,7 @@ impl UserPresence for Silent {
 }
 
 #[deprecated(note="use `Conforming` directly")]
+#[doc(hidden)]
 pub type NonSilentAuthenticator = Conforming;
 
 /// User presence verification via Trussed.
@@ -200,7 +206,7 @@ impl UserPresence for Conforming {
 }
 
 fn cbor_serialize_message<T: serde::Serialize>(object: &T) -> core::result::Result<Message, ctap_types::serde::Error> {
-    Ok(trussed::cbor_serialize_bytes(object)?)
+    trussed::cbor_serialize_bytes(object)
 }
 
 impl<UP, T> Authenticator<UP, T>
@@ -210,9 +216,7 @@ where UP: UserPresence,
     pub fn new(trussed: T, up: UP, config: Config) -> Self {
 
         let state = state::State::new();
-        let authenticator = Self { trussed, state, up, config };
-
-        authenticator
+        Self { trussed, state, up, config }
     }
 
     pub fn call(&mut self, request: &Request) -> Result<Response> {
@@ -235,7 +239,7 @@ where UP: UserPresence,
     }
 
     fn hash(&mut self, data: &[u8]) -> Bytes<32> {
-        let hash = syscall!(self.trussed.hash_sha256(&data)).hash;
+        let hash = syscall!(self.trussed.hash_sha256(data)).hash;
         hash.to_bytes().expect("hash should fit")
     }
 }

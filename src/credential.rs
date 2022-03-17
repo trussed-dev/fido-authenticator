@@ -175,10 +175,10 @@ impl PartialOrd<&Credential> for Credential {
 // Bad idea - huge stack
 // pub(crate) type CredentialList = Vec<Credential, {ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST}>;
 
-impl Into<PublicKeyCredentialDescriptor> for CredentialId {
-    fn into(self) -> PublicKeyCredentialDescriptor {
+impl From<CredentialId> for PublicKeyCredentialDescriptor {
+    fn from(id: CredentialId) -> PublicKeyCredentialDescriptor {
         PublicKeyCredentialDescriptor {
-            id: self.0,
+            id: id.0,
             key_type: {
                 let mut key_type = String::new();
                 key_type.push_str("public-key").unwrap();
@@ -189,6 +189,7 @@ impl Into<PublicKeyCredentialDescriptor> for CredentialId {
 }
 
 impl Credential {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         ctap: CtapVersion,
         // parameters: &ctap2::make_credential::Parameters,
@@ -210,7 +211,7 @@ impl Credential {
 
             creation_time: timestamp,
             use_counter: true,
-            algorithm: algorithm,
+            algorithm,
             key,
 
             hmac_secret,
@@ -237,7 +238,7 @@ impl Credential {
     // the ID will stay below 255 bytes.
     //
     // Existing keyhandles can still be decoded
-    pub fn id<'a, T: client::Chacha8Poly1305 + client::Sha256>(
+    pub fn id<T: client::Chacha8Poly1305 + client::Sha256>(
         &self,
         trussed: &mut T,
         key_encryption_key: KeyId,
@@ -252,7 +253,7 @@ impl Credential {
         let rp_id_hash: Bytes<32> = if let Some(hash) = rp_id_hash {
             hash.clone()
         } else {
-            syscall!(trussed.hash_sha256(&self.rp.id.as_ref()))
+            syscall!(trussed.hash_sha256(self.rp.id.as_ref()))
                 .hash
                 .to_bytes().map_err(|_| Error::Other)?
         };
@@ -268,7 +269,7 @@ impl Credential {
     }
 
     pub fn serialize(&self) -> Result<SerializedCredential> {
-        Ok(trussed::cbor_serialize_bytes(self).map_err(|_| Error::Other)?)
+        trussed::cbor_serialize_bytes(self).map_err(|_| Error::Other)
     }
 
     pub fn deserialize(bytes: &SerializedCredential) -> Result<Self> {

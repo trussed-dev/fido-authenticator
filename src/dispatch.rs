@@ -1,7 +1,7 @@
 //! Dispatch of incoming requests over CTAPHID or NFC APDUs into CTAP1 and CTAP2.
 
-pub mod apdu;
-pub mod ctaphid;
+mod apdu;
+mod ctaphid;
 
 use crate::{Authenticator, TrussedRequirements, UserPresence};
 #[allow(unused_imports)]

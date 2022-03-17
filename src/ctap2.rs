@@ -1,4 +1,4 @@
-//! The `ctap2::Authenticator` trait and its implementation.
+//! The `ctap_types::ctap2::Authenticator` implementation.
 
 use ctap_types::{
     heapless::{String, Vec},
@@ -158,7 +158,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
     #[inline(never)]
     fn make_credential(&mut self, parameters: &ctap2::make_credential::Request) -> Result<ctap2::make_credential::Response> {
 
-        let rp_id_hash = self.hash(&parameters.rp.id.as_ref());
+        let rp_id_hash = self.hash(parameters.rp.id.as_ref());
 
         // 1-4.
         if let Some(options) = parameters.options.as_ref() {
@@ -169,7 +169,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         }
         let uv_performed = self.pin_prechecks(
             &parameters.options, &parameters.pin_auth, &parameters.pin_protocol,
-            &parameters.client_data_hash.as_ref(),
+            parameters.client_data_hash.as_ref(),
         )?;
 
         // 5. "persist credProtect value for this credential"
@@ -183,7 +183,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 if let Ok(excluded_cred) = result {
                     use credential::CredentialProtectionPolicy;
                     // If UV is not performed, than CredProtectRequired credentials should not be visibile.
-                    if !(excluded_cred.cred_protect == Some(CredentialProtectionPolicy::Required) && !uv_performed) {
+                    if !(excluded_cred.cred_protect == Some(CredentialProtectionPolicy::Required)) || uv_performed {
                         info_now!("Excluded!");
                         self.up.user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
                         return Err(Error::CredentialExcluded);
@@ -261,7 +261,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 private_key = syscall!(self.trussed.generate_p256_private_key(location)).key;
                 public_key = syscall!(self.trussed.derive_p256_public_key(private_key, Location::Volatile)).key;
                 cose_public_key = syscall!(self.trussed.serialize_key(
-                    Mechanism::P256, public_key.clone(), KeySerialization::Cose
+                    Mechanism::P256, public_key, KeySerialization::Cose
                 )).serialized_key;
                 let _success = syscall!(self.trussed.delete(public_key)).success;
                 info_now!("deleted public P256 key: {}", _success);
@@ -270,7 +270,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 private_key = syscall!(self.trussed.generate_ed255_private_key(location)).key;
                 public_key = syscall!(self.trussed.derive_ed255_public_key(private_key, Location::Volatile)).key;
                 cose_public_key = syscall!(self.trussed.serialize_key(
-                    Mechanism::Ed255, public_key.clone(), KeySerialization::Cose
+                    Mechanism::Ed255, public_key, KeySerialization::Cose
                 )).serialized_key;
                 let _success = syscall!(self.trussed.delete(public_key)).success;
                 info_now!("deleted public Ed25519 key: {}", _success);
@@ -330,7 +330,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             algorithm as i32,
             key_parameter,
             self.state.persistent.timestamp(&mut self.trussed)?,
-            hmac_secret_requested.clone(),
+            hmac_secret_requested,
             cred_protect_requested,
             nonce,
         );
@@ -346,11 +346,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             self.delete_resident_key_by_user_id(&rp_id_hash, &credential.user.id).ok();
 
             // then store key, making it resident
-            let credential_id_hash = self.hash(&credential_id.0.as_ref());
+            let credential_id_hash = self.hash(credential_id.0.as_ref());
             try_syscall!(self.trussed.write_file(
                 Location::Internal,
                 rk_path(&rp_id_hash, &credential_id_hash),
-                serialized_credential.clone(),
+                serialized_credential,
                 // user attribute for later easy lookup
                 // Some(rp_id_hash.clone()),
                 None,
@@ -398,8 +398,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             extensions: {
                 if hmac_secret_requested.is_some() || cred_protect_requested.is_some() {
                     Some(ctap2::make_credential::Extensions {
-                        cred_protect: parameters.extensions.as_ref().unwrap().cred_protect.clone(),
-                        hmac_secret: parameters.extensions.as_ref().unwrap().hmac_secret.clone(),
+                        cred_protect: parameters.extensions.as_ref().unwrap().cred_protect,
+                        hmac_secret: parameters.extensions.as_ref().unwrap().hmac_secret,
                     })
 
                 } else {
@@ -567,7 +567,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 let private_key = self.state.runtime.key_agreement_key(&mut self.trussed);
                 let public_key = syscall!(self.trussed.derive_p256_public_key(private_key, Location::Volatile)).key;
                 let serialized_cose_key = syscall!(self.trussed.serialize_key(
-                    Mechanism::P256, public_key.clone(), KeySerialization::EcdhEsHkdf256)).serialized_key;
+                    Mechanism::P256, public_key, KeySerialization::EcdhEsHkdf256)).serialized_key;
                 let cose_key = trussed::cbor_deserialize(&serialized_cose_key).unwrap();
 
                 syscall!(self.trussed.delete(public_key));
@@ -663,7 +663,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 self.state.decrement_retries(&mut self.trussed)?;
 
                 // 6. decrypt pinHashEnc, compare with stored
-                self.decrypt_pin_hash_and_maybe_escalate(shared_secret, &pin_hash_enc)?;
+                self.decrypt_pin_hash_and_maybe_escalate(shared_secret, pin_hash_enc)?;
 
                 // 7. reset retries
                 self.state.reset_retries(&mut self.trussed)?;
@@ -706,7 +706,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 self.state.decrement_retries(&mut self.trussed)?;
 
                 // 5. decrypt and verify pinHashEnc
-                self.decrypt_pin_hash_and_maybe_escalate(shared_secret, &pin_hash_enc)?;
+                self.decrypt_pin_hash_and_maybe_escalate(shared_secret, pin_hash_enc)?;
 
                 // 6. reset retries
                 self.state.reset_retries(&mut self.trussed)?;
@@ -749,7 +749,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         use credential_management as cm;
 
         // TODO: I see "failed pinauth" output, but then still continuation...
-        self.verify_pin_auth_using_token(&parameters)?;
+        self.verify_pin_auth_using_token(parameters)?;
 
         let mut cred_mgmt = cm::CredentialManagement::new(self);
         let sub_parameters = &parameters.sub_command_params;
@@ -813,12 +813,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         debug_now!("remaining stack size: {} bytes", msp() - 0x2000_0000);
 
-        let rp_id_hash = self.hash(&parameters.rp_id.as_ref());
+        let rp_id_hash = self.hash(parameters.rp_id.as_ref());
 
         // 1-4.
         let uv_performed = match self.pin_prechecks(
                 &parameters.options, &parameters.pin_auth, &parameters.pin_protocol,
-                &parameters.client_data_hash.as_ref(),
+                parameters.client_data_hash.as_ref(),
         ) {
             Ok(b) => b,
             Err(Error::PinRequired) => {
@@ -909,7 +909,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
        } {
            return false;
        }
-       return true;
+       true
     }
 
     #[inline(never)]
@@ -941,7 +941,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
             // <https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#:~:text=A%20platform%20MUST%20NOT%20send%20an%20empty%20allowList%E2%80%94if%20it%20would%20be%20empty%20it%20MUST%20be%20omitted>
             // but some still do (and CTAP 2.0 does not rule it out).
             // they probably meant to send None.
-            if allow_list.len() > 0 {
+            if !allow_list.is_empty() {
                 for credential_id in allow_list {
                     let credential = match Credential::try_from(self, rp_id_hash, credential_id) {
                         Ok(credential) => credential,
@@ -965,7 +965,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
 
         let mut maybe_path = syscall!(self.trussed.read_dir_first(
             Location::Internal,
-            rp_rk_dir(&rp_id_hash),
+            rp_rk_dir(rp_id_hash),
             None,
         )).entry.map(|entry| PathBuf::try_from(entry.path()).unwrap());
 
@@ -983,7 +983,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
             if self.check_credential_applicable(&credential, false, uv_performed) {
                 self.state.runtime.push_credential(CachedCredential {
                     timestamp: credential.creation_time,
-                    path: String::from_str(&path.as_str_ref_with_trailing_nul()).ok()?,
+                    path: String::from_str(path.as_str_ref_with_trailing_nul()).ok()?,
                 });
             }
 
@@ -1007,7 +1007,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
             None => { return Err(Error::PinNotSet); }
         };
 
-        if &pin_hash != &stored_pin_hash {
+        if pin_hash != stored_pin_hash {
             // I) generate new KEK
             self.state.runtime.rotate_key_agreement_key(&mut self.trussed);
             if self.state.persistent.retries() == 0 {
@@ -1023,7 +1023,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
     }
 
     fn hash_store_pin(&mut self, pin: &Message) -> Result<()> {
-        let pin_hash_32 = syscall!(self.trussed.hash_sha256(&pin)).hash;
+        let pin_hash_32 = syscall!(self.trussed.hash_sha256(pin)).hash;
         let pin_hash: [u8; 16] = pin_hash_32[..16].try_into().unwrap();
         self.state.persistent.set_pin_hash(&mut self.trussed, pin_hash).unwrap();
 
@@ -1038,7 +1038,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
         }
 
         let mut pin = syscall!(self.trussed.decrypt_aes256cbc(
-            shared_secret, &pin_enc)).plaintext.ok_or(Error::Other)?;
+            shared_secret, pin_enc)).plaintext.ok_or(Error::Other)?;
 
         // // temp
         // let pin_length = pin.iter().position(|&b| b == b'\0').unwrap_or(pin.len());
@@ -1046,7 +1046,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
         //           pin.len(), pin_length, &pin);
         // chop off null bytes
         let pin_length = pin.iter().position(|&b| b == b'\0').unwrap_or(pin.len());
-        if pin_length < 4 || pin_length >= 64 {
+        if !(4..64).contains(&pin_length) {
             return Err(Error::PinPolicyViolation);
         }
 
@@ -1072,7 +1072,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
     {
         let expected_pin_auth = syscall!(self.trussed.sign_hmacsha256(shared_secret, data)).signature;
 
-        if &expected_pin_auth[..16] == &pin_auth[..] {
+        if expected_pin_auth[..16] == pin_auth[..] {
             Ok(())
         } else {
             Err(Error::PinAuthInvalid)
@@ -1130,7 +1130,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
                 let pin_auth = parameters
                     .pin_auth.as_ref().ok_or(Error::MissingParameter)?;
 
-                if &expected_pin_auth[..16] == &pin_auth[..] {
+                if expected_pin_auth[..16] == pin_auth[..] {
                     info_now!("passed pinauth");
                     Ok(())
                 } else {
@@ -1252,8 +1252,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
             Key::ResidentKey(key) => {
                 debug_now!("checking if ResidentKey {:?} exists", key);
                 match alg {
-                    -7 => syscall!(self.trussed.exists(Mechanism::P256, key.clone())).exists,
-                    -8 => syscall!(self.trussed.exists(Mechanism::Ed255, key.clone())).exists,
+                    -7 => syscall!(self.trussed.exists(Mechanism::P256, *key)).exists,
+                    -8 => syscall!(self.trussed.exists(Mechanism::Ed255, *key)).exists,
                     // -9 => {
                     //     let exists = syscall!(self.trussed.exists(Mechanism::Totp, key)).exists;
                     //     info_now!("found it");
@@ -1369,7 +1369,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
 
         // 8. process any extensions present
         let extensions_output = if let Some(extensions) = &data.extensions {
-            self.process_assertion_extensions(&data, &extensions, &credential, key)?
+            self.process_assertion_extensions(&data, extensions, &credential, key)?
         } else {
             None
         };
@@ -1385,7 +1385,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
         let sig_count = self.state.persistent.timestamp(&mut self.trussed)?;
 
         let authenticator_data = ctap2::get_assertion::AuthenticatorData {
-            rp_id_hash: rp_id_hash,
+            rp_id_hash,
 
             flags: {
                 let mut flags = Flags::EMPTY;
@@ -1426,7 +1426,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
             //     info_now!("TOTP with timestamp {:?}", &timestamp);
             //     syscall!(self.trussed.sign_totp(key, timestamp)).signature.to_bytes().unwrap()
             // }
-            _ => syscall!(self.trussed.sign(mechanism, key.clone(), &commitment, serialization)).signature
+            _ => syscall!(self.trussed.sign(mechanism, key, &commitment, serialization)).signature
                      .to_bytes().unwrap(),
         };
 
@@ -1466,10 +1466,10 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
     ) -> Result<()> {
 
         // Prepare to iterate over all credentials associated to RP.
-        let rp_path = rp_rk_dir(&rp_id_hash);
+        let rp_path = rp_rk_dir(rp_id_hash);
         let mut entry = syscall!(self.trussed.read_dir_first(
             Location::Internal,
-            rp_path.clone(),
+            rp_path,
             None,
         )).entry;
 
@@ -1485,7 +1485,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
             info_now!("checking RK {:?} for userId ", &rk_path);
             let credential_data = syscall!(self.trussed.read_file(
                 Location::Internal,
-                PathBuf::from(rk_path.clone()),
+                rk_path.clone(),
             )).data;
             let credential_maybe = Credential::deserialize(&credential_data);
 
@@ -1502,7 +1502,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T>
                     }
                     syscall!(self.trussed.remove_file(
                         Location::Internal,
-                        PathBuf::from(rk_path),
+                        rk_path,
                     ));
 
                     info_now!("Overwriting previous rk tied to this userId.");

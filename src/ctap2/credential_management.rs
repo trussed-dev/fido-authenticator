@@ -46,7 +46,7 @@ where UP: UserPresence,
 {
     type Target = Authenticator<UP, T>;
     fn deref(&self) -> &Self::Target {
-        &self.authnr
+        self.authnr
     }
 }
 
@@ -54,7 +54,7 @@ impl<UP, T> core::ops::DerefMut for CredentialManagement<'_, UP, T>
 where UP: UserPresence,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.authnr
+        self.authnr
     }
 }
 
@@ -178,7 +178,7 @@ where UP: UserPresence,
 
                     let rp = credential.data.rp;
 
-                    response.rp_id_hash = Some(self.hash(&rp.id.as_ref()));
+                    response.rp_id_hash = Some(self.hash(rp.id.as_ref()));
                     response.rp = Some(rp);
 
                 }
@@ -206,7 +206,7 @@ where UP: UserPresence,
         let CredentialManagementEnumerateRps {
             remaining,
             rp_id_hash: last_rp_id_hash,
-        } = self.state.runtime.cached_rp.clone().ok_or_else(|| Error::NotAllowed)?;
+        } = self.state.runtime.cached_rp.clone().ok_or(Error::NotAllowed)?;
 
         let dir = PathBuf::from(b"rk");
 
@@ -251,7 +251,7 @@ where UP: UserPresence,
 
                     let rp = credential.data.rp;
 
-                    response.rp_id_hash = Some(self.hash(&rp.id.as_ref()));
+                    response.rp_id_hash = Some(self.hash(rp.id.as_ref()));
                     response.rp = Some(rp);
 
                     // cache state for next call
@@ -395,16 +395,12 @@ where UP: UserPresence,
             .map_err(|_| Error::InvalidCredential)?;
 
         // now fill response
-        let mut response: Response = Default::default();
-
-        response.user = Some(credential.data.user.clone());
 
         // why these contortions to get kek. sheesh
         let authnr = &mut self.authnr;
         let kek = authnr.state.persistent.key_encryption_key(&mut authnr.trussed)?;
 
-        let credential_id =  credential.id(&mut self.trussed, kek, None)?;
-        response.credential_id = Some(credential_id.into());
+        let credential_id = credential.id(&mut self.trussed, kek, None)?;
 
         use crate::credential::Key;
         let private_key = match credential.key {
@@ -420,7 +416,7 @@ where UP: UserPresence,
             SigningAlgorithm::P256 => {
                 let public_key = syscall!(self.trussed.derive_p256_public_key(private_key, Location::Volatile)).key;
                 let cose_public_key = syscall!(self.trussed.serialize_key(
-                    Mechanism::P256, public_key.clone(),
+                    Mechanism::P256, public_key,
                     // KeySerialization::EcdhEsHkdf256
                     KeySerialization::Cose,
                 )).serialized_key;
@@ -444,10 +440,17 @@ where UP: UserPresence,
             //     PublicKey::TotpKey(Default::default())
             // }
         };
-        response.public_key = Some(cose_public_key);
-        response.cred_protect = match credential.cred_protect {
+        let cred_protect = match credential.cred_protect {
             Some(x) => Some(x),
             None => Some(CredentialProtectionPolicy::Optional),
+        };
+
+        let response = Response {
+            user: Some(credential.data.user),
+            credential_id: Some(credential_id.into()),
+            public_key: Some(cose_public_key),
+            cred_protect,
+            ..Default::default()
         };
 
         Ok(response)
@@ -467,7 +470,7 @@ where UP: UserPresence,
 
         let rk_path = syscall!(self.trussed.locate_file(
             Location::Internal,
-            Some(dir.clone()),
+            Some(dir),
             filename,
         )).path.ok_or(Error::InvalidCredential)?;
 

@@ -1,4 +1,4 @@
-//! The `ctap1::Authenticator` trait and its implementation.
+//! The `ctap_types::ctap1::Authenticator` implementation.
 
 use ctap_types::{
     ctap1::{
