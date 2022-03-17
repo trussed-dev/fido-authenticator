@@ -2,26 +2,18 @@
 
 use core::cmp::Ordering;
 
-use trussed::{
-    client, syscall, try_syscall,
-    types::KeyId,
-};
+use trussed::{client, syscall, try_syscall, types::KeyId};
 
 pub(crate) use ctap_types::{
-    Bytes, String,
     // authenticator::{ctap1, ctap2, Error, Request, Response},
     ctap2::credential_management::CredentialProtectionPolicy,
     sizes::*,
     webauthn::PublicKeyCredentialDescriptor,
+    Bytes,
+    String,
 };
 
-use crate::{
-    Authenticator,
-    Error,
-    Result,
-    UserPresence,
-};
-
+use crate::{Authenticator, Error, Result, UserPresence};
 
 /// As signaled in `get_info`.
 ///
@@ -49,7 +41,9 @@ impl TryFrom<EncryptedSerializedCredential> for CredentialId {
     type Error = Error;
 
     fn try_from(esc: EncryptedSerializedCredential) -> Result<CredentialId> {
-        Ok(CredentialId(trussed::cbor_serialize_bytes(&esc.0).map_err(|_| Error::Other)?))
+        Ok(CredentialId(
+            trussed::cbor_serialize_bytes(&esc.0).map_err(|_| Error::Other)?,
+        ))
     }
 }
 
@@ -60,7 +54,7 @@ impl TryFrom<CredentialId> for EncryptedSerializedCredential {
 
     fn try_from(cid: CredentialId) -> Result<EncryptedSerializedCredential> {
         let encrypted_serialized_credential = EncryptedSerializedCredential(
-            ctap_types::serde::cbor_deserialize(&cid.0).map_err(|_| Error::InvalidCredential)?
+            ctap_types::serde::cbor_deserialize(&cid.0).map_err(|_| Error::InvalidCredential)?,
         );
         Ok(encrypted_serialized_credential)
     }
@@ -78,7 +72,9 @@ pub enum Key {
 }
 
 /// The main content of a `Credential`.
-#[derive(Clone, Debug, PartialEq, serde_indexed::DeserializeIndexed, serde_indexed::SerializeIndexed)]
+#[derive(
+    Clone, Debug, PartialEq, serde_indexed::DeserializeIndexed, serde_indexed::SerializeIndexed,
+)]
 pub struct CredentialData {
     // id, name, url
     pub rp: ctap_types::webauthn::PublicKeyCredentialRpEntity,
@@ -103,7 +99,6 @@ pub struct CredentialData {
     pub hmac_secret: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cred_protect: Option<CredentialProtectionPolicy>,
-
     // TODO: add `sig_counter: Option<CounterId>`,
     // and grant RKs a per-credential sig-counter.
 }
@@ -139,9 +134,7 @@ impl core::ops::Deref for Credential {
 /// Likely comparison based on timestamp would be good enough?
 impl PartialEq for Credential {
     fn eq(&self, other: &Self) -> bool {
-        (self.creation_time == other.creation_time)
-            &&
-        (self.key == other.key)
+        (self.creation_time == other.creation_time) && (self.key == other.key)
     }
 }
 
@@ -183,7 +176,7 @@ impl From<CredentialId> for PublicKeyCredentialDescriptor {
                 let mut key_type = String::new();
                 key_type.push_str("public-key").unwrap();
                 key_type
-            }
+            },
         }
     }
 }
@@ -201,9 +194,7 @@ impl Credential {
         hmac_secret: Option<bool>,
         cred_protect: Option<CredentialProtectionPolicy>,
         nonce: [u8; 12],
-    )
-        -> Self
-    {
+    ) -> Self {
         info!("credential for algorithm {}", algorithm);
         let data = CredentialData {
             rp: rp.clone(),
@@ -243,9 +234,7 @@ impl Credential {
         trussed: &mut T,
         key_encryption_key: KeyId,
         rp_id_hash: Option<&Bytes<32>>,
-    )
-        -> Result<CredentialId>
-    {
+    ) -> Result<CredentialId> {
         let serialized_credential = self.strip().serialize()?;
         let message = &serialized_credential;
         // info!("serialized cred = {:?}", message).ok();
@@ -255,14 +244,14 @@ impl Credential {
         } else {
             syscall!(trussed.hash_sha256(self.rp.id.as_ref()))
                 .hash
-                .to_bytes().map_err(|_| Error::Other)?
+                .to_bytes()
+                .map_err(|_| Error::Other)?
         };
 
         let associated_data = &rp_id_hash[..];
         let nonce: [u8; 12] = self.nonce.as_slice().try_into().unwrap();
-        let encrypted_serialized_credential = EncryptedSerializedCredential(
-            syscall!(trussed.encrypt_chacha8poly1305(
-                    key_encryption_key, message, associated_data, Some(&nonce))));
+        let encrypted_serialized_credential = EncryptedSerializedCredential(syscall!(trussed
+            .encrypt_chacha8poly1305(key_encryption_key, message, associated_data, Some(&nonce))));
         let credential_id: CredentialId = encrypted_serialized_credential.try_into().unwrap();
 
         Ok(credential_id)
@@ -283,12 +272,10 @@ impl Credential {
     }
 
     pub fn try_from<UP: UserPresence, T: client::Client + client::Chacha8Poly1305>(
-        authnr: &mut Authenticator<UP,T>,
+        authnr: &mut Authenticator<UP, T>,
         rp_id_hash: &Bytes<32>,
         descriptor: &PublicKeyCredentialDescriptor,
-    )
-        -> Result<Self>
-    {
+    ) -> Result<Self> {
         Self::try_from_bytes(authnr, rp_id_hash, &descriptor.id)
     }
 
@@ -296,18 +283,17 @@ impl Credential {
         authnr: &mut Authenticator<UP, T>,
         rp_id_hash: &Bytes<32>,
         id: &[u8],
-    )
-        -> Result<Self>
-    {
-
+    ) -> Result<Self> {
         let mut cred: Bytes<MAX_CREDENTIAL_ID_LENGTH> = Bytes::new();
-        cred.extend_from_slice(id).map_err(|_| Error::InvalidCredential)?;
+        cred.extend_from_slice(id)
+            .map_err(|_| Error::InvalidCredential)?;
 
-        let encrypted_serialized = EncryptedSerializedCredential::try_from(
-            CredentialId(cred)
-        )?;
+        let encrypted_serialized = EncryptedSerializedCredential::try_from(CredentialId(cred))?;
 
-        let kek = authnr.state.persistent.key_encryption_key(&mut authnr.trussed)?;
+        let kek = authnr
+            .state
+            .persistent
+            .key_encryption_key(&mut authnr.trussed)?;
 
         let serialized = try_syscall!(authnr.trussed.decrypt_chacha8poly1305(
             // TODO: use RpId as associated data here?
@@ -317,11 +303,12 @@ impl Credential {
             &encrypted_serialized.0.nonce,
             &encrypted_serialized.0.tag,
         ))
-            .map_err(|_| Error::InvalidCredential)?.plaintext
-            .ok_or(Error::InvalidCredential)?;
+        .map_err(|_| Error::InvalidCredential)?
+        .plaintext
+        .ok_or(Error::InvalidCredential)?;
 
-        let credential = Credential::deserialize(&serialized)
-            .map_err(|_| Error::InvalidCredential)?;
+        let credential =
+            Credential::deserialize(&serialized).map_err(|_| Error::InvalidCredential)?;
 
         Ok(credential)
     }
@@ -362,7 +349,7 @@ mod test {
                 url: None,
             },
             user: PublicKeyCredentialUserEntity {
-                id: Bytes::from_slice(&[1,2,3]).unwrap(),
+                id: Bytes::from_slice(&[1, 2, 3]).unwrap(),
                 icon: None,
                 name: None,
                 display_name: None,
@@ -370,7 +357,7 @@ mod test {
             creation_time: 123,
             use_counter: false,
             algorithm: -7,
-            key: Key::WrappedKey(Bytes::from_slice(&[1,2,3]).unwrap()),
+            key: Key::WrappedKey(Bytes::from_slice(&[1, 2, 3]).unwrap()),
             hmac_secret: Some(false),
             cred_protect: None,
         };
@@ -378,7 +365,11 @@ mod test {
     }
 
     fn random_bytes<const N: usize>() -> Bytes<N> {
-        use rand::{RngCore, distributions::{Distribution, Uniform}, rngs::OsRng};
+        use rand::{
+            distributions::{Distribution, Uniform},
+            rngs::OsRng,
+            RngCore,
+        };
         let mut bytes = Bytes::default();
 
         let between = Uniform::from(0..(N + 1));
@@ -392,7 +383,7 @@ mod test {
 
     #[allow(dead_code)]
     fn maybe_random_bytes<const N: usize>() -> Option<Bytes<N>> {
-        use rand::{RngCore, rngs::OsRng};
+        use rand::{rngs::OsRng, RngCore};
         if OsRng.next_u32() & 1 != 0 {
             Some(random_bytes())
         } else {
@@ -401,18 +392,26 @@ mod test {
     }
 
     fn random_string<const N: usize>() -> String<N> {
+        use rand::{
+            distributions::{Alphanumeric, Distribution, Uniform},
+            rngs::OsRng,
+            Rng,
+        };
         use std::str::FromStr;
-        use rand::{Rng, distributions::{Alphanumeric, Distribution, Uniform}, rngs::OsRng};
 
         let between = Uniform::from(0..(N + 1));
         let n = between.sample(&mut OsRng);
 
-        let std_string: std::string::String = OsRng.sample_iter(&Alphanumeric).take(n).map(char::from).collect();
+        let std_string: std::string::String = OsRng
+            .sample_iter(&Alphanumeric)
+            .take(n)
+            .map(char::from)
+            .collect();
         String::from_str(&std_string).unwrap()
     }
 
     fn maybe_random_string<const N: usize>() -> Option<String<N>> {
-        use rand::{RngCore, rngs::OsRng};
+        use rand::{rngs::OsRng, RngCore};
         if OsRng.next_u32() & 1 != 0 {
             Some(random_string())
         } else {
@@ -430,7 +429,7 @@ mod test {
                 url: maybe_random_string(),
             },
             user: PublicKeyCredentialUserEntity {
-                id: random_bytes(),//Bytes::from_slice(&[1,2,3]).unwrap(),
+                id: random_bytes(), //Bytes::from_slice(&[1,2,3]).unwrap(),
                 icon: maybe_random_string(),
                 name: maybe_random_string(),
                 display_name: maybe_random_string(),
@@ -518,5 +517,5 @@ mod test {
 
     //     TestResult::from_bool(credential_data == deserialized)
     // }
-  // }
+    // }
 }

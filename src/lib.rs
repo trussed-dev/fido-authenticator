@@ -15,17 +15,11 @@
 extern crate delog;
 generate_macros!();
 
-use trussed::{
-    client, syscall,
-    Client as TrussedClient,
-    types::{
-        Message,
-    },
-};
+use trussed::{client, syscall, types::Message, Client as TrussedClient};
 
 use ctap_types::{
-    heapless_bytes::Bytes,
     authenticator::{Request, Response},
+    heapless_bytes::Bytes,
 };
 
 /// Re-export of `ctap-types` authenticator errors.
@@ -34,7 +28,7 @@ pub use ctap_types::Error;
 mod ctap1;
 mod ctap2;
 
-#[cfg(feature="dispatch")]
+#[cfg(feature = "dispatch")]
 mod dispatch;
 
 pub mod constants;
@@ -43,7 +37,6 @@ pub mod state;
 
 /// Results with our [`Error`].
 pub type Result<T> = core::result::Result<T, Error>;
-
 
 /// Trait bound on our implementation's requirements from a Trussed client.
 ///
@@ -58,21 +51,20 @@ pub trait TrussedRequirements:
     + client::Aes256Cbc
     + client::Sha256
     + client::HmacSha256
-    + client::Ed255
-    // + client::Totp
-{}
+    + client::Ed255 // + client::Totp
+{
+}
 
-impl<T> TrussedRequirements for T
-where T:
-    client::Client
-    + client::P256
-    + client::Chacha8Poly1305
-    + client::Aes256Cbc
-    + client::Sha256
-    + client::HmacSha256
-    + client::Ed255
-    // + client::Totp
-{}
+impl<T> TrussedRequirements for T where
+    T: client::Client
+        + client::P256
+        + client::Chacha8Poly1305
+        + client::Aes256Cbc
+        + client::Sha256
+        + client::HmacSha256
+        + client::Ed255 // + client::Totp
+{
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 /// Externally defined configuration.
@@ -140,7 +132,9 @@ fn format_hex(data: &[u8], mut buffer: &mut [u8]) {
 
 #[inline]
 #[allow(dead_code)]
-pub(crate) fn msp() -> u32 { 0x2000_0000 }
+pub(crate) fn msp() -> u32 {
+    0x2000_0000
+}
 
 /// Currently Ed25519 and P256.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -169,10 +163,14 @@ impl core::convert::TryFrom<i32> for SigningAlgorithm {
 
 /// Method to check for user presence.
 pub trait UserPresence: Copy {
-    fn user_present<T: TrussedClient>(self, trussed: &mut T, timeout_milliseconds: u32) -> Result<()>;
+    fn user_present<T: TrussedClient>(
+        self,
+        trussed: &mut T,
+        timeout_milliseconds: u32,
+    ) -> Result<()>;
 }
 
-#[deprecated(note="use `Silent` directly`")]
+#[deprecated(note = "use `Silent` directly`")]
 #[doc(hidden)]
 pub type SilentAuthenticator = Silent;
 
@@ -181,12 +179,12 @@ pub type SilentAuthenticator = Silent;
 pub struct Silent {}
 
 impl UserPresence for Silent {
-    fn user_present<T: TrussedClient>(self, _: &mut T, _:u32) -> Result<()> {
+    fn user_present<T: TrussedClient>(self, _: &mut T, _: u32) -> Result<()> {
         Ok(())
     }
 }
 
-#[deprecated(note="use `Conforming` directly")]
+#[deprecated(note = "use `Conforming` directly")]
 #[doc(hidden)]
 pub type NonSilentAuthenticator = Conforming;
 
@@ -195,7 +193,11 @@ pub type NonSilentAuthenticator = Conforming;
 pub struct Conforming {}
 
 impl UserPresence for Conforming {
-    fn user_present<T: TrussedClient>(self, trussed: &mut T, timeout_milliseconds: u32) -> Result<()> {
+    fn user_present<T: TrussedClient>(
+        self,
+        trussed: &mut T,
+        timeout_milliseconds: u32,
+    ) -> Result<()> {
         let result = syscall!(trussed.confirm_user_present(timeout_milliseconds)).result;
         result.map_err(|err| match err {
             trussed::types::consent::Error::TimedOut => Error::UserActionTimeout,
@@ -205,22 +207,31 @@ impl UserPresence for Conforming {
     }
 }
 
-fn cbor_serialize_message<T: serde::Serialize>(object: &T) -> core::result::Result<Message, ctap_types::serde::Error> {
+fn cbor_serialize_message<T: serde::Serialize>(
+    object: &T,
+) -> core::result::Result<Message, ctap_types::serde::Error> {
     trussed::cbor_serialize_bytes(object)
 }
 
 impl<UP, T> Authenticator<UP, T>
-where UP: UserPresence,
-      T: TrussedRequirements,
+where
+    UP: UserPresence,
+    T: TrussedRequirements,
 {
     pub fn new(trussed: T, up: UP, config: Config) -> Self {
-
         let state = state::State::new();
-        Self { trussed, state, up, config }
+        Self {
+            trussed,
+            state,
+            up,
+            config,
+        }
     }
 
     pub fn call(&mut self, request: &Request) -> Result<Response> {
-        self.state.persistent.load_if_not_initialised(&mut self.trussed);
+        self.state
+            .persistent
+            .load_if_not_initialised(&mut self.trussed);
 
         match request {
             Request::Ctap2(request) => {
@@ -245,5 +256,4 @@ where UP: UserPresence,
 }
 
 #[cfg(test)]
-mod test {
-}
+mod test {}

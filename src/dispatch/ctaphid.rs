@@ -1,22 +1,29 @@
 use ctaphid_dispatch::app as ctaphid;
 
-use crate::{Authenticator, TrussedRequirements, UserPresence};
 #[allow(unused_imports)]
 use crate::msp;
+use crate::{Authenticator, TrussedRequirements, UserPresence};
 
 impl<UP, T> ctaphid::App for Authenticator<UP, T>
-where UP: UserPresence,
-      T: TrussedRequirements,
+where
+    UP: UserPresence,
+    T: TrussedRequirements,
 {
-
-    fn commands(&self,) -> &'static [ctaphid::Command] {
-        &[ ctaphid::Command::Cbor, ctaphid::Command::Msg ]
+    fn commands(&self) -> &'static [ctaphid::Command] {
+        &[ctaphid::Command::Cbor, ctaphid::Command::Msg]
     }
 
     #[inline(never)]
-    fn call(&mut self, command: ctaphid::Command, request: &ctaphid::Message, response: &mut ctaphid::Message) -> ctaphid::AppResult {
-
-        debug_now!("ctaphid-dispatch: remaining stack: {} bytes", msp() - 0x2000_0000);
+    fn call(
+        &mut self,
+        command: ctaphid::Command,
+        request: &ctaphid::Message,
+        response: &mut ctaphid::Message,
+    ) -> ctaphid::AppResult {
+        debug_now!(
+            "ctaphid-dispatch: remaining stack: {} bytes",
+            msp() - 0x2000_0000
+        );
 
         if request.len() < 1 {
             debug_now!("invalid request length in ctaphid.call");
@@ -26,7 +33,6 @@ where UP: UserPresence,
         // info_now!("request: ");
         // blocking::dump_hex(request, request.len());
         Ok(match command {
-
             ctaphid::Command::Cbor => super::handle_ctap2(self, request, response),
             ctaphid::Command::Msg => super::handle_ctap1(self, request, response),
             _ => {
