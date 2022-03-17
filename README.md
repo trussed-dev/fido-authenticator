@@ -1,6 +1,6 @@
 # fido-authenticator
 
-Open source [FIDO][fido] authenticator implementation.
+[FIDO][fido] authenticator [Trussed][trussed]<sup>®</sup> app.
 
 Built with [Trussed][trussed].
 

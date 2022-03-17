@@ -6,6 +6,7 @@ edition = "2021"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/solokeys/fido-authenticator"
 documentation = "https://docs.rs/fido-authenticator"
+description = "FIDO authenticator Trussed app"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -18,8 +19,7 @@ littlefs2 = "0.3.1"
 serde = { version = "1.0", default-features = false }
 serde_cbor = { version = "0.11.0", default-features = false }
 serde-indexed = "0.1.0"
-
-trussed = { git = "https://github.com/trussed-dev/trussed" }
+trussed = "0.1"
 
 apdu-dispatch = { version = "0.1", optional = true }
 ctaphid-dispatch = { version = "0.1", optional = true }
