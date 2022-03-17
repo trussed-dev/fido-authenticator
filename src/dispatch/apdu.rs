@@ -1,9 +1,6 @@
-use apdu_dispatch::{Command, response::Data, app as apdu};
+use apdu_dispatch::{app as apdu, response::Data, Command};
+use ctap_types::{serde::error::Error as SerdeError, Error};
 use ctaphid_dispatch::app as ctaphid;
-use ctap_types::{
-    Error,
-    serde::error::Error as SerdeError,
-};
 use iso7816::Status;
 
 use crate::{Authenticator, TrussedRequirements, UserPresence};
@@ -16,26 +13,21 @@ pub enum CtapMappingError {
 impl From<CtapMappingError> for Error {
     fn from(mapping_error: CtapMappingError) -> Error {
         match mapping_error {
-            CtapMappingError::InvalidCommand(_cmd) => {
-                Error::InvalidCommand
-            }
-            CtapMappingError::ParsingError(cbor_error) => {
-                match cbor_error {
-                    SerdeError::SerdeMissingField => Error::MissingParameter,
-                    _ => Error::InvalidCbor
-                }
-            }
+            CtapMappingError::InvalidCommand(_cmd) => Error::InvalidCommand,
+            CtapMappingError::ParsingError(cbor_error) => match cbor_error {
+                SerdeError::SerdeMissingField => Error::MissingParameter,
+                _ => Error::InvalidCbor,
+            },
         }
-
     }
 }
 
-impl<UP, T> apdu::App<{apdu_dispatch::command::SIZE}, {apdu_dispatch::response::SIZE} >
-for Authenticator<UP, T>
-    where UP: UserPresence,
-          T: TrussedRequirements,
+impl<UP, T> apdu::App<{ apdu_dispatch::command::SIZE }, { apdu_dispatch::response::SIZE }>
+    for Authenticator<UP, T>
+where
+    UP: UserPresence,
+    T: TrussedRequirements,
 {
-
     fn select(&mut self, _: &Command, reply: &mut Data) -> apdu::Result {
         reply.extend_from_slice(b"U2F_V2").unwrap();
         Ok(())
@@ -43,7 +35,12 @@ for Authenticator<UP, T>
 
     fn deselect(&mut self) {}
 
-    fn call(&mut self, interface: apdu::Interface, apdu: &Command, response: &mut Data) -> apdu::Result {
+    fn call(
+        &mut self,
+        interface: apdu::Interface,
+        apdu: &Command,
+        response: &mut Data,
+    ) -> apdu::Result {
         // FIDO-over-CCID does not seem to officially be a thing; we don't support it.
         // If we would, need to review the following cases catering to semi-documented U2F legacy.
         if interface != apdu::Interface::Contactless {
@@ -62,7 +59,7 @@ for Authenticator<UP, T>
         Ok(match instruction {
             // U2F instruction codes
             // NB(nickray): I don't think 0x00 is a valid case.
-            0x00 | 0x01 | 0x02 => super::handle_ctap1(self, apdu.data(), response),//self.call_authenticator_u2f(apdu, response),
+            0x00 | 0x01 | 0x02 => super::handle_ctap1(self, apdu.data(), response), //self.call_authenticator_u2f(apdu, response),
 
             _ => {
                 match ctaphid::Command::try_from(instruction) {
@@ -79,4 +76,3 @@ for Authenticator<UP, T>
         })
     }
 }
-

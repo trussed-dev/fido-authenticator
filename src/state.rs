@@ -2,32 +2,24 @@
 //!
 //! Needs cleanup.
 
-use trussed::{
-    client, syscall, try_syscall,
-    Client as TrussedClient,
-    types::{
-        self,
-        KeyId,
-        Location,
-        Mechanism,
-    },
-};
 use ctap_types::{
-    Bytes, String,
-    Error,
     cose::EcdhEsHkdf256PublicKey as CoseEcdhEsHkdf256PublicKey,
     // 2022-02-27: 10 credentials
     sizes::MAX_CREDENTIAL_COUNT_IN_LIST, // U8 currently
+    Bytes,
+    Error,
+    String,
+};
+use trussed::{
+    client, syscall, try_syscall,
+    types::{self, KeyId, Location, Mechanism},
+    Client as TrussedClient,
 };
 
 use heapless::binary_heap::{BinaryHeap, Max};
 use littlefs2::path::PathBuf;
 
-use crate::{
-    cbor_serialize_message,
-    credential::Credential,
-    Result,
-};
+use crate::{cbor_serialize_message, credential::Credential, Result};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CachedCredential {
@@ -81,7 +73,6 @@ pub type CredentialCache = CredentialCacheGeneric<MAX_CREDENTIAL_COUNT_IN_LIST>;
 
 #[derive(Clone, Debug, /*uDebug, Eq, PartialEq,*/ serde::Deserialize, serde::Serialize)]
 pub struct State {
-
     /// Batch device identity (aaguid, certificate, key).
     pub identity: Identity,
     pub persistent: PersistentState,
@@ -95,7 +86,6 @@ impl Default for State {
 }
 
 impl State {
-
     // pub fn new(trussed: &mut TrussedClient) -> Self {
     pub fn new() -> Self {
         // let identity = Identity::get(trussed);
@@ -104,7 +94,11 @@ impl State {
         // let persistent = PersistentState::load_or_reset(trussed);
         let persistent = Default::default();
 
-        Self { identity, persistent, runtime }
+        Self {
+            identity,
+            persistent,
+            runtime,
+        }
     }
 
     pub fn decrement_retries<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
@@ -119,9 +113,7 @@ impl State {
         Ok(())
     }
 
-
     pub fn pin_blocked(&self) -> Result<()> {
-
         if self.persistent.pin_blocked() {
             return Err(Error::PinBlocked);
         }
@@ -131,7 +123,6 @@ impl State {
 
         Ok(())
     }
-
 }
 
 /// Batch device identity (aaguid, certificate, key).
@@ -146,16 +137,13 @@ pub type Aaguid = [u8; 16];
 pub type Certificate = trussed::types::Message;
 
 impl Identity {
-
     // Attempt to yank out the aaguid of a certificate.
     fn yank_aaguid(&mut self, der: &[u8]) -> Option<[u8; 16]> {
-
         let aaguid_start_sequence = [
             // OBJECT IDENTIFIER 1.3.6.1.4.1.45724.1.1.4 (AAGUID)
             0x06u8, 0x0B, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0xE5, 0x1C, 0x01, 0x01, 0x04,
-
             // Sequence, 16 bytes
-            0x04, 0x12, 0x04, 0x10
+            0x04, 0x12, 0x04, 0x10,
         ];
 
         // Scan for the beginning sequence for AAGUID.
@@ -180,16 +168,16 @@ impl Identity {
     }
 
     /// Lookup batch key and certificate, together with AAUGID.
-    pub fn attestation<T: TrussedClient>(&mut self, trussed: &mut T) -> (Option<(KeyId, Certificate)>, Aaguid)
-    {
+    pub fn attestation<T: TrussedClient>(
+        &mut self,
+        trussed: &mut T,
+    ) -> (Option<(KeyId, Certificate)>, Aaguid) {
         let key = crate::constants::ATTESTATION_KEY_ID;
         let attestation_key_exists = syscall!(trussed.exists(Mechanism::P256, key)).exists;
         if attestation_key_exists {
-
             // Will panic if certificate does not exist.
-            let cert = syscall!(trussed.read_certificate(
-                crate::constants::ATTESTATION_CERT_ID
-            )).der;
+            let cert =
+                syscall!(trussed.read_certificate(crate::constants::ATTESTATION_CERT_ID)).der;
 
             let mut aaguid = self.yank_aaguid(cert.as_slice());
 
@@ -204,7 +192,6 @@ impl Identity {
             (None, *b"AAGUID0123456789")
         }
     }
-
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -220,7 +207,9 @@ pub struct CredentialManagementEnumerateCredentials {
     pub prev_filename: PathBuf,
 }
 
-#[derive(Clone, Debug, /*uDebug,*/ Default, /*PartialEq,*/ serde::Deserialize, serde::Serialize)]
+#[derive(
+    Clone, Debug, /*uDebug,*/ Default, /*PartialEq,*/ serde::Deserialize, serde::Serialize,
+)]
 pub struct ActiveGetAssertionData {
     pub rp_id_hash: [u8; 32],
     pub client_data_hash: [u8; 32],
@@ -230,7 +219,9 @@ pub struct ActiveGetAssertionData {
     pub extensions: Option<ctap_types::ctap2::get_assertion::ExtensionsInput>,
 }
 
-#[derive(Clone, Debug, /*uDebug,*/ Default, /*PartialEq,*/ serde::Deserialize, serde::Serialize)]
+#[derive(
+    Clone, Debug, /*uDebug,*/ Default, /*PartialEq,*/ serde::Deserialize, serde::Serialize,
+)]
 pub struct RuntimeState {
     key_agreement_key: Option<KeyId>,
     pin_token: Option<KeyId>,
@@ -280,7 +271,6 @@ pub struct PersistentState {
 }
 
 impl PersistentState {
-
     const RESET_RETRIES: u8 = 8;
     const FILENAME: &'static [u8] = b"persistent-state.cbor";
     const MAX_RESIDENT_CREDENTIALS_GUESSTIMATE: u32 = 100;
@@ -290,12 +280,10 @@ impl PersistentState {
     }
 
     pub fn load<T: client::Client + client::Chacha8Poly1305>(trussed: &mut T) -> Result<Self> {
-
         // TODO: add "exists_file" method instead?
-        let result = try_syscall!(trussed.read_file(
-            Location::Internal,
-            PathBuf::from(Self::FILENAME),
-        )).map_err(|_| Error::Other);
+        let result =
+            try_syscall!(trussed.read_file(Location::Internal, PathBuf::from(Self::FILENAME),))
+                .map_err(|_| Error::Other);
 
         if result.is_err() {
             info!("err loading: {:?}", result.err().unwrap());
@@ -342,13 +330,16 @@ impl PersistentState {
         self.save(trussed)
     }
 
-    pub fn load_if_not_initialised<T: client::Client + client::Chacha8Poly1305>(&mut self, trussed: &mut T) {
+    pub fn load_if_not_initialised<T: client::Client + client::Chacha8Poly1305>(
+        &mut self,
+        trussed: &mut T,
+    ) {
         if !self.initialised {
             match Self::load(trussed) {
                 Ok(previous_self) => {
                     info!("loaded previous state!");
                     *self = previous_self
-                },
+                }
                 Err(_err) => {
                     info!("error with previous state! {:?}", _err);
                 }
@@ -364,33 +355,47 @@ impl PersistentState {
         Ok(now)
     }
 
-    pub fn key_encryption_key<T: client::Client + client::Chacha8Poly1305>(&mut self, trussed: &mut T) -> Result<KeyId>
-    {
+    pub fn key_encryption_key<T: client::Client + client::Chacha8Poly1305>(
+        &mut self,
+        trussed: &mut T,
+    ) -> Result<KeyId> {
         match self.key_encryption_key {
             Some(key) => Ok(key),
             None => self.rotate_key_encryption_key(trussed),
         }
     }
 
-    pub fn rotate_key_encryption_key<T: client::Client + client::Chacha8Poly1305>(&mut self, trussed: &mut T) -> Result<KeyId> {
-        if let Some(key) = self.key_encryption_key { syscall!(trussed.delete(key)); }
+    pub fn rotate_key_encryption_key<T: client::Client + client::Chacha8Poly1305>(
+        &mut self,
+        trussed: &mut T,
+    ) -> Result<KeyId> {
+        if let Some(key) = self.key_encryption_key {
+            syscall!(trussed.delete(key));
+        }
         let key = syscall!(trussed.generate_chacha8poly1305_key(Location::Internal)).key;
         self.key_encryption_key = Some(key);
         self.save(trussed)?;
         Ok(key)
     }
 
-    pub fn key_wrapping_key<T: client::Client + client::Chacha8Poly1305>(&mut self, trussed: &mut T) -> Result<KeyId>
-    {
+    pub fn key_wrapping_key<T: client::Client + client::Chacha8Poly1305>(
+        &mut self,
+        trussed: &mut T,
+    ) -> Result<KeyId> {
         match self.key_wrapping_key {
             Some(key) => Ok(key),
             None => self.rotate_key_wrapping_key(trussed),
         }
     }
 
-    pub fn rotate_key_wrapping_key<T: client::Client + client::Chacha8Poly1305>(&mut self, trussed: &mut T) -> Result<KeyId> {
+    pub fn rotate_key_wrapping_key<T: client::Client + client::Chacha8Poly1305>(
+        &mut self,
+        trussed: &mut T,
+    ) -> Result<KeyId> {
         self.load_if_not_initialised(trussed);
-        if let Some(key) = self.key_wrapping_key { syscall!(trussed.delete(key)); }
+        if let Some(key) = self.key_wrapping_key {
+            syscall!(trussed.delete(key));
+        }
         let key = syscall!(trussed.generate_chacha8poly1305_key(Location::Internal)).key;
         self.key_wrapping_key = Some(key);
         self.save(trussed)?;
@@ -409,7 +414,7 @@ impl PersistentState {
         self.consecutive_pin_mismatches >= Self::RESET_RETRIES
     }
 
-     fn reset_retries<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
+    fn reset_retries<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
         if self.consecutive_pin_mismatches > 0 {
             self.consecutive_pin_mismatches = 0;
             self.save(trussed)?;
@@ -433,17 +438,18 @@ impl PersistentState {
         self.pin_hash
     }
 
-    pub fn set_pin_hash<T: TrussedClient>(&mut self, trussed: &mut T, pin_hash: [u8; 16]) -> Result<()> {
+    pub fn set_pin_hash<T: TrussedClient>(
+        &mut self,
+        trussed: &mut T,
+        pin_hash: [u8; 16],
+    ) -> Result<()> {
         self.pin_hash = Some(pin_hash);
         self.save(trussed)?;
         Ok(())
     }
-
-
 }
 
 impl RuntimeState {
-
     const POWERCYCLE_RETRIES: u8 = 3;
 
     fn decrement_retries(&mut self) -> Result<()> {
@@ -460,7 +466,6 @@ impl RuntimeState {
     fn reset_retries(&mut self) {
         self.consecutive_pin_mismatches = 0;
     }
-
 
     pub fn pin_blocked(&self) -> bool {
         self.consecutive_pin_mismatches >= Self::POWERCYCLE_RETRIES
@@ -482,13 +487,17 @@ impl RuntimeState {
         self.cached_credentials.push(credential);
     }
 
-    pub fn pop_credential<T: client::FilesystemClient>(&mut self, trussed: &mut T) -> Option<Credential> {
+    pub fn pop_credential<T: client::FilesystemClient>(
+        &mut self,
+        trussed: &mut T,
+    ) -> Option<Credential> {
         let cached_credential = self.cached_credentials.pop()?;
 
         let credential_data = syscall!(trussed.read_file(
             Location::Internal,
             PathBuf::from(cached_credential.path.as_str()),
-         )).data;
+        ))
+        .data;
 
         Credential::deserialize(&credential_data).ok()
     }
@@ -528,13 +537,18 @@ impl RuntimeState {
 
     pub fn rotate_pin_token<T: client::HmacSha256>(&mut self, trussed: &mut T) -> KeyId {
         // TODO: need to rotate key agreement key?
-        if let Some(token) = self.pin_token { syscall!(trussed.delete(token)); }
+        if let Some(token) = self.pin_token {
+            syscall!(trussed.delete(token));
+        }
         let token = syscall!(trussed.generate_secret_key(16, Location::Volatile)).key;
         self.pin_token = Some(token);
         token
     }
 
-    pub fn reset<T: client::HmacSha256 + client::P256 + client::FilesystemClient>(&mut self, trussed: &mut T) {
+    pub fn reset<T: client::HmacSha256 + client::P256 + client::FilesystemClient>(
+        &mut self,
+        trussed: &mut T,
+    ) {
         // Could use `free_credential_heap`, but since we're deleting everything here, this is quicker.
         syscall!(trussed.delete_all(Location::Volatile));
         self.clear_credential_cache();
@@ -542,22 +556,32 @@ impl RuntimeState {
 
         self.rotate_pin_token(trussed);
         self.rotate_key_agreement_key(trussed);
-
     }
 
-    pub fn generate_shared_secret<T: client::P256>(&mut self, trussed: &mut T, platform_key_agreement_key: &CoseEcdhEsHkdf256PublicKey) -> Result<KeyId> {
+    pub fn generate_shared_secret<T: client::P256>(
+        &mut self,
+        trussed: &mut T,
+        platform_key_agreement_key: &CoseEcdhEsHkdf256PublicKey,
+    ) -> Result<KeyId> {
         let private_key = self.key_agreement_key(trussed);
 
-        let serialized_pkak = cbor_serialize_message(platform_key_agreement_key).map_err(|_| Error::InvalidParameter)?;
+        let serialized_pkak = cbor_serialize_message(platform_key_agreement_key)
+            .map_err(|_| Error::InvalidParameter)?;
         let platform_kak = try_syscall!(trussed.deserialize_p256_key(
-            &serialized_pkak, types::KeySerialization::EcdhEsHkdf256,
+            &serialized_pkak,
+            types::KeySerialization::EcdhEsHkdf256,
             types::StorageAttributes::new().set_persistence(types::Location::Volatile)
-        )).map_err(|_| Error::InvalidParameter)?.key;
+        ))
+        .map_err(|_| Error::InvalidParameter)?
+        .key;
 
         let pre_shared_secret = syscall!(trussed.agree(
-            types::Mechanism::P256, private_key, platform_kak,
+            types::Mechanism::P256,
+            private_key,
+            platform_kak,
             types::StorageAttributes::new().set_persistence(types::Location::Volatile),
-        )).shared_secret;
+        ))
+        .shared_secret;
         syscall!(trussed.delete(platform_kak));
 
         if let Some(previous_shared_secret) = self.shared_secret {
@@ -565,13 +589,16 @@ impl RuntimeState {
         }
 
         let shared_secret = syscall!(trussed.derive_key(
-            types::Mechanism::Sha256, pre_shared_secret, None, types::StorageAttributes::new().set_persistence(types::Location::Volatile)
-        )).key;
+            types::Mechanism::Sha256,
+            pre_shared_secret,
+            None,
+            types::StorageAttributes::new().set_persistence(types::Location::Volatile)
+        ))
+        .key;
         self.shared_secret = Some(shared_secret);
 
         syscall!(trussed.delete(pre_shared_secret));
 
         Ok(shared_secret)
     }
-
 }
