@@ -68,7 +68,7 @@ impl<const N: usize> CredentialCacheGeneric<N> {
         self.0.len() as u32
     }
 
-    pub fn is_empty(&mut self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
@@ -86,6 +86,12 @@ pub struct State {
     pub identity: Identity,
     pub persistent: PersistentState,
     pub runtime: RuntimeState,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl State {
@@ -169,9 +175,7 @@ impl Identity {
         cert_reader = &cert_reader[aaguid_start_sequence.len()..];
 
         let mut aaguid = [0u8; 16];
-        for i in 0 .. 16 {
-            aaguid[i] = cert_reader[i]
-        }
+        aaguid[..16].clone_from_slice(&cert_reader[..16]);
         Some(aaguid)
     }
 
@@ -187,7 +191,7 @@ impl Identity {
                 crate::constants::ATTESTATION_CERT_ID
             )).der;
 
-            let mut aaguid = self.yank_aaguid(&cert.as_slice());
+            let mut aaguid = self.yank_aaguid(cert.as_slice());
 
             if aaguid.is_none() {
                 // Provide a default
@@ -308,9 +312,7 @@ impl PersistentState {
             return Err(Error::Other);
         }
 
-        let previous_state = result.map_err(|_| Error::Other);
-
-        previous_state
+        result.map_err(|_| Error::Other)
     }
 
     pub fn save<T: TrussedClient>(&self, trussed: &mut T) -> Result<()> {
