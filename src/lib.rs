@@ -17,10 +17,7 @@ generate_macros!();
 
 use trussed::{client, syscall, types::Message, Client as TrussedClient};
 
-use ctap_types::{
-    authenticator::{Request, Response},
-    heapless_bytes::Bytes,
-};
+use ctap_types::heapless_bytes::Bytes;
 
 /// Re-export of `ctap-types` authenticator errors.
 pub use ctap_types::Error;
@@ -225,27 +222,6 @@ where
             state,
             up,
             config,
-        }
-    }
-
-    pub fn call(&mut self, request: &Request) -> Result<Response> {
-        self.state
-            .persistent
-            .load_if_not_initialised(&mut self.trussed);
-
-        match request {
-            Request::Ctap2(request) => {
-                use ctap_types::ctap2::Authenticator as _;
-                Ok(Response::Ctap2(self.call_ctap2(request)?))
-            }
-            Request::Ctap1(_request) => {
-                // ctap_types::authenticator::ctap1::Request redefines
-                // the already existing ctap_types::ctap1::Command
-                //
-                // need to merge
-                todo!();
-                // Ok(Response::Ctap1(self.call_ctap1(request)?))
-            }
         }
     }
 
