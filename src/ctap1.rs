@@ -186,9 +186,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 };
             }
             ControlByte::EnforceUserPresenceAndSign => {
-                self.up
-                    .user_present(&mut self.trussed, constants::U2F_UP_TIMEOUT)
-                    .map_err(|_| Error::ConditionsOfUseNotSatisfied)?;
+                if !self.skip_up_check() {
+                    self.up
+                        .user_present(&mut self.trussed, constants::U2F_UP_TIMEOUT)
+                        .map_err(|_| Error::ConditionsOfUseNotSatisfied)?;
+                }
                 0x01
             }
             ControlByte::DontEnforceUserPresenceAndSign => 0x00,

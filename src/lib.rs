@@ -15,6 +15,8 @@
 extern crate delog;
 generate_macros!();
 
+use core::time::Duration;
+
 use trussed::{client, syscall, types::Message, Client as TrussedClient};
 
 use ctap_types::heapless_bytes::Bytes;
@@ -71,6 +73,9 @@ pub struct Config {
     pub max_msg_size: usize,
     // pub max_creds_in_list: usize,
     // pub max_cred_id_length: usize,
+    /// If set, the first Get Assertion or Authenticate request within the specified time after
+    /// boot is accepted without additional user presence verification.
+    pub skip_up_timeout: Option<Duration>,
 }
 
 // impl Default for Config {
@@ -228,6 +233,19 @@ where
     fn hash(&mut self, data: &[u8]) -> Bytes<32> {
         let hash = syscall!(self.trussed.hash_sha256(data)).hash;
         hash.to_bytes().expect("hash should fit")
+    }
+
+    fn skip_up_check(&mut self) -> bool {
+        // If enabled in the configuration, we don't require an additional user presence
+        // verification for a certain duration after boot.
+        if let Some(timeout) = self.config.skip_up_timeout.take() {
+            let uptime = syscall!(self.trussed.uptime()).uptime;
+            if uptime < timeout {
+                info_now!("skip up check directly after boot");
+                return true;
+            }
+        }
+        false
     }
 }
 
