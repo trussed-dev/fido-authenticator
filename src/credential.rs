@@ -252,7 +252,8 @@ impl Credential {
         let nonce: [u8; 12] = self.nonce.as_slice().try_into().unwrap();
         let encrypted_serialized_credential = EncryptedSerializedCredential(syscall!(trussed
             .encrypt_chacha8poly1305(key_encryption_key, message, associated_data, Some(&nonce))));
-        let credential_id: CredentialId = encrypted_serialized_credential.try_into().unwrap();
+        let credential_id: CredentialId = encrypted_serialized_credential.try_into()
+            .map_err(|_| Error::RequestTooLarge)?;
 
         Ok(credential_id)
     }
