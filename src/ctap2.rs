@@ -932,9 +932,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         // 7. collect user presence
         let up_performed = if do_up {
-            info_now!("asking for up");
-            self.up
-                .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
+            if !self.skip_up_check() {
+                info_now!("asking for up");
+                self.up
+                    .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
+            }
             true
         } else {
             info_now!("not asking for up");
