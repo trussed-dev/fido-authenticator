@@ -12,12 +12,11 @@ use ctap_types::{
 };
 use trussed::{
     client, syscall, try_syscall,
-    types::{self, KeyId, Location, Mechanism},
+    types::{self, KeyId, Location, Mechanism, PathBuf},
     Client as TrussedClient,
 };
 
 use heapless::binary_heap::{BinaryHeap, Max};
-use littlefs2::path::PathBuf;
 
 use crate::{cbor_serialize_message, credential::Credential, Result};
 
