@@ -112,9 +112,7 @@ where
 
     // Goal of these nested scopes is to keep stack small.
     let ctap_response = {
-        let ctap_request = {
-            ctap1::Request::try_from(command)?
-        };
+        let ctap_request = { ctap1::Request::try_from(command)? };
         ctap1::Authenticator::call_ctap1(authenticator, &ctap_request)?
     };
     // debug!("1b SP: {:X}", msp());
