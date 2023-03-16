@@ -56,7 +56,7 @@ where
         // "3. Client sends a command for an operation (register / authenticate)"
         // <https://fidoalliance.org/specs/fido-u2f-v1.2-ps-20170411/fido-u2f-nfc-protocol-v1.2-ps-20170411.html>
 
-        Ok(match instruction {
+        match instruction {
             // U2F instruction codes
             // NB(nickray): I don't think 0x00 is a valid case.
             0x00 | 0x01 | 0x02 => super::try_handle_ctap1(self, apdu, response)?, //self.call_authenticator_u2f(apdu, response),
@@ -73,6 +73,7 @@ where
                     }
                 }
             }
-        })
+        };
+        Ok(())
     }
 }

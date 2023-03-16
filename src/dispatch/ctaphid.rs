@@ -25,19 +25,20 @@ where
             msp() - 0x2000_0000
         );
 
-        if request.len() < 1 {
+        if request.is_empty() {
             debug_now!("invalid request length in ctaphid.call");
             return Err(ctaphid::Error::InvalidLength);
         }
 
         // info_now!("request: ");
         // blocking::dump_hex(request, request.len());
-        Ok(match command {
+        match command {
             ctaphid::Command::Cbor => super::handle_ctap2(self, request, response),
             ctaphid::Command::Msg => super::handle_ctap1_from_hid(self, request, response),
             _ => {
                 debug_now!("ctaphid trying to dispatch {:?}", command);
             }
-        })
+        };
+        Ok(())
     }
 }
