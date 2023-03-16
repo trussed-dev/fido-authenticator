@@ -320,12 +320,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             false => {
                 // WrappedKey version
                 let wrapping_key = self.state.persistent.key_wrapping_key(&mut self.trussed)?;
-                let wrapped_key = syscall!(self.trussed.wrap_key_chacha8poly1305(
-                    wrapping_key,
-                    private_key,
-                    &rp_id_hash,
-                ))
-                .wrapped_key;
+                let wrapped_key =
+                    syscall!(self
+                        .trussed
+                        .wrap_key_chacha8poly1305(wrapping_key, private_key, &[]))
+                    .wrapped_key;
 
                 // 32B key, 12B nonce, 16B tag + some info on algorithm (P256/Ed25519)
                 // Turns out it's size 92 (enum serialization not optimized yet...)
@@ -1465,8 +1464,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 let key_result = syscall!(self.trussed.unwrap_key_chacha8poly1305(
                     wrapping_key,
                     &bytes,
-                    b"",
-                    // &rp_id_hash,
+                    &[],
                     Location::Volatile,
                 ))
                 .key;

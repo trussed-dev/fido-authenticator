@@ -63,7 +63,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let wrapped_key =
             syscall!(self
                 .trussed
-                .wrap_key_chacha8poly1305(wrapping_key, private_key, &reg.app_id,))
+                .wrap_key_chacha8poly1305(wrapping_key, private_key, &[]))
             .wrapped_key;
         // debug!("wrapped_key = {:?}", &wrapped_key);
 
@@ -208,7 +208,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 let key_result = syscall!(self.trussed.unwrap_key_chacha8poly1305(
                     wrapping_key,
                     bytes,
-                    b"",
+                    &[],
                     Location::Volatile,
                 ))
                 .key;
