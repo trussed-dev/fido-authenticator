@@ -344,7 +344,6 @@ mod test {
     fn credential_data() -> CredentialData {
         use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
 
-        
         CredentialData {
             rp: PublicKeyCredentialRpEntity {
                 id: String::from("John Doe"),
@@ -424,7 +423,6 @@ mod test {
     fn random_credential_data() -> CredentialData {
         use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
 
-        
         CredentialData {
             rp: PublicKeyCredentialRpEntity {
                 id: random_string(),
