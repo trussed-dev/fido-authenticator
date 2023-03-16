@@ -344,7 +344,8 @@ mod test {
     fn credential_data() -> CredentialData {
         use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
 
-        let credential_data = CredentialData {
+        
+        CredentialData {
             rp: PublicKeyCredentialRpEntity {
                 id: String::from("John Doe"),
                 name: None,
@@ -362,8 +363,7 @@ mod test {
             key: Key::WrappedKey(Bytes::from_slice(&[1, 2, 3]).unwrap()),
             hmac_secret: Some(false),
             cred_protect: None,
-        };
-        credential_data
+        }
     }
 
     fn random_bytes<const N: usize>() -> Bytes<N> {
@@ -424,7 +424,8 @@ mod test {
     fn random_credential_data() -> CredentialData {
         use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
 
-        let credential_data = CredentialData {
+        
+        CredentialData {
             rp: PublicKeyCredentialRpEntity {
                 id: random_string(),
                 name: maybe_random_string(),
@@ -442,8 +443,7 @@ mod test {
             key: Key::WrappedKey(random_bytes()),
             hmac_secret: Some(false),
             cred_protect: None,
-        };
-        credential_data
+        }
     }
 
     #[test]

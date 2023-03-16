@@ -963,7 +963,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let num_credentials = match num_credentials {
             1 => None,
-            n => Some(n as u32),
+            n => Some(n),
         };
 
         self.assert_with_credential(num_credentials, credential)
@@ -1543,19 +1543,12 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         };
 
         debug_now!("signing with {:?}, {:?}", &mechanism, &serialization);
-        let signature = match mechanism {
-            // Mechanism::Totp => {
-            //     let timestamp = u64::from_le_bytes(data.client_data_hash[..8].try_into().unwrap());
-            //     info_now!("TOTP with timestamp {:?}", &timestamp);
-            //     syscall!(self.trussed.sign_totp(key, timestamp)).signature.to_bytes().unwrap()
-            // }
-            _ => syscall!(self
-                .trussed
-                .sign(mechanism, key, &commitment, serialization))
-            .signature
-            .to_bytes()
-            .unwrap(),
-        };
+        let signature = syscall!(self
+            .trussed
+            .sign(mechanism, key, &commitment, serialization))
+        .signature
+        .to_bytes()
+        .unwrap();
 
         if !is_rk {
             syscall!(self.trussed.delete(key));
