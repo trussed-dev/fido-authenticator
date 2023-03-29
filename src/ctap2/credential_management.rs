@@ -16,6 +16,7 @@ use ctap_types::{
 };
 
 use crate::{
+    constants::MAX_RESIDENT_CREDENTIALS_GUESSTIMATE,
     credential::Credential,
     state::{CredentialManagementEnumerateCredentials, CredentialManagementEnumerateRps},
     Authenticator, Result, TrussedRequirements, UserPresence,
@@ -65,9 +66,12 @@ where
         info!("get metadata");
         let mut response: Response = Default::default();
 
-        let guesstimate = self.state.persistent.max_resident_credentials_guesstimate();
+        let max_resident_credentials = self
+            .config
+            .max_resident_credential_count
+            .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE);
         response.existing_resident_credentials_count = Some(0);
-        response.max_possible_remaining_residential_credentials_count = Some(guesstimate);
+        response.max_possible_remaining_residential_credentials_count = Some(max_resident_credentials);
 
         let dir = PathBuf::from(b"rk");
         let maybe_first_rp =
@@ -96,11 +100,7 @@ where
                 None => {
                     response.existing_resident_credentials_count = Some(num_rks);
                     response.max_possible_remaining_residential_credentials_count =
-                        Some(if num_rks >= guesstimate {
-                            0
-                        } else {
-                            guesstimate - num_rks
-                        });
+                        Some(max_resident_credentials.saturating_sub(num_rks));
                     return Ok(response);
                 }
                 Some(rp) => {
