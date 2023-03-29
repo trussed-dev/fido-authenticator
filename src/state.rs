@@ -273,11 +273,6 @@ pub struct PersistentState {
 impl PersistentState {
     const RESET_RETRIES: u8 = 8;
     const FILENAME: &'static [u8] = b"persistent-state.cbor";
-    const MAX_RESIDENT_CREDENTIALS_GUESSTIMATE: u32 = 100;
-
-    pub fn max_resident_credentials_guesstimate(&self) -> u32 {
-        Self::MAX_RESIDENT_CREDENTIALS_GUESSTIMATE
-    }
 
     pub fn load<T: client::Client + client::Chacha8Poly1305>(trussed: &mut T) -> Result<Self> {
         // TODO: add "exists_file" method instead?
