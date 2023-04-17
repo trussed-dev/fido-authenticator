@@ -252,7 +252,8 @@ impl Credential {
         let nonce: [u8; 12] = self.nonce.as_slice().try_into().unwrap();
         let encrypted_serialized_credential = EncryptedSerializedCredential(syscall!(trussed
             .encrypt_chacha8poly1305(key_encryption_key, message, associated_data, Some(&nonce))));
-        let credential_id: CredentialId = encrypted_serialized_credential.try_into()
+        let credential_id: CredentialId = encrypted_serialized_credential
+            .try_into()
             .map_err(|_| Error::RequestTooLarge)?;
 
         Ok(credential_id)
@@ -343,7 +344,7 @@ mod test {
     fn credential_data() -> CredentialData {
         use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
 
-        let credential_data = CredentialData {
+        CredentialData {
             rp: PublicKeyCredentialRpEntity {
                 id: String::from("John Doe"),
                 name: None,
@@ -361,8 +362,7 @@ mod test {
             key: Key::WrappedKey(Bytes::from_slice(&[1, 2, 3]).unwrap()),
             hmac_secret: Some(false),
             cred_protect: None,
-        };
-        credential_data
+        }
     }
 
     fn random_bytes<const N: usize>() -> Bytes<N> {
@@ -423,7 +423,7 @@ mod test {
     fn random_credential_data() -> CredentialData {
         use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
 
-        let credential_data = CredentialData {
+        CredentialData {
             rp: PublicKeyCredentialRpEntity {
                 id: random_string(),
                 name: maybe_random_string(),
@@ -441,8 +441,7 @@ mod test {
             key: Key::WrappedKey(random_bytes()),
             hmac_secret: Some(false),
             cred_protect: None,
-        };
-        credential_data
+        }
     }
 
     #[test]
