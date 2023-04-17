@@ -34,7 +34,7 @@ where
         // blocking::dump_hex(request, request.len());
         match command {
             ctaphid::Command::Cbor => super::handle_ctap2(self, request, response),
-            ctaphid::Command::Msg => super::handle_ctap1(self, request, response),
+            ctaphid::Command::Msg => super::handle_ctap1_from_hid(self, request, response),
             _ => {
                 debug_now!("ctaphid trying to dispatch {:?}", command);
             }

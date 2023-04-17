@@ -59,13 +59,13 @@ where
         match instruction {
             // U2F instruction codes
             // NB(nickray): I don't think 0x00 is a valid case.
-            0x00 | 0x01 | 0x02 => super::handle_ctap1(self, apdu.data(), response), //self.call_authenticator_u2f(apdu, response),
+            0x00 | 0x01 | 0x02 => super::try_handle_ctap1(self, apdu, response)?, //self.call_authenticator_u2f(apdu, response),
 
             _ => {
                 match ctaphid::Command::try_from(instruction) {
                     // 0x10
                     Ok(ctaphid::Command::Cbor) => super::handle_ctap2(self, apdu.data(), response),
-                    Ok(ctaphid::Command::Msg) => super::handle_ctap1(self, apdu.data(), response),
+                    Ok(ctaphid::Command::Msg) => super::try_handle_ctap1(self, apdu, response)?,
                     Ok(ctaphid::Command::Deselect) => self.deselect(),
                     _ => {
                         info!("Unsupported ins for fido app {:02x}", instruction);
