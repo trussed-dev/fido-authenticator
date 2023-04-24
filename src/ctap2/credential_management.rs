@@ -4,7 +4,7 @@ use core::convert::TryFrom;
 
 use trussed::{
     syscall,
-    types::{DirEntry, Location},
+    types::{DirEntry, Location, Path, PathBuf},
 };
 
 use ctap_types::{
@@ -14,8 +14,6 @@ use ctap_types::{
     webauthn::PublicKeyCredentialDescriptor,
     Error,
 };
-
-use littlefs2::path::{Path, PathBuf};
 
 use crate::{
     credential::Credential,

@@ -7,12 +7,10 @@ use ctap_types::{
     sizes, Error,
 };
 
-use littlefs2::path::Path;
-
 use trussed::{
     syscall, try_syscall,
     types::{
-        KeyId, KeySerialization, Location, Mechanism, MediumData, Message, PathBuf,
+        KeyId, KeySerialization, Location, Mechanism, MediumData, Message, Path, PathBuf,
         SignatureSerialization,
     },
 };
