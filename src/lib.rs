@@ -76,6 +76,8 @@ pub struct Config {
     /// If set, the first Get Assertion or Authenticate request within the specified time after
     /// boot is accepted without additional user presence verification.
     pub skip_up_timeout: Option<Duration>,
+    /// The maximum number of resident credentials.
+    pub max_resident_credential_count: Option<u32>,
 }
 
 // impl Default for Config {
