@@ -484,23 +484,8 @@ where
             .parent()
             // by construction, RK has a parent, its RP
             .unwrap();
+        self.delete_rp_dir_if_empty(rp_path);
 
-        let maybe_first_remaining_rk =
-            syscall!(self
-                .trussed
-                .read_dir_first(Location::Internal, rp_path.clone(), None,))
-            .entry;
-
-        if maybe_first_remaining_rk.is_none() {
-            info!("deleting parent {:?} as this was its last RK", &rp_path);
-            syscall!(self.trussed.remove_dir(Location::Internal, rp_path,));
-        } else {
-            info!(
-                "not deleting deleting parent {:?} as there is {:?}",
-                &rp_path,
-                &maybe_first_remaining_rk.unwrap().path(),
-            );
-        }
         // just return OK
         let response = Default::default();
         Ok(response)
