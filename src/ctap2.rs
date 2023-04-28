@@ -375,9 +375,13 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             // then check the maximum number of RK credentials
             if let Some(max_count) = self.config.max_resident_credential_count {
                 let mut cm = credential_management::CredentialManagement::new(self);
-                let metadata = cm.get_creds_metadata()?;
-                let count = metadata.existing_resident_credentials_count.unwrap_or(max_count);
+                let metadata = cm.get_creds_metadata();
+                let count = metadata
+                    .existing_resident_credentials_count
+                    .unwrap_or(max_count);
+                debug!("resident cred count: {} (max: {})", count, max_count);
                 if count >= max_count {
+                    error!("maximum resident credential count reached");
                     return Err(Error::KeyStoreFull);
                 }
             }
@@ -844,7 +848,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let sub_parameters = &parameters.sub_command_params;
         match parameters.sub_command {
             // 0x1
-            Subcommand::GetCredsMetadata => cred_mgmt.get_creds_metadata(),
+            Subcommand::GetCredsMetadata => Ok(cred_mgmt.get_creds_metadata()),
 
             // 0x2
             Subcommand::EnumerateRpsBegin => cred_mgmt.first_relying_party(),

@@ -62,7 +62,7 @@ where
     UP: UserPresence,
     T: TrussedRequirements,
 {
-    pub fn get_creds_metadata(&mut self) -> Result<Response> {
+    pub fn get_creds_metadata(&mut self) -> Response {
         info!("get metadata");
         let mut response: Response = Default::default();
 
@@ -71,7 +71,8 @@ where
             .max_resident_credential_count
             .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE);
         response.existing_resident_credentials_count = Some(0);
-        response.max_possible_remaining_residential_credentials_count = Some(max_resident_credentials);
+        response.max_possible_remaining_residential_credentials_count =
+            Some(max_resident_credentials);
 
         let dir = PathBuf::from(b"rk");
         let maybe_first_rp =
@@ -81,11 +82,11 @@ where
             .entry;
 
         let first_rp = match maybe_first_rp {
-            None => return Ok(response),
+            None => return response,
             Some(rp) => rp,
         };
 
-        let (mut num_rks, _) = self.count_rp_rks(PathBuf::from(first_rp.path()))?;
+        let (mut num_rks, _) = self.count_rp_rks(PathBuf::from(first_rp.path()));
         let mut last_rp = PathBuf::from(first_rp.file_name());
 
         loop {
@@ -101,12 +102,12 @@ where
                     response.existing_resident_credentials_count = Some(num_rks);
                     response.max_possible_remaining_residential_credentials_count =
                         Some(max_resident_credentials.saturating_sub(num_rks));
-                    return Ok(response);
+                    return response;
                 }
                 Some(rp) => {
                     last_rp = PathBuf::from(rp.file_name());
                     info!("counting..");
-                    let (this_rp_rk_count, _) = self.count_rp_rks(PathBuf::from(rp.path()))?;
+                    let (this_rp_rk_count, _) = self.count_rp_rks(PathBuf::from(rp.path()));
                     info!("{:?}", this_rp_rk_count);
                     num_rks += this_rp_rk_count;
                 }
@@ -265,21 +266,24 @@ where
         Ok(response)
     }
 
-    fn count_rp_rks(&mut self, rp_dir: PathBuf) -> Result<(u32, DirEntry)> {
+    fn count_rp_rks(&mut self, rp_dir: PathBuf) -> (u32, Option<DirEntry>) {
         let maybe_first_rk =
             syscall!(self
                 .trussed
                 .read_dir_first(Location::Internal, rp_dir, None))
             .entry;
 
-        let first_rk = maybe_first_rk.ok_or(Error::NoCredentials)?;
+        let Some(first_rk) = maybe_first_rk else {
+            warn!("empty RP directory");
+            return (0, None);
+        };
 
         // count the rest of them
         let mut num_rks = 1;
         while syscall!(self.trussed.read_dir_next()).entry.is_some() {
             num_rks += 1;
         }
-        Ok((num_rks, first_rk))
+        (num_rks, Some(first_rk))
     }
 
     pub fn first_credential(&mut self, rp_id_hash: &Bytes<32>) -> Result<Response> {
@@ -291,7 +295,8 @@ where
         super::format_hex(&rp_id_hash[..8], &mut hex);
 
         let rp_dir = PathBuf::from(b"rk").join(&PathBuf::from(&hex));
-        let (num_rks, first_rk) = self.count_rp_rks(rp_dir)?;
+        let (num_rks, first_rk) = self.count_rp_rks(rp_dir);
+        let first_rk = first_rk.ok_or(Error::NoCredentials)?;
 
         // extract data required into response
         let mut response = self.extract_response_from_credential_file(first_rk.path())?;
