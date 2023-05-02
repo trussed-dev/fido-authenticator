@@ -372,27 +372,44 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             self.delete_resident_key_by_user_id(&rp_id_hash, &credential.user.id)
                 .ok();
 
+            let mut key_store_full = false;
+
             // then check the maximum number of RK credentials
             if let Some(max_count) = self.config.max_resident_credential_count {
                 let mut cm = credential_management::CredentialManagement::new(self);
-                let metadata = cm.get_creds_metadata()?;
-                let count = metadata.existing_resident_credentials_count.unwrap_or(max_count);
+                let metadata = cm.get_creds_metadata();
+                let count = metadata
+                    .existing_resident_credentials_count
+                    .unwrap_or(max_count);
+                debug!("resident cred count: {} (max: {})", count, max_count);
                 if count >= max_count {
-                    return Err(Error::KeyStoreFull);
+                    error!("maximum resident credential count reached");
+                    key_store_full = true;
                 }
             }
 
-            // then store key, making it resident
-            let credential_id_hash = self.hash(credential_id.0.as_ref());
-            try_syscall!(self.trussed.write_file(
-                Location::Internal,
-                rk_path(&rp_id_hash, &credential_id_hash),
-                serialized_credential,
-                // user attribute for later easy lookup
-                // Some(rp_id_hash.clone()),
-                None,
-            ))
-            .map_err(|_| Error::KeyStoreFull)?;
+            if !key_store_full {
+                // then store key, making it resident
+                let credential_id_hash = self.hash(credential_id.0.as_ref());
+                let result = try_syscall!(self.trussed.write_file(
+                    Location::Internal,
+                    rk_path(&rp_id_hash, &credential_id_hash),
+                    serialized_credential,
+                    // user attribute for later easy lookup
+                    // Some(rp_id_hash.clone()),
+                    None,
+                ));
+                key_store_full = result.is_err();
+            }
+
+            if key_store_full {
+                // If we previously deleted an existing cred with the same RP + UserId but then
+                // failed to store the new cred, the RP directory could now be empty.  This is not
+                // a valid state so we have to delete it.
+                let rp_dir = rp_rk_dir(&rp_id_hash);
+                self.delete_rp_dir_if_empty(rp_dir);
+                return Err(Error::KeyStoreFull);
+            }
         }
 
         // 13. generate and return attestation statement using clientDataHash
@@ -844,7 +861,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let sub_parameters = &parameters.sub_command_params;
         match parameters.sub_command {
             // 0x1
-            Subcommand::GetCredsMetadata => cred_mgmt.get_creds_metadata(),
+            Subcommand::GetCredsMetadata => Ok(cred_mgmt.get_creds_metadata()),
 
             // 0x2
             Subcommand::EnumerateRpsBegin => cred_mgmt.first_relying_party(),
@@ -1668,6 +1685,25 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             .remove_file(Location::Internal, PathBuf::from(rk_path),));
 
         Ok(())
+    }
+
+    pub(crate) fn delete_rp_dir_if_empty(&mut self, rp_path: PathBuf) {
+        let maybe_first_remaining_rk =
+            syscall!(self
+                .trussed
+                .read_dir_first(Location::Internal, rp_path.clone(), None,))
+            .entry;
+
+        if maybe_first_remaining_rk.is_none() {
+            info!("deleting parent {:?} as this was its last RK", &rp_path);
+            syscall!(self.trussed.remove_dir(Location::Internal, rp_path,));
+        } else {
+            info!(
+                "not deleting deleting parent {:?} as there is {:?}",
+                &rp_path,
+                &maybe_first_remaining_rk.unwrap().path(),
+            );
+        }
     }
 }
 
