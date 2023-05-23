@@ -45,4 +45,6 @@ rand = "0.8.4"
 features = ["dispatch"]
 
 [patch.crates-io]
-trussed = { git = "https://github.com/trussed-dev/trussed", rev = "55ea391367fce4bf5093ff2d3c79041d7aef0485" }
+ref-swap = { git = "https://github.com/nitrokey/ref-swap.git", rev = "de0330e85b479074ae03bcc05888cfeff682f61e" }
+ctaphid-dispatch = { git = "https://github.com/sosthene-nitrokey/ctaphid-dispatch.git", rev = "a5a3696d7cf0665414cf57cdea384dbc8a157f33" }
+trussed = { git = "https://github.com/sosthene-nitrokey/trussed.git", rev = "6f095e14b27bd58ab8fa56cf6c616266d92fbfb4" }
