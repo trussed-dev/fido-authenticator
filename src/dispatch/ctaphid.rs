@@ -3,8 +3,9 @@ use ctaphid_dispatch::app as ctaphid;
 #[allow(unused_imports)]
 use crate::msp;
 use crate::{Authenticator, TrussedRequirements, UserPresence};
+use trussed::interrupt::InterruptFlag;
 
-impl<UP, T> ctaphid::App for Authenticator<UP, T>
+impl<UP, T> ctaphid::App<'static> for Authenticator<UP, T>
 where
     UP: UserPresence,
     T: TrussedRequirements,
@@ -40,5 +41,9 @@ where
             }
         };
         Ok(())
+    }
+
+    fn interrupt(&self) -> Option<&'static InterruptFlag> {
+        self.trussed.interrupt()
     }
 }
