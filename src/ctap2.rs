@@ -81,6 +81,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 false => Some(false),
             },
             credential_mgmt_preview: Some(true),
+            make_cred_uv_not_rqd: Some(true),
             ..Default::default()
         };
         // options.rk = true;
