@@ -103,7 +103,7 @@ impl State {
 
     pub fn decrement_retries<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
         self.persistent.decrement_retries(trussed)?;
-        self.runtime.decrement_retries()?;
+        self.runtime.decrement_retries();
         Ok(())
     }
 
@@ -452,14 +452,9 @@ impl PersistentState {
 impl RuntimeState {
     const POWERCYCLE_RETRIES: u8 = 3;
 
-    fn decrement_retries(&mut self) -> Result<()> {
+    fn decrement_retries(&mut self) {
         if self.consecutive_pin_mismatches < Self::POWERCYCLE_RETRIES {
             self.consecutive_pin_mismatches += 1;
-        }
-        if self.consecutive_pin_mismatches == Self::POWERCYCLE_RETRIES {
-            Err(Error::PinAuthBlocked)
-        } else {
-            Ok(())
         }
     }
 
