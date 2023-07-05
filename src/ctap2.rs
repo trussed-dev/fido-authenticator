@@ -197,6 +197,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let mut algorithm: Option<SigningAlgorithm> = None;
         for param in parameters.pub_key_cred_params.iter() {
+            // Ignore unknown key types
+            if param.key_type != "public-key" {
+                continue;
+            }
+
             match param.alg {
                 -7 => {
                     if algorithm.is_none() {
@@ -210,15 +215,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 _ => {}
             }
         }
-        let algorithm = match algorithm {
-            Some(algorithm) => {
-                info_now!("algo: {:?}", algorithm as i32);
-                algorithm
-            }
-            None => {
-                return Err(Error::UnsupportedAlgorithm);
-            }
-        };
+        let algorithm = algorithm.ok_or(Error::UnsupportedAlgorithm)?;
+        info_now!("algo: {:?}", algorithm as i32);
 
         // 8. process options; on known but unsupported error UnsupportedOption
 
