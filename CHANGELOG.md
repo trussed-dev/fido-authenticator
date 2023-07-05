@@ -5,11 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
-
 - Set the `makeCredUvNotRqd` CTAP option to `true` to indicate that we support
   makeCredential operations without user verification ([#26][])
+- Ignore public key credential parameters with an unknown type, as required by
+  the Webauthn spec ([#28][])
 
 [#26]: https://github.com/solokeys/fido-authenticator/issues/26
+[#28]: https://github.com/solokeys/fido-authenticator/issues/28
 
 ## [0.1.1] - 2022-08-22
 - Fix bug that treated U2F payloads as APDU over APDU in NFC transport @conorpp
