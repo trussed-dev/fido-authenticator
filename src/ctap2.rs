@@ -1559,7 +1559,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             number_of_credentials: num_credentials,
         };
 
-        if is_rk {
+        // User with empty IDs are ignored for compatibility
+        if is_rk && !credential.user.id.is_empty() {
             let mut user = credential.user.clone();
             // User identifiable information (name, DisplayName, icon) MUST not
             // be returned if user verification is not done by the authenticator.

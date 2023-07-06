@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   makeCredential operations without user verification ([#26][])
 - Ignore public key credential parameters with an unknown type, as required by
   the Webauthn spec ([#28][])
+- Ignore user data with empty ID in getAssertion ([#32][])
 
 [#26]: https://github.com/solokeys/fido-authenticator/issues/26
 [#28]: https://github.com/solokeys/fido-authenticator/issues/28
+[#32]: https://github.com/solokeys/fido-authenticator/issues/32
 
 ## [0.1.1] - 2022-08-22
 - Fix bug that treated U2F payloads as APDU over APDU in NFC transport @conorpp
