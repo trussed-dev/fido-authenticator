@@ -921,6 +921,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         // 6. process any options present
 
+        // RK is not supported in get_assertion
+        if parameters.options.as_ref().and_then(|options| options.rk).is_some() {
+            return Err(Error::InvalidOption);
+        }
+
         // UP occurs by default, but option could specify not to.
         let do_up = if parameters.options.is_some() {
             parameters.options.as_ref().unwrap().up.unwrap_or(true)
