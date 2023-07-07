@@ -89,7 +89,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let rp = ctap_types::webauthn::PublicKeyCredentialRpEntity {
             id: rp_id,
             name: None,
-            url: None,
+            icon: None,
         };
 
         let user = ctap_types::webauthn::PublicKeyCredentialUserEntity {

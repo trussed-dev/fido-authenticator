@@ -324,7 +324,7 @@ impl Credential {
         let data = &mut stripped.data;
 
         data.rp.name = None;
-        data.rp.url = None;
+        data.rp.icon = None;
 
         data.user.icon = None;
         data.user.name = None;
@@ -348,7 +348,7 @@ mod test {
             rp: PublicKeyCredentialRpEntity {
                 id: String::from("John Doe"),
                 name: None,
-                url: None,
+                icon: None,
             },
             user: PublicKeyCredentialUserEntity {
                 id: Bytes::from_slice(&[1, 2, 3]).unwrap(),
@@ -427,7 +427,7 @@ mod test {
             rp: PublicKeyCredentialRpEntity {
                 id: random_string(),
                 name: maybe_random_string(),
-                url: maybe_random_string(),
+                icon: None,
             },
             user: PublicKeyCredentialUserEntity {
                 id: random_bytes(), //Bytes::from_slice(&[1,2,3]).unwrap(),
