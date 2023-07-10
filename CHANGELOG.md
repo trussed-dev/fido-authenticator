@@ -8,8 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add config option for setting a maximum number of resident credentials.
 - Ignore public key credential paramters with an unknown type, as required by
   the Webauthn spec ([#28][])
+- Set the `makeCredUvNotRqd` CTAP option to `true` to indicate that we support
+  makeCredential operations without user verification ([#26][])
+- Reject `rk` option in getAssertion ([#31][])
+- Ignore user data with empty ID in getAssertion ([#32][])
+- Allow three instead of two PIN retries per boot ([#35][])
 
+[#26]: https://github.com/solokeys/fido-authenticator/issues/26
 [#28]: https://github.com/solokeys/fido-authenticator/issues/28
+[#31]: https://github.com/solokeys/fido-authenticator/issues/31
+[#32]: https://github.com/solokeys/fido-authenticator/issues/32
+[#35]: https://github.com/solokeys/fido-authenticator/issues/35
 
 ## [0.1.1] - 2022-08-22
 - Fix bug that treated U2F payloads as APDU over APDU in NFC transport @conorpp
