@@ -17,12 +17,7 @@ use trussed::{
 
 use crate::{
     constants,
-    credential::{
-        self,
-        Credential,
-        // CredentialList,
-        Key,
-    },
+    credential::{self, Credential, FullCredential, Key, StrippedCredential},
     format_hex,
     state::{
         self,
@@ -145,7 +140,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // 7. reset timer
         // 8. increment credential counter (not applicable)
 
-        self.assert_with_credential(None, credential)
+        self.assert_with_credential(None, Credential::Full(credential))
     }
 
     #[inline(never)]
@@ -180,7 +175,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 if let Ok(excluded_cred) = result {
                     use credential::CredentialProtectionPolicy;
                     // If UV is not performed, than CredProtectRequired credentials should not be visibile.
-                    if !(excluded_cred.cred_protect == Some(CredentialProtectionPolicy::Required))
+                    if !(excluded_cred.cred_protect() == Some(CredentialProtectionPolicy::Required))
                         || uv_performed
                     {
                         info_now!("Excluded!");
@@ -342,7 +337,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // store it.
         // TODO: overwrite, error handling with KeyStoreFull
 
-        let credential = Credential::new(
+        let credential = FullCredential::new(
             credential::CtapVersion::Fido21Pre,
             &parameters.rp,
             &parameters.user,
@@ -355,7 +350,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         );
 
         // note that this does the "stripping" of OptionalUI etc.
-        let credential_id = credential.id(&mut self.trussed, kek, Some(&rp_id_hash))?;
+        let credential_id =
+            StrippedCredential::from(&credential).id(&mut self.trussed, kek, &rp_id_hash)?;
 
         if rk_requested {
             // serialization with all metadata
@@ -468,7 +464,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             .map_err(|_| Error::Other)?;
         // debug_now!("serialized_auth_data ={:?}", &serialized_auth_data);
         commitment
-            .extend_from_slice(&parameters.client_data_hash)
+            .extend_from_slice(parameters.client_data_hash)
             .map_err(|_| Error::Other)?;
         // debug_now!("client_data_hash = {:?}", &parameters.client_data_hash);
         // debug_now!("commitment = {:?}", &commitment);
@@ -1006,14 +1002,14 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         allowlist_passed: bool,
         uv_performed: bool,
     ) -> bool {
-        if !self.check_key_exists(credential.algorithm, &credential.key) {
+        if !self.check_key_exists(credential.algorithm(), credential.key()) {
             return false;
         }
 
         if !{
             use credential::CredentialProtectionPolicy as Policy;
-            debug_now!("CredentialProtectionPolicy {:?}", &credential.cred_protect);
-            match credential.cred_protect {
+            debug_now!("CredentialProtectionPolicy {:?}", credential.cred_protect());
+            match credential.cred_protect() {
                 None | Some(Policy::Optional) => true,
                 Some(Policy::OptionalWithCredentialIdList) => allowlist_passed || uv_performed,
                 Some(Policy::Required) => uv_performed,
@@ -1089,11 +1085,13 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             let credential_data =
                 syscall!(self.trussed.read_file(Location::Internal, path.clone(),)).data;
 
-            let credential = Credential::deserialize(&credential_data).ok()?;
+            let credential = FullCredential::deserialize(&credential_data).ok()?;
+            let timestamp = credential.creation_time;
+            let credential = Credential::Full(credential);
 
             if self.check_credential_applicable(&credential, false, uv_performed) {
                 self.state.runtime.push_credential(CachedCredential {
-                    timestamp: credential.creation_time,
+                    timestamp,
                     path: String::from_str(path.as_str_ref_with_trailing_nul()).ok()?,
                 });
             }
@@ -1105,7 +1103,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
         let num_credentials = self.state.runtime.remaining_credentials();
         let credential = self.state.runtime.pop_credential(&mut self.trussed);
-        credential.map(|credential| (credential, num_credentials))
+        credential.map(|credential| (Credential::Full(credential), num_credentials))
     }
 
     fn decrypt_pin_hash_and_maybe_escalate(
@@ -1311,11 +1309,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         }
 
         // 2. check PIN protocol is 1 if pinAuth was sent
-        if let Some(ref _pin_auth) = pin_auth {
-            if let Some(1) = pin_protocol {
-            } else {
-                return Err(Error::PinAuthInvalid);
-            }
+        if pin_auth.is_some() && pin_protocol != &Some(1) {
+            return Err(Error::PinAuthInvalid);
         }
 
         // 3. if no PIN is set (we have no other form of UV),
@@ -1337,7 +1332,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         // Current thinking: no
         if self.state.persistent.pin_is_set() {
             // let mut uv_performed = false;
-            if let Some(ref pin_auth) = pin_auth {
+            if let Some(pin_auth) = pin_auth {
                 if pin_auth.len() != 16 {
                     return Err(Error::InvalidParameter);
                 }
@@ -1484,7 +1479,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         let data = self.state.runtime.active_get_assertion.clone().unwrap();
         let rp_id_hash = Bytes::from_slice(&data.rp_id_hash).unwrap();
 
-        let (key, is_rk) = match credential.key.clone() {
+        let (key, is_rk) = match credential.key().clone() {
             Key::ResidentKey(key) => (key, true),
             Key::WrappedKey(bytes) => {
                 let wrapping_key = self.state.persistent.key_wrapping_key(&mut self.trussed)?;
@@ -1521,7 +1516,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             .state
             .persistent
             .key_encryption_key(&mut self.trussed)?;
-        let credential_id = credential.id(&mut self.trussed, kek, Some(&rp_id_hash))?;
+        let credential_id = credential.id(&mut self.trussed, kek, &rp_id_hash)?;
 
         use ctap2::AuthenticatorDataFlags as Flags;
 
@@ -1559,7 +1554,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             .extend_from_slice(&data.client_data_hash)
             .map_err(|_| Error::Other)?;
 
-        let (mechanism, serialization) = match credential.algorithm {
+        let (mechanism, serialization) = match credential.algorithm() {
             -7 => (Mechanism::P256, SignatureSerialization::Asn1Der),
             -8 => (Mechanism::Ed255, SignatureSerialization::Raw),
             // -9 => (Mechanism::Totp, SignatureSerialization::Raw),
@@ -1589,17 +1584,21 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         };
 
         // User with empty IDs are ignored for compatibility
-        if is_rk && !credential.user.id.is_empty() {
-            let mut user = credential.user.clone();
-            // User identifiable information (name, DisplayName, icon) MUST not
-            // be returned if user verification is not done by the authenticator.
-            // For single account per RP case, authenticator returns "id" field.
-            if !data.uv_performed || !data.multiple_credentials {
-                user.icon = None;
-                user.name = None;
-                user.display_name = None;
+        if is_rk {
+            if let Credential::Full(credential) = credential {
+                if !credential.user.id.is_empty() {
+                    let mut user = credential.user.clone();
+                    // User identifiable information (name, DisplayName, icon) MUST not
+                    // be returned if user verification is not done by the authenticator.
+                    // For single account per RP case, authenticator returns "id" field.
+                    if !data.uv_performed || !data.multiple_credentials {
+                        user.icon = None;
+                        user.name = None;
+                        user.display_name = None;
+                    }
+                    response.user = Some(user);
+                }
             }
-            response.user = Some(user);
         }
 
         Ok(response)
@@ -1630,7 +1629,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             info_now!("checking RK {:?} for userId ", &rk_path);
             let credential_data =
                 syscall!(self.trussed.read_file(Location::Internal, rk_path.clone(),)).data;
-            let credential_maybe = Credential::deserialize(&credential_data);
+            let credential_maybe = FullCredential::deserialize(&credential_data);
 
             if let Ok(old_credential) = credential_maybe {
                 if old_credential.user.id == user_id {
@@ -1666,7 +1665,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             .trussed
             .read_file(Location::Internal, PathBuf::from(rk_path),))
         .data;
-        let credential_maybe = Credential::deserialize(&credential_data);
+        let credential_maybe = FullCredential::deserialize(&credential_data);
         // info_now!("deleting credential {:?}", &credential);
 
         if let Ok(credential) = credential_maybe {

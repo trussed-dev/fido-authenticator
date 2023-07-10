@@ -13,12 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reject `rk` option in getAssertion ([#31][])
 - Ignore user data with empty ID in getAssertion ([#32][])
 - Allow three instead of two PIN retries per boot ([#35][])
+- Reduce ID length for new credentials ([#37][])
 
 [#26]: https://github.com/solokeys/fido-authenticator/issues/26
 [#28]: https://github.com/solokeys/fido-authenticator/issues/28
 [#31]: https://github.com/solokeys/fido-authenticator/issues/31
 [#32]: https://github.com/solokeys/fido-authenticator/issues/32
 [#35]: https://github.com/solokeys/fido-authenticator/issues/35
+[#37]: https://github.com/solokeys/fido-authenticator/issues/37
 
 ## [0.1.1] - 2022-08-22
 - Fix bug that treated U2F payloads as APDU over APDU in NFC transport @conorpp

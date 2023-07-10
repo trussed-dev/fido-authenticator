@@ -18,7 +18,7 @@ use trussed::{
 
 use heapless::binary_heap::{BinaryHeap, Max};
 
-use crate::{cbor_serialize_message, credential::Credential, Result};
+use crate::{cbor_serialize_message, credential::FullCredential, Result};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CachedCredential {
@@ -479,7 +479,7 @@ impl RuntimeState {
     pub fn pop_credential<T: client::FilesystemClient>(
         &mut self,
         trussed: &mut T,
-    ) -> Option<Credential> {
+    ) -> Option<FullCredential> {
         let cached_credential = self.cached_credentials.pop()?;
 
         let credential_data = syscall!(trussed.read_file(
@@ -488,7 +488,7 @@ impl RuntimeState {
         ))
         .data;
 
-        Credential::deserialize(&credential_data).ok()
+        FullCredential::deserialize(&credential_data).ok()
     }
 
     pub fn remaining_credentials(&self) -> u32 {

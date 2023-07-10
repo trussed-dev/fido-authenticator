@@ -2,6 +2,7 @@
 
 use core::cmp::Ordering;
 
+use serde::Serialize;
 use trussed::{client, syscall, try_syscall, types::KeyId};
 
 pub(crate) use ctap_types::{
@@ -28,6 +29,32 @@ pub enum CtapVersion {
 /// External ID of a credential, commonly known as "keyhandle".
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct CredentialId(pub Bytes<MAX_CREDENTIAL_ID_LENGTH>);
+
+impl CredentialId {
+    fn new<T: client::Chacha8Poly1305 + client::Sha256, C: Serialize>(
+        trussed: &mut T,
+        credential: &C,
+        key_encryption_key: KeyId,
+        rp_id_hash: &Bytes<32>,
+        nonce: &Bytes<12>,
+    ) -> Result<Self> {
+        let serialized_credential: SerializedCredential =
+            trussed::cbor_serialize_bytes(credential).map_err(|_| Error::Other)?;
+        let message = &serialized_credential;
+        // info!("serialized cred = {:?}", message).ok();
+        let associated_data = &rp_id_hash[..];
+        let nonce: [u8; 12] = nonce.as_slice().try_into().unwrap();
+        let encrypted_serialized_credential = syscall!(trussed.encrypt_chacha8poly1305(
+            key_encryption_key,
+            message,
+            associated_data,
+            Some(&nonce)
+        ));
+        EncryptedSerializedCredential(encrypted_serialized_credential)
+            .try_into()
+            .map_err(|_| Error::RequestTooLarge)
+    }
+}
 
 // TODO: how to determine necessary size?
 // pub type SerializedCredential = Bytes<512>;
@@ -71,7 +98,107 @@ pub enum Key {
     WrappedKey(Bytes<128>),
 }
 
-/// The main content of a `Credential`.
+/// A credential that is managed by the authenticator.
+///
+/// The authenticator uses two credential representations:
+/// - [`FullCredential`][] contains all data available for a credential and is used for resident
+///   credentials that are stored on the filesystem.  Older versions of this app used this
+///   reprensentation for non-resident credentials too.
+/// - [`StrippedCredential`][] contains the minimal data required for non-resident credentials.  As
+///   the data for these credentials is encoded in the credential ID, we try to keep it as small as
+///   possible.
+#[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
+pub enum Credential {
+    Full(FullCredential),
+    Stripped(StrippedCredential),
+}
+
+impl Credential {
+    pub fn try_from<UP: UserPresence, T: client::Client + client::Chacha8Poly1305>(
+        authnr: &mut Authenticator<UP, T>,
+        rp_id_hash: &Bytes<32>,
+        descriptor: &PublicKeyCredentialDescriptorRef,
+    ) -> Result<Self> {
+        Self::try_from_bytes(authnr, rp_id_hash, descriptor.id)
+    }
+
+    pub fn try_from_bytes<UP: UserPresence, T: client::Client + client::Chacha8Poly1305>(
+        authnr: &mut Authenticator<UP, T>,
+        rp_id_hash: &Bytes<32>,
+        id: &[u8],
+    ) -> Result<Self> {
+        let mut cred: Bytes<MAX_CREDENTIAL_ID_LENGTH> = Bytes::new();
+        cred.extend_from_slice(id)
+            .map_err(|_| Error::InvalidCredential)?;
+
+        let encrypted_serialized = EncryptedSerializedCredential::try_from(CredentialId(cred))?;
+
+        let kek = authnr
+            .state
+            .persistent
+            .key_encryption_key(&mut authnr.trussed)?;
+
+        let serialized = try_syscall!(authnr.trussed.decrypt_chacha8poly1305(
+            kek,
+            &encrypted_serialized.0.ciphertext,
+            &rp_id_hash[..],
+            &encrypted_serialized.0.nonce,
+            &encrypted_serialized.0.tag,
+        ))
+        .map_err(|_| Error::InvalidCredential)?
+        .plaintext
+        .ok_or(Error::InvalidCredential)?;
+
+        // In older versions of this app, we serialized the full credential.  Now we only serialize
+        // the stripped credential.  For compatibility, we have to try both.
+        FullCredential::deserialize(&serialized)
+            .map(Self::Full)
+            .or_else(|_| StrippedCredential::deserialize(&serialized).map(Self::Stripped))
+            .map_err(|_| Error::InvalidCredential)
+    }
+
+    pub fn id<T: client::Chacha8Poly1305 + client::Sha256>(
+        &self,
+        trussed: &mut T,
+        key_encryption_key: KeyId,
+        rp_id_hash: &Bytes<32>,
+    ) -> Result<CredentialId> {
+        match self {
+            Self::Full(credential) => credential.id(trussed, key_encryption_key, Some(rp_id_hash)),
+            Self::Stripped(credential) => CredentialId::new(
+                trussed,
+                credential,
+                key_encryption_key,
+                rp_id_hash,
+                &credential.nonce,
+            ),
+        }
+    }
+
+    pub fn algorithm(&self) -> i32 {
+        match self {
+            Self::Full(credential) => credential.algorithm,
+            Self::Stripped(credential) => credential.algorithm,
+        }
+    }
+
+    pub fn cred_protect(&self) -> Option<CredentialProtectionPolicy> {
+        match self {
+            Self::Full(credential) => credential.cred_protect,
+            Self::Stripped(credential) => credential.cred_protect,
+        }
+    }
+
+    pub fn key(&self) -> &Key {
+        match self {
+            Self::Full(credential) => &credential.key,
+            Self::Stripped(credential) => &credential.key,
+        }
+    }
+}
+
+/// The main content of a `FullCredential`.
 #[derive(
     Clone, Debug, PartialEq, serde_indexed::DeserializeIndexed, serde_indexed::SerializeIndexed,
 )]
@@ -101,13 +228,20 @@ pub struct CredentialData {
     pub cred_protect: Option<CredentialProtectionPolicy>,
     // TODO: add `sig_counter: Option<CounterId>`,
     // and grant RKs a per-credential sig-counter.
+
+    // In older app versions, we serialized the full credential to determine the credential ID.  In
+    // newer app versions, we strip unnecessary fields to generate a shorter credential ID.  To
+    // make sure that the credential ID does not change for an existing credential, this field is
+    // used as a marker for new credentials.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    use_short_id: Option<bool>,
 }
 
 // TODO: figure out sizes
 // We may or may not follow https://github.com/satoshilabs/slips/blob/master/slip-0022.md
 /// The core structure this authenticator creates and uses.
 #[derive(Clone, Debug, serde_indexed::DeserializeIndexed, serde_indexed::SerializeIndexed)]
-pub struct Credential {
+pub struct FullCredential {
     ctap: CtapVersion,
     pub data: CredentialData,
     nonce: Bytes<12>,
@@ -121,7 +255,7 @@ pub struct Credential {
 //     nonce: Bytes<12>,
 // }
 
-impl core::ops::Deref for Credential {
+impl core::ops::Deref for FullCredential {
     type Target = CredentialData;
 
     fn deref(&self) -> &Self::Target {
@@ -132,34 +266,34 @@ impl core::ops::Deref for Credential {
 /// Compare credentials based on key + timestamp.
 ///
 /// Likely comparison based on timestamp would be good enough?
-impl PartialEq for Credential {
+impl PartialEq for FullCredential {
     fn eq(&self, other: &Self) -> bool {
         (self.creation_time == other.creation_time) && (self.key == other.key)
     }
 }
 
-impl PartialEq<&Credential> for Credential {
+impl PartialEq<&FullCredential> for FullCredential {
     fn eq(&self, other: &&Self) -> bool {
         self == *other
     }
 }
 
-impl Eq for Credential {}
+impl Eq for FullCredential {}
 
-impl Ord for Credential {
+impl Ord for FullCredential {
     fn cmp(&self, other: &Self) -> Ordering {
         self.data.creation_time.cmp(&other.data.creation_time)
     }
 }
 
 /// Order by timestamp of creation.
-impl PartialOrd for Credential {
+impl PartialOrd for FullCredential {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl PartialOrd<&Credential> for Credential {
+impl PartialOrd<&FullCredential> for FullCredential {
     fn partial_cmp(&self, other: &&Self) -> Option<Ordering> {
         Some(self.cmp(*other))
     }
@@ -181,7 +315,7 @@ impl From<CredentialId> for PublicKeyCredentialDescriptor {
     }
 }
 
-impl Credential {
+impl FullCredential {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         ctap: CtapVersion,
@@ -207,9 +341,11 @@ impl Credential {
 
             hmac_secret,
             cred_protect,
+
+            use_short_id: Some(true),
         };
 
-        Credential {
+        FullCredential {
             ctap,
             data,
             nonce: Bytes::from_slice(&nonce).unwrap(),
@@ -235,10 +371,6 @@ impl Credential {
         key_encryption_key: KeyId,
         rp_id_hash: Option<&Bytes<32>>,
     ) -> Result<CredentialId> {
-        let serialized_credential = self.strip().serialize()?;
-        let message = &serialized_credential;
-        // info!("serialized cred = {:?}", message).ok();
-
         let rp_id_hash: Bytes<32> = if let Some(hash) = rp_id_hash {
             hash.clone()
         } else {
@@ -247,16 +379,18 @@ impl Credential {
                 .to_bytes()
                 .map_err(|_| Error::Other)?
         };
-
-        let associated_data = &rp_id_hash[..];
-        let nonce: [u8; 12] = self.nonce.as_slice().try_into().unwrap();
-        let encrypted_serialized_credential = EncryptedSerializedCredential(syscall!(trussed
-            .encrypt_chacha8poly1305(key_encryption_key, message, associated_data, Some(&nonce))));
-        let credential_id: CredentialId = encrypted_serialized_credential
-            .try_into()
-            .map_err(|_| Error::RequestTooLarge)?;
-
-        Ok(credential_id)
+        if self.use_short_id.unwrap_or_default() {
+            StrippedCredential::from(self).id(trussed, key_encryption_key, &rp_id_hash)
+        } else {
+            let stripped_credential = self.strip();
+            CredentialId::new(
+                trussed,
+                &stripped_credential,
+                key_encryption_key,
+                &rp_id_hash,
+                &self.nonce,
+            )
+        }
     }
 
     pub fn serialize(&self) -> Result<SerializedCredential> {
@@ -273,52 +407,10 @@ impl Credential {
         }
     }
 
-    pub fn try_from<UP: UserPresence, T: client::Client + client::Chacha8Poly1305>(
-        authnr: &mut Authenticator<UP, T>,
-        rp_id_hash: &Bytes<32>,
-        descriptor: &PublicKeyCredentialDescriptorRef,
-    ) -> Result<Self> {
-        Self::try_from_bytes(authnr, rp_id_hash, &descriptor.id)
-    }
-
-    pub fn try_from_bytes<UP: UserPresence, T: client::Client + client::Chacha8Poly1305>(
-        authnr: &mut Authenticator<UP, T>,
-        rp_id_hash: &Bytes<32>,
-        id: &[u8],
-    ) -> Result<Self> {
-        let mut cred: Bytes<MAX_CREDENTIAL_ID_LENGTH> = Bytes::new();
-        cred.extend_from_slice(id)
-            .map_err(|_| Error::InvalidCredential)?;
-
-        let encrypted_serialized = EncryptedSerializedCredential::try_from(CredentialId(cred))?;
-
-        let kek = authnr
-            .state
-            .persistent
-            .key_encryption_key(&mut authnr.trussed)?;
-
-        let serialized = try_syscall!(authnr.trussed.decrypt_chacha8poly1305(
-            // TODO: use RpId as associated data here?
-            kek,
-            &encrypted_serialized.0.ciphertext,
-            &rp_id_hash[..],
-            &encrypted_serialized.0.nonce,
-            &encrypted_serialized.0.tag,
-        ))
-        .map_err(|_| Error::InvalidCredential)?
-        .plaintext
-        .ok_or(Error::InvalidCredential)?;
-
-        let credential =
-            Credential::deserialize(&serialized).map_err(|_| Error::InvalidCredential)?;
-
-        Ok(credential)
-    }
-
-    // Remove inessential metadata from credential.
-    //
-    // Called by the `id` method, see its documentation.
-    pub fn strip(&self) -> Self {
+    // This method is only kept for compatibility.  To strip new credentials, use
+    // `StrippedCredential`.
+    #[must_use]
+    fn strip(&self) -> Self {
         info_now!(":: stripping ID");
         let mut stripped = self.clone();
         let data = &mut stripped.data;
@@ -337,13 +429,71 @@ impl Credential {
     }
 }
 
+/// A reduced version of `FullCredential` that is used for non-resident credentials.
+///
+/// As the credential data is encodeded in the credential ID, we only want to include necessary
+/// data to keep the credential ID as short as possible.
+#[derive(Clone, Debug, serde_indexed::DeserializeIndexed, serde_indexed::SerializeIndexed)]
+pub struct StrippedCredential {
+    pub ctap: CtapVersion,
+    pub creation_time: u32,
+    pub use_counter: bool,
+    pub algorithm: i32,
+    pub key: Key,
+    pub nonce: Bytes<12>,
+    // extensions
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hmac_secret: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cred_protect: Option<CredentialProtectionPolicy>,
+}
+
+impl StrippedCredential {
+    fn deserialize(bytes: &SerializedCredential) -> Result<Self> {
+        match ctap_types::serde::cbor_deserialize(bytes) {
+            Ok(s) => Ok(s),
+            Err(_) => {
+                info_now!("could not deserialize {:?}", bytes);
+                Err(Error::Other)
+            }
+        }
+    }
+
+    pub fn id<T: client::Chacha8Poly1305 + client::Sha256>(
+        &self,
+        trussed: &mut T,
+        key_encryption_key: KeyId,
+        rp_id_hash: &Bytes<32>,
+    ) -> Result<CredentialId> {
+        CredentialId::new(trussed, self, key_encryption_key, rp_id_hash, &self.nonce)
+    }
+}
+
+impl From<&FullCredential> for StrippedCredential {
+    fn from(credential: &FullCredential) -> Self {
+        Self {
+            ctap: credential.ctap,
+            creation_time: credential.data.creation_time,
+            use_counter: credential.data.use_counter,
+            algorithm: credential.data.algorithm,
+            key: credential.data.key.clone(),
+            nonce: credential.nonce.clone(),
+            hmac_secret: credential.data.hmac_secret,
+            cred_protect: credential.data.cred_protect,
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
+    use trussed::{
+        client::{Chacha8Poly1305, Sha256},
+        types::Location,
+    };
 
     fn credential_data() -> CredentialData {
-        use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
-
         CredentialData {
             rp: PublicKeyCredentialRpEntity {
                 id: String::from("John Doe"),
@@ -362,6 +512,7 @@ mod test {
             key: Key::WrappedKey(Bytes::from_slice(&[1, 2, 3]).unwrap()),
             hmac_secret: Some(false),
             cred_protect: None,
+            use_short_id: Some(true),
         }
     }
 
@@ -421,8 +572,6 @@ mod test {
     }
 
     fn random_credential_data() -> CredentialData {
-        use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
-
         CredentialData {
             rp: PublicKeyCredentialRpEntity {
                 id: random_string(),
@@ -441,6 +590,7 @@ mod test {
             key: Key::WrappedKey(random_bytes()),
             hmac_secret: Some(false),
             cred_protect: None,
+            use_short_id: Some(true),
         }
     }
 
@@ -459,6 +609,79 @@ mod test {
         let deserialized: CredentialData = deserialize(&serialization).unwrap();
 
         assert_eq!(credential_data, deserialized);
+    }
+
+    #[test]
+    fn credential_ids() {
+        trussed::virt::with_ram_client("fido", |mut client| {
+            let kek = syscall!(client.generate_chacha8poly1305_key(Location::Internal)).key;
+            let mut nonce = Bytes::new();
+            nonce.extend_from_slice(&[0; 12]).unwrap();
+            let data = credential_data();
+            let mut full_credential = FullCredential {
+                ctap: CtapVersion::Fido21Pre,
+                data,
+                nonce,
+            };
+            let rp_id_hash = syscall!(client.hash_sha256(full_credential.rp.id.as_ref()))
+                .hash
+                .to_bytes()
+                .unwrap();
+
+            // Case 1: credential with use_short_id = Some(true) uses new (short) format
+            full_credential.data.use_short_id = Some(true);
+            let stripped_credential = StrippedCredential::from(&full_credential);
+            let full_id = full_credential
+                .id(&mut client, kek, Some(&rp_id_hash))
+                .unwrap();
+            let short_id = stripped_credential
+                .id(&mut client, kek, &rp_id_hash)
+                .unwrap();
+            assert_eq!(full_id.0, short_id.0);
+
+            // Case 2: credential with use_short_id = None uses old (long) format
+            full_credential.data.use_short_id = None;
+            let stripped_credential = full_credential.strip();
+            let full_id = full_credential
+                .id(&mut client, kek, Some(&rp_id_hash))
+                .unwrap();
+            let long_id = CredentialId::new(
+                &mut client,
+                &stripped_credential,
+                kek,
+                &rp_id_hash,
+                &full_credential.nonce,
+            )
+            .unwrap();
+            assert_eq!(full_id.0, long_id.0);
+
+            assert!(short_id.0.len() < long_id.0.len());
+        });
+    }
+
+    #[test]
+    fn max_credential_id() {
+        let rp_id: String<256> = core::iter::repeat('?').take(256).collect();
+        let key = Bytes::from_slice(&[u8::MAX; 128]).unwrap();
+        let credential = StrippedCredential {
+            ctap: CtapVersion::Fido21Pre,
+            creation_time: u32::MAX,
+            use_counter: true,
+            algorithm: i32::MAX,
+            key: Key::WrappedKey(key),
+            nonce: Bytes::from_slice(&[u8::MAX; 12]).unwrap(),
+            hmac_secret: Some(true),
+            cred_protect: Some(CredentialProtectionPolicy::Required),
+        };
+        trussed::virt::with_ram_client("fido", |mut client| {
+            let kek = syscall!(client.generate_chacha8poly1305_key(Location::Internal)).key;
+            let rp_id_hash = syscall!(client.hash_sha256(rp_id.as_ref()))
+                .hash
+                .to_bytes()
+                .unwrap();
+            let id = credential.id(&mut client, kek, &rp_id_hash).unwrap();
+            assert_eq!(id.0.len(), 204);
+        });
     }
 
     // use quickcheck::TestResult;

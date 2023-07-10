@@ -39,6 +39,7 @@ log-error = []
 [dev-dependencies]
 # quickcheck = "1"
 rand = "0.8.4"
+trussed = { version = "0.1", features = ["virt"] }
 
 [package.metadata.docs.rs]
 features = ["dispatch"]

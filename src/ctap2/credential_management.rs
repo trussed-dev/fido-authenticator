@@ -17,7 +17,7 @@ use ctap_types::{
 
 use crate::{
     constants::MAX_RESIDENT_CREDENTIALS_GUESSTIMATE,
-    credential::Credential,
+    credential::FullCredential,
     state::{CredentialManagementEnumerateCredentials, CredentialManagementEnumerateRps},
     Authenticator, Result, TrussedRequirements, UserPresence,
 };
@@ -161,7 +161,7 @@ where
                         .read_file(Location::Internal, rk_entry.path().into(),))
                     .data;
 
-                    let credential = Credential::deserialize(&serialized)
+                    let credential = FullCredential::deserialize(&serialized)
                         // this may be a confusing error message
                         .map_err(|_| Error::InvalidCredential)?;
 
@@ -238,7 +238,7 @@ where
                         .read_file(Location::Internal, rk_entry.path().into(),))
                     .data;
 
-                    let credential = Credential::deserialize(&serialized)
+                    let credential = FullCredential::deserialize(&serialized)
                         // this may be a confusing error message
                         .map_err(|_| Error::InvalidCredential)?;
 
@@ -385,7 +385,7 @@ where
 
         let serialized = syscall!(self.trussed.read_file(Location::Internal, rk_path.into(),)).data;
 
-        let credential = Credential::deserialize(&serialized)
+        let credential = FullCredential::deserialize(&serialized)
             // this may be a confusing error message
             .map_err(|_| Error::InvalidCredential)?;
 

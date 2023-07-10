@@ -12,7 +12,7 @@ use trussed::{
 
 use crate::{
     constants,
-    credential::{self, Credential, Key},
+    credential::{self, Credential, Key, StrippedCredential},
     SigningAlgorithm, TrussedRequirements, UserPresence,
 };
 
@@ -74,45 +74,23 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 .to_bytes()
                 .map_err(|_| Error::UnspecifiedCheckingError)?,
         );
-        let nonce = syscall!(self.trussed.random_bytes(12))
-            .bytes
-            .as_slice()
-            .try_into()
-            .unwrap();
+        let nonce = syscall!(self.trussed.random_bytes(12)).bytes;
+        let nonce = Bytes::from_slice(&nonce).unwrap();
 
-        let mut rp_id = heapless::String::new();
-
-        // We do not know the rpId string in U2F.  Just using placeholder.
-        // TODO: Is this true?
-        // <https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#cross-version-credentials>
-        rp_id.push_str("u2f").ok();
-        let rp = ctap_types::webauthn::PublicKeyCredentialRpEntity {
-            id: rp_id,
-            name: None,
-            icon: None,
-        };
-
-        let user = ctap_types::webauthn::PublicKeyCredentialUserEntity {
-            id: Bytes::from_slice(&[0u8; 8]).unwrap(),
-            icon: None,
-            name: None,
-            display_name: None,
-        };
-
-        let credential = Credential::new(
-            credential::CtapVersion::U2fV2,
-            &rp,
-            &user,
-            SigningAlgorithm::P256 as i32,
-            key,
-            self.state
+        let credential = StrippedCredential {
+            ctap: credential::CtapVersion::U2fV2,
+            creation_time: self
+                .state
                 .persistent
                 .timestamp(&mut self.trussed)
                 .map_err(|_| Error::NotEnoughMemory)?,
-            None,
-            None,
+            use_counter: true,
+            algorithm: SigningAlgorithm::P256 as i32,
+            key,
             nonce,
-        );
+            hmac_secret: None,
+            cred_protect: None,
+        };
 
         // info!("made credential {:?}", &credential);
 
@@ -123,7 +101,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             .key_encryption_key(&mut self.trussed)
             .map_err(|_| Error::NotEnoughMemory)?;
         let credential_id = credential
-            .id(&mut self.trussed, kek, Some(&reg.app_id))
+            .id(&mut self.trussed, kek, &reg.app_id)
             .map_err(|_| Error::NotEnoughMemory)?;
 
         let mut commitment = Commitment::new();
@@ -198,7 +176,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let cred = cred.map_err(|_| Error::IncorrectDataParameter)?;
 
-        let key = match &cred.key {
+        let key = match cred.key() {
             Key::WrappedKey(bytes) => {
                 let wrapping_key = self
                     .state
@@ -226,7 +204,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             _ => return Err(Error::IncorrectDataParameter),
         };
 
-        if cred.algorithm != -7 {
+        if cred.algorithm() != -7 {
             info!("Unexpected mechanism for u2f");
             return Err(Error::IncorrectDataParameter);
         }
