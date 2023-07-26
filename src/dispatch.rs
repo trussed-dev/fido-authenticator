@@ -174,10 +174,58 @@ where
     );
 
     // Goal of these nested scopes is to keep stack small.
-    let ctap_request = ctap2::Request::deserialize(data).map_err(|error| error as u8)?;
+    let ctap_request = ctap2::Request::deserialize(data)
+        .map(|request| {
+            info!("Received CTAP2 request {:?}", request_operation(&request));
+            trace!("CTAP2 request: {:?}", request);
+            request
+        })
+        .map_err(|error| {
+            error!("Failed to deserialize CTAP2 request: {:?}", error);
+            trace!("The problematic input data was: {}", hex_str!(data));
+            error as u8
+        })?;
     debug!("2a SP: {:X}", msp());
     use ctap2::Authenticator;
     authenticator
         .call_ctap2(&ctap_request)
-        .map_err(|error| error as u8)
+        .map(|response| {
+            info!("Sending CTAP2 response {:?}", response_operation(&response));
+            trace!("CTAP2 response: {:?}", response);
+            response
+        })
+        .map_err(|error| {
+            info!("CTAP2 error: {:?}", error);
+            error as u8
+        })
+}
+
+#[allow(unused)]
+fn request_operation(request: &ctap2::Request) -> ctap2::Operation {
+    match request {
+        ctap2::Request::MakeCredential(_) => ctap2::Operation::MakeCredential,
+        ctap2::Request::GetAssertion(_) => ctap2::Operation::GetAssertion,
+        ctap2::Request::GetNextAssertion => ctap2::Operation::GetNextAssertion,
+        ctap2::Request::GetInfo => ctap2::Operation::GetInfo,
+        ctap2::Request::ClientPin(_) => ctap2::Operation::ClientPin,
+        ctap2::Request::Reset => ctap2::Operation::Reset,
+        ctap2::Request::CredentialManagement(_) => ctap2::Operation::CredentialManagement,
+        ctap2::Request::Selection => ctap2::Operation::Selection,
+        ctap2::Request::Vendor(operation) => ctap2::Operation::Vendor(*operation),
+    }
+}
+
+#[allow(unused)]
+fn response_operation(request: &ctap2::Response) -> Option<ctap2::Operation> {
+    match request {
+        ctap2::Response::MakeCredential(_) => Some(ctap2::Operation::MakeCredential),
+        ctap2::Response::GetAssertion(_) => Some(ctap2::Operation::GetAssertion),
+        ctap2::Response::GetNextAssertion(_) => Some(ctap2::Operation::GetNextAssertion),
+        ctap2::Response::GetInfo(_) => Some(ctap2::Operation::GetInfo),
+        ctap2::Response::ClientPin(_) => Some(ctap2::Operation::ClientPin),
+        ctap2::Response::Reset => Some(ctap2::Operation::Reset),
+        ctap2::Response::CredentialManagement(_) => Some(ctap2::Operation::CredentialManagement),
+        ctap2::Response::Selection => Some(ctap2::Operation::Selection),
+        ctap2::Response::Vendor => None,
+    }
 }
