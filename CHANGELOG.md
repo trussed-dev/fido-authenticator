@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reject `rk` option in getAssertion ([#31][])
 - Ignore user data with empty ID in getAssertion ([#32][])
 - Allow three instead of two PIN retries per boot ([#35][])
+- Add log messages for requests, responses and errors
 
 [#26]: https://github.com/solokeys/fido-authenticator/issues/26
 [#28]: https://github.com/solokeys/fido-authenticator/issues/28
