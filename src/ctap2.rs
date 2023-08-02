@@ -195,12 +195,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // 7. check pubKeyCredParams algorithm is valid + supported COSE identifier
 
         let mut algorithm: Option<SigningAlgorithm> = None;
-        for param in parameters.pub_key_cred_params.iter() {
-            // Ignore unknown key types
-            if param.key_type != "public-key" {
-                continue;
-            }
-
+        for param in parameters.pub_key_cred_params.0.iter() {
             match param.alg {
                 -7 => {
                     if algorithm.is_none() {
