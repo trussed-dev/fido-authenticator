@@ -8,7 +8,7 @@ pub(crate) use ctap_types::{
     // authenticator::{ctap1, ctap2, Error, Request, Response},
     ctap2::credential_management::CredentialProtectionPolicy,
     sizes::*,
-    webauthn::PublicKeyCredentialDescriptor,
+    webauthn::{PublicKeyCredentialDescriptor, PublicKeyCredentialDescriptorRef},
     Bytes,
     String,
 };
@@ -276,7 +276,7 @@ impl Credential {
     pub fn try_from<UP: UserPresence, T: client::Client + client::Chacha8Poly1305>(
         authnr: &mut Authenticator<UP, T>,
         rp_id_hash: &Bytes<32>,
-        descriptor: &PublicKeyCredentialDescriptor,
+        descriptor: &PublicKeyCredentialDescriptorRef,
     ) -> Result<Self> {
         Self::try_from_bytes(authnr, rp_id_hash, &descriptor.id)
     }

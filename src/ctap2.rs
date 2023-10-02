@@ -1289,7 +1289,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
     fn pin_prechecks(
         &mut self,
         options: &Option<ctap2::AuthenticatorOptions>,
-        pin_auth: &Option<ctap2::PinAuth>,
+        pin_auth: &Option<&ctap2::PinAuth>,
         pin_protocol: &Option<u32>,
         data: &[u8],
     ) -> Result<bool> {
