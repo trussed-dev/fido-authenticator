@@ -45,7 +45,7 @@ trussed = { version = "0.1", features = ["virt"] }
 features = ["dispatch"]
 
 [patch.crates-io]
-ctap-types = { git = "https://github.com/nitrokey/ctap-types.git", rev = "0011b36d2a97779e77ff6f154b08008c9608f904" }
+ctap-types = { git = "https://github.com/nitrokey/ctap-types.git", tag = "v0.1.2-nitrokey.4" }
 ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
 trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "51e68500d7601d04f884f5e95567d14b9018a6cb" }
 serde-indexed = { git = "https://github.com/sosthene-nitrokey/serde-indexed.git", rev = "5005d23cb4ee8622e62188ea0f9466146f851f0d" }

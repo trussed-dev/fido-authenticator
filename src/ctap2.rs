@@ -159,7 +159,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         }
         let uv_performed = self.pin_prechecks(
             &parameters.options,
-            &parameters.pin_auth,
+            parameters.pin_auth.map(AsRef::as_ref),
             &parameters.pin_protocol,
             parameters.client_data_hash.as_ref(),
         )?;
@@ -910,7 +910,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // 1-4.
         let uv_performed = match self.pin_prechecks(
             &parameters.options,
-            &parameters.pin_auth,
+            parameters.pin_auth.map(AsRef::as_ref),
             &parameters.pin_protocol,
             parameters.client_data_hash.as_ref(),
         ) {
@@ -1287,7 +1287,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
     fn pin_prechecks(
         &mut self,
         options: &Option<ctap2::AuthenticatorOptions>,
-        pin_auth: &Option<&ctap2::PinAuth>,
+        pin_auth: Option<&[u8]>,
         pin_protocol: &Option<u32>,
         data: &[u8],
     ) -> Result<bool> {
@@ -1296,7 +1296,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         //
         // the idea is for multi-authnr scenario where platform
         // wants to enforce PIN and needs to figure out which authnrs support PIN
-        if let Some(pin_auth) = pin_auth.as_ref() {
+        if let Some(pin_auth) = pin_auth {
             if pin_auth.len() == 0 {
                 self.up
                     .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
@@ -1344,7 +1344,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                     // error --> PinAuthInvalid
                     self.verify_pin(
                         // unwrap panic ruled out above
-                        pin_auth.as_slice().try_into().unwrap(),
+                        pin_auth.try_into().unwrap(),
                         data,
                     )?;
 
