@@ -1,4 +1,4 @@
-use apdu_dispatch::{app as apdu, response::Data, Command};
+use apdu_dispatch::{app as apdu, dispatch::Interface, response::Data, Command};
 use ctap_types::{serde::error::Error as SerdeError, Error};
 use ctaphid_dispatch::app as ctaphid;
 use iso7816::Status;
@@ -28,7 +28,13 @@ where
     UP: UserPresence,
     T: TrussedRequirements,
 {
-    fn select(&mut self, _: &Command, reply: &mut Data) -> apdu::Result {
+    fn select(&mut self, interface: Interface, _: &Command, reply: &mut Data) -> apdu::Result {
+        // FIDO-over-CCID does not seem to officially be a thing; we don't support it.
+        // If we would, need to review the following cases catering to semi-documented U2F legacy.
+        if interface != apdu::Interface::Contactless {
+            return Err(Status::ConditionsOfUseNotSatisfied);
+        }
+
         reply.extend_from_slice(b"U2F_V2").unwrap();
         Ok(())
     }
