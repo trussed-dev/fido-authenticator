@@ -211,6 +211,7 @@ fn request_operation(request: &ctap2::Request) -> ctap2::Operation {
         ctap2::Request::Reset => ctap2::Operation::Reset,
         ctap2::Request::CredentialManagement(_) => ctap2::Operation::CredentialManagement,
         ctap2::Request::Selection => ctap2::Operation::Selection,
+        ctap2::Request::LargeBlobs(_) => ctap2::Operation::LargeBlobs,
         ctap2::Request::Vendor(operation) => ctap2::Operation::Vendor(*operation),
     }
 }
@@ -226,6 +227,7 @@ fn response_operation(request: &ctap2::Response) -> Option<ctap2::Operation> {
         ctap2::Response::Reset => Some(ctap2::Operation::Reset),
         ctap2::Response::CredentialManagement(_) => Some(ctap2::Operation::CredentialManagement),
         ctap2::Response::Selection => Some(ctap2::Operation::Selection),
+        ctap2::Response::LargeBlobs(_) => Some(ctap2::Operation::LargeBlobs),
         ctap2::Response::Vendor => None,
     }
 }

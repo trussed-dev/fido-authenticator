@@ -50,7 +50,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             .push(String::from_str("FIDO_2_1_PRE").unwrap())
             .unwrap();
 
-        let mut extensions = Vec::<String<11>, 4>::new();
+        let mut extensions = Vec::<String<13>, 4>::new();
         // extensions.push(String::from_str("credProtect").unwrap()).unwrap();
         extensions
             .push(String::from_str("credProtect").unwrap())
@@ -444,6 +444,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     Some(ctap2::make_credential::Extensions {
                         cred_protect: parameters.extensions.as_ref().unwrap().cred_protect,
                         hmac_secret: parameters.extensions.as_ref().unwrap().hmac_secret,
+                        large_blob_key: None,
                     })
                 } else {
                     None
@@ -551,6 +552,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             fmt,
             auth_data: serialized_auth_data,
             att_stmt,
+            ep_att: None,
+            large_blob_key: None,
         };
 
         Ok(attestation_object)
@@ -1526,7 +1529,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             rp_id_hash,
 
             flags: {
-                let mut flags = Flags::EMPTY;
+                let mut flags = Flags::empty();
                 if data.up_performed {
                     flags |= Flags::USER_PRESENCE;
                 }
@@ -1581,6 +1584,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             signature,
             user: None,
             number_of_credentials: num_credentials,
+            user_selected: None,
+            large_blob_key: None,
         };
 
         // User with empty IDs are ignored for compatibility
