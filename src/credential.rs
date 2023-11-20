@@ -226,6 +226,8 @@ pub struct CredentialData {
     pub hmac_secret: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cred_protect: Option<CredentialProtectionPolicy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub large_blob_key: Option<Bytes<32>>,
     // TODO: add `sig_counter: Option<CounterId>`,
     // and grant RKs a per-credential sig-counter.
 
@@ -327,6 +329,7 @@ impl FullCredential {
         timestamp: u32,
         hmac_secret: Option<bool>,
         cred_protect: Option<CredentialProtectionPolicy>,
+        large_blob_key: Option<Bytes<32>>,
         nonce: [u8; 12],
     ) -> Self {
         info!("credential for algorithm {}", algorithm);
@@ -341,6 +344,7 @@ impl FullCredential {
 
             hmac_secret,
             cred_protect,
+            large_blob_key,
 
             use_short_id: Some(true),
         };

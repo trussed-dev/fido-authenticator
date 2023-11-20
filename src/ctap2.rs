@@ -234,12 +234,28 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let mut hmac_secret_requested = None;
         // let mut cred_protect_requested = CredentialProtectionPolicy::Optional;
         let mut cred_protect_requested = None;
+        let mut large_blob_key_requested = false;
         if let Some(extensions) = &parameters.extensions {
             hmac_secret_requested = extensions.hmac_secret;
 
             if let Some(policy) = &extensions.cred_protect {
                 cred_protect_requested =
                     Some(credential::CredentialProtectionPolicy::try_from(*policy)?);
+            }
+
+            if self.config.supports_large_blobs() {
+                if let Some(large_blob_key) = extensions.large_blob_key {
+                    if large_blob_key {
+                        if !rk_requested {
+                            // the largeBlobKey extension is only available for resident keys
+                            return Err(Error::InvalidOption);
+                        }
+                        large_blob_key_requested = true;
+                    } else {
+                        // large_blob_key must be Some(true) or omitted, Some(false) is invalid
+                        return Err(Error::InvalidOption);
+                    }
+                }
             }
         }
 
@@ -343,6 +359,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // store it.
         // TODO: overwrite, error handling with KeyStoreFull
 
+        let large_blob_key = if large_blob_key_requested {
+            Some(Bytes::from_slice(&syscall!(self.trussed.random_bytes(32)).bytes).unwrap())
+        } else {
+            None
+        };
+
         let credential = FullCredential::new(
             credential::CtapVersion::Fido21Pre,
             &parameters.rp,
@@ -352,6 +374,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             self.state.persistent.timestamp(&mut self.trussed)?,
             hmac_secret_requested,
             cred_protect_requested,
+            large_blob_key.clone(),
             nonce,
         );
 
@@ -559,7 +582,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             auth_data: serialized_auth_data,
             att_stmt,
             ep_att: None,
-            large_blob_key: None,
+            large_blob_key,
         };
 
         Ok(attestation_object)
