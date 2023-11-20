@@ -1535,7 +1535,15 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         };
 
         // 8. process any extensions present
+        let mut large_blob_key_requested = false;
         let extensions_output = if let Some(extensions) = &data.extensions {
+            if self.config.supports_large_blobs() {
+                if extensions.large_blob_key == Some(false) {
+                    // large_blob_key must be Some(true) or omitted
+                    return Err(Error::InvalidOption);
+                }
+                large_blob_key_requested = extensions.large_blob_key == Some(true);
+            }
             self.process_assertion_extensions(&data, extensions, &credential, key)?
         } else {
             None
@@ -1631,6 +1639,10 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                         user.display_name = None;
                     }
                     response.user = Some(user);
+                }
+
+                if large_blob_key_requested {
+                    response.large_blob_key = credential.large_blob_key.clone();
                 }
             }
         }
