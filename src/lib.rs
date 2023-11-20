@@ -34,6 +34,8 @@ pub mod constants;
 pub mod credential;
 pub mod state;
 
+pub use ctap2::large_blobs::Config as LargeBlobsConfig;
+
 /// Results with our [`Error`].
 pub type Result<T> = core::result::Result<T, Error>;
 
@@ -78,13 +80,15 @@ pub struct Config {
     pub skip_up_timeout: Option<Duration>,
     /// The maximum number of resident credentials.
     pub max_resident_credential_count: Option<u32>,
-    /// Enable the largeBlobKey extension and the largeBlobs command.
-    pub large_blobs: bool,
+    /// Configuration for the largeBlobKey extension and the largeBlobs command.
+    ///
+    /// If this is `None`, the extension and the command are disabled.
+    pub large_blobs: Option<ctap2::large_blobs::Config>,
 }
 
 impl Config {
     pub fn supports_large_blobs(&self) -> bool {
-        self.large_blobs
+        self.large_blobs.is_some()
     }
 }
 

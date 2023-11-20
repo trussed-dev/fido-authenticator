@@ -18,7 +18,7 @@ use trussed::{
 
 use heapless::binary_heap::{BinaryHeap, Max};
 
-use crate::{cbor_serialize_message, credential::FullCredential, Result};
+use crate::{cbor_serialize_message, credential::FullCredential, ctap2, Result};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CachedCredential {
@@ -234,6 +234,9 @@ pub struct RuntimeState {
     channel: Option<u32>,
     pub cached_rp: Option<CredentialManagementEnumerateRps>,
     pub cached_rk: Option<CredentialManagementEnumerateCredentials>,
+
+    // largeBlob command
+    pub large_blobs: ctap2::large_blobs::State,
 }
 
 // TODO: Plan towards future extensibility

@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Allow three instead of two PIN retries per boot ([#35][])
 - Reduce ID length for new credentials ([#37][])
 - Update apdu-dispatch and reject calls to `select` ([#40][])
+- Implement the `largeBlobKey` extension and the `largeBlobs` command ([#38][])
 
 [#26]: https://github.com/solokeys/fido-authenticator/issues/26
 [#28]: https://github.com/solokeys/fido-authenticator/issues/28
@@ -23,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#35]: https://github.com/solokeys/fido-authenticator/issues/35
 [#37]: https://github.com/solokeys/fido-authenticator/issues/37
 [#40]: https://github.com/nitrokey/fido-authenticator/pull/40
+[#38]: https://github.com/Nitrokey/fido-authenticator/issues/38
 
 ## [0.1.1] - 2022-08-22
 - Fix bug that treated U2F payloads as APDU over APDU in NFC transport @conorpp
