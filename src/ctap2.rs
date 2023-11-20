@@ -58,6 +58,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         extensions
             .push(String::from_str("hmac-secret").unwrap())
             .unwrap();
+        if self.config.supports_large_blobs() {
+            extensions
+                .push(String::from_str("largeBlobKey").unwrap())
+                .unwrap();
+        }
 
         let mut pin_protocols = Vec::<u8, 1>::new();
         pin_protocols.push(1).unwrap();
@@ -74,6 +79,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 false => Some(false),
             },
             credential_mgmt_preview: Some(true),
+            large_blobs: Some(self.config.supports_large_blobs()),
             ..Default::default()
         };
         // options.rk = true;

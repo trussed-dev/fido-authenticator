@@ -78,6 +78,14 @@ pub struct Config {
     pub skip_up_timeout: Option<Duration>,
     /// The maximum number of resident credentials.
     pub max_resident_credential_count: Option<u32>,
+    /// Enable the largeBlobKey extension and the largeBlobs command.
+    pub large_blobs: bool,
+}
+
+impl Config {
+    pub fn supports_large_blobs(&self) -> bool {
+        self.large_blobs
+    }
 }
 
 // impl Default for Config {
