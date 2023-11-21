@@ -1652,7 +1652,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
         // User with empty IDs are ignored for compatibility
         if is_rk {
-            if let Credential::Full(credential) = credential {
+            if let Credential::Full(credential) = &credential {
                 if !credential.user.id.is_empty() {
                     let mut user = credential.user.clone();
                     // User identifiable information (name, DisplayName, icon) MUST not
@@ -1665,10 +1665,14 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                     }
                     response.user = Some(user);
                 }
+            }
 
-                if large_blob_key_requested {
-                    response.large_blob_key = credential.large_blob_key.clone();
-                }
+            if large_blob_key_requested {
+                debug!("Sending largeBlobKey in getAssertion");
+                response.large_blob_key = match credential {
+                    Credential::Stripped(stripped) => stripped.large_blob_key,
+                    Credential::Full(full) => full.data.large_blob_key,
+                };
             }
         }
 

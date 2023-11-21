@@ -450,6 +450,9 @@ pub struct StrippedCredential {
     pub hmac_secret: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cred_protect: Option<CredentialProtectionPolicy>,
+    // TODO: HACK -- remove
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub large_blob_key: Option<Bytes<32>>,
 }
 
 impl StrippedCredential {
@@ -484,6 +487,7 @@ impl From<&FullCredential> for StrippedCredential {
             nonce: credential.nonce.clone(),
             hmac_secret: credential.data.hmac_secret,
             cred_protect: credential.data.cred_protect,
+            large_blob_key: credential.data.large_blob_key.clone(),
         }
     }
 }
