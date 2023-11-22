@@ -45,6 +45,8 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// - Ed25519 and P-256 are the core signature algorithms.
 /// - AES-256, SHA-256 and its HMAC are used within the CTAP protocols.
 /// - ChaCha8Poly1305 is our AEAD of choice, used e.g. for the key handles.
+/// - Some Trussed extensions might be required depending on the activated features, see
+///   [`ExtensionRequirements`][].
 pub trait TrussedRequirements:
     client::Client
     + client::P256
@@ -53,6 +55,7 @@ pub trait TrussedRequirements:
     + client::Sha256
     + client::HmacSha256
     + client::Ed255 // + client::Totp
+    + ExtensionRequirements
 {
 }
 
@@ -64,8 +67,21 @@ impl<T> TrussedRequirements for T where
         + client::Sha256
         + client::HmacSha256
         + client::Ed255 // + client::Totp
+        + ExtensionRequirements
 {
 }
+
+#[cfg(not(feature = "chunked"))]
+pub trait ExtensionRequirements {}
+
+#[cfg(not(feature = "chunked"))]
+impl<T> ExtensionRequirements for T {}
+
+#[cfg(feature = "chunked")]
+pub trait ExtensionRequirements: trussed_staging::streaming::ChunkedClient {}
+
+#[cfg(feature = "chunked")]
+impl<T> ExtensionRequirements for T where T: trussed_staging::streaming::ChunkedClient {}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 /// Externally defined configuration.

@@ -6,6 +6,7 @@ use ctap_types::{
     heapless_bytes::Bytes,
     sizes, Error,
 };
+use sha2::{Digest as _, Sha256};
 
 use trussed::{
     syscall, try_syscall,
@@ -1799,24 +1800,24 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             || request.pin_uv_auth_param.is_some()
             || request.pin_uv_auth_protocol.is_some()
         {
+            error!("length/pin set");
             return Err(Error::InvalidParameter);
         }
         // 3. Validate length
         let Ok(length) = usize::try_from(length) else {
             return Err(Error::InvalidLength);
         };
-        // TODO: *Actually*, the max size would be LARGE_BLOB_MAX_FRAGMENT_LENGTH, but as the
-        // maximum size for the large-blob array is currently 1024, the difference does not matter
-        // -- the table will always fit in one fragment.
         if length > self.config.max_msg_size.saturating_sub(64) {
             return Err(Error::InvalidLength);
         }
         // 4. Validate offset
         let Ok(offset) = usize::try_from(request.offset) else {
+            error!("offset too large");
             return Err(Error::InvalidParameter);
         };
         let stored_length = large_blobs::size(&mut self.trussed, config.location)?;
         if offset > stored_length {
+            error!("offset: {offset}, stored_length: {stored_length}");
             return Err(Error::InvalidParameter);
         };
         // 5. Return requested data
@@ -1838,7 +1839,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             request.length
         );
         // 1. Validate data
-        if data.len() > sizes::LARGE_BLOB_MAX_FRAGMENT_LENGTH {
+        if data.len() > self.config.max_msg_size.saturating_sub(64) {
             return Err(Error::InvalidLength);
         }
         if request.offset == 0 {
@@ -1851,7 +1852,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             let Ok(length) = usize::try_from(length) else {
                 return Err(Error::LargeBlobStorageFull);
             };
-            if length > config.max_size {
+            if length > config.max_size() {
                 return Err(Error::LargeBlobStorageFull);
             }
             // 2.3. Check that length is not too small
@@ -1905,10 +1906,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 .extend_from_slice(&request.offset.to_le_bytes())
                 .unwrap();
             // SHA-256(data)
-            let mut hash_input = Message::new();
-            hash_input.extend_from_slice(&data).unwrap();
-            let hash = syscall!(self.trussed.hash(Mechanism::Sha256, hash_input)).hash;
-            auth_data.extend_from_slice(&hash).unwrap();
+            auth_data.extend_from_slice(&Sha256::digest(&data)).unwrap();
 
             self.verify_pin(&pin_auth, &auth_data)?;
         }
