@@ -31,6 +31,7 @@ use crate::{
 use crate::msp;
 
 pub mod credential_management;
+pub mod large_blobs;
 // pub mod pin;
 
 /// Implement `ctap2::Authenticator` for our Authenticator.
@@ -50,7 +51,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             .push(String::from_str("FIDO_2_1_PRE").unwrap())
             .unwrap();
 
-        let mut extensions = Vec::<String<11>, 4>::new();
+        let mut extensions = Vec::<String<13>, 4>::new();
         // extensions.push(String::from_str("credProtect").unwrap()).unwrap();
         extensions
             .push(String::from_str("credProtect").unwrap())
@@ -58,6 +59,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         extensions
             .push(String::from_str("hmac-secret").unwrap())
             .unwrap();
+        if self.config.supports_large_blobs() {
+            extensions
+                .push(String::from_str("largeBlobKey").unwrap())
+                .unwrap();
+        }
 
         let mut pin_protocols = Vec::<u8, 1>::new();
         pin_protocols.push(1).unwrap();
@@ -74,6 +80,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 false => Some(false),
             },
             credential_mgmt_preview: Some(true),
+            large_blobs: Some(self.config.supports_large_blobs()),
             ..Default::default()
         };
         // options.rk = true;
@@ -228,12 +235,28 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let mut hmac_secret_requested = None;
         // let mut cred_protect_requested = CredentialProtectionPolicy::Optional;
         let mut cred_protect_requested = None;
+        let mut large_blob_key_requested = false;
         if let Some(extensions) = &parameters.extensions {
             hmac_secret_requested = extensions.hmac_secret;
 
             if let Some(policy) = &extensions.cred_protect {
                 cred_protect_requested =
                     Some(credential::CredentialProtectionPolicy::try_from(*policy)?);
+            }
+
+            if self.config.supports_large_blobs() {
+                if let Some(large_blob_key) = extensions.large_blob_key {
+                    if large_blob_key {
+                        if !rk_requested {
+                            // the largeBlobKey extension is only available for resident keys
+                            return Err(Error::InvalidOption);
+                        }
+                        large_blob_key_requested = true;
+                    } else {
+                        // large_blob_key must be Some(true) or omitted, Some(false) is invalid
+                        return Err(Error::InvalidOption);
+                    }
+                }
             }
         }
 
@@ -337,6 +360,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // store it.
         // TODO: overwrite, error handling with KeyStoreFull
 
+        let large_blob_key = if large_blob_key_requested {
+            Some(Bytes::from_slice(&syscall!(self.trussed.random_bytes(32)).bytes).unwrap())
+        } else {
+            None
+        };
+
         let credential = FullCredential::new(
             credential::CtapVersion::Fido21Pre,
             &parameters.rp,
@@ -346,6 +375,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             self.state.persistent.timestamp(&mut self.trussed)?,
             hmac_secret_requested,
             cred_protect_requested,
+            large_blob_key.clone(),
             nonce,
         );
 
@@ -444,6 +474,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     Some(ctap2::make_credential::Extensions {
                         cred_protect: parameters.extensions.as_ref().unwrap().cred_protect,
                         hmac_secret: parameters.extensions.as_ref().unwrap().hmac_secret,
+                        large_blob_key: None,
                     })
                 } else {
                     None
@@ -551,6 +582,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             fmt,
             auth_data: serialized_auth_data,
             att_stmt,
+            ep_att: None,
+            large_blob_key,
         };
 
         Ok(attestation_object)
@@ -576,6 +609,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         syscall!(self
             .trussed
             .remove_dir_all(Location::Internal, PathBuf::from("rk"),));
+
+        // Delete large-blob array
+        large_blobs::reset(&mut self.trussed);
 
         // b. delete persistent state
         self.state.persistent.reset(&mut self.trussed)?;
@@ -990,6 +1026,27 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         };
 
         self.assert_with_credential(num_credentials, credential)
+    }
+
+    #[inline(never)]
+    fn large_blobs(
+        &mut self,
+        request: &ctap2::large_blobs::Request,
+    ) -> Result<ctap2::large_blobs::Response> {
+        let Some(config) = self.config.large_blobs else {
+            return Err(Error::InvalidCommand);
+        };
+
+        // 1. offset is validated by serde
+
+        // 2.-3. Exactly one of get or set must be present
+        match (request.get, request.set) {
+            (None, None) | (Some(_), Some(_)) => Err(Error::InvalidParameter),
+            // 4. Implement get subcommand
+            (Some(get), None) => self.large_blobs_get(request, config, get),
+            // 5. Implement set subcommand
+            (None, Some(set)) => self.large_blobs_set(request, config, set),
+        }
     }
 }
 
@@ -1503,7 +1560,15 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         };
 
         // 8. process any extensions present
+        let mut large_blob_key_requested = false;
         let extensions_output = if let Some(extensions) = &data.extensions {
+            if self.config.supports_large_blobs() {
+                if extensions.large_blob_key == Some(false) {
+                    // large_blob_key must be Some(true) or omitted
+                    return Err(Error::InvalidOption);
+                }
+                large_blob_key_requested = extensions.large_blob_key == Some(true);
+            }
             self.process_assertion_extensions(&data, extensions, &credential, key)?
         } else {
             None
@@ -1526,7 +1591,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             rp_id_hash,
 
             flags: {
-                let mut flags = Flags::EMPTY;
+                let mut flags = Flags::empty();
                 if data.up_performed {
                     flags |= Flags::USER_PRESENCE;
                 }
@@ -1581,11 +1646,13 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             signature,
             user: None,
             number_of_credentials: num_credentials,
+            user_selected: None,
+            large_blob_key: None,
         };
 
         // User with empty IDs are ignored for compatibility
         if is_rk {
-            if let Credential::Full(credential) = credential {
+            if let Credential::Full(credential) = &credential {
                 if !credential.user.id.is_empty() {
                     let mut user = credential.user.clone();
                     // User identifiable information (name, DisplayName, icon) MUST not
@@ -1598,6 +1665,14 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                     }
                     response.user = Some(user);
                 }
+            }
+
+            if large_blob_key_requested {
+                debug!("Sending largeBlobKey in getAssertion");
+                response.large_blob_key = match credential {
+                    Credential::Stripped(stripped) => stripped.large_blob_key,
+                    Credential::Full(full) => full.data.large_blob_key,
+                };
             }
         }
 
@@ -1707,6 +1782,152 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 &maybe_first_remaining_rk.unwrap().path(),
             );
         }
+    }
+
+    fn large_blobs_get(
+        &mut self,
+        request: &ctap2::large_blobs::Request,
+        config: large_blobs::Config,
+        length: u32,
+    ) -> Result<ctap2::large_blobs::Response> {
+        debug!(
+            "large_blobs_get: length = {length}, offset = {}",
+            request.offset
+        );
+        // 1.-2. Validate parameters
+        if request.length.is_some()
+            || request.pin_uv_auth_param.is_some()
+            || request.pin_uv_auth_protocol.is_some()
+        {
+            return Err(Error::InvalidParameter);
+        }
+        // 3. Validate length
+        let Ok(length) = usize::try_from(length) else {
+            return Err(Error::InvalidLength);
+        };
+        // TODO: *Actually*, the max size would be LARGE_BLOB_MAX_FRAGMENT_LENGTH, but as the
+        // maximum size for the large-blob array is currently 1024, the difference does not matter
+        // -- the table will always fit in one fragment.
+        if length > self.config.max_msg_size.saturating_sub(64) {
+            return Err(Error::InvalidLength);
+        }
+        // 4. Validate offset
+        let Ok(offset) = usize::try_from(request.offset) else {
+            return Err(Error::InvalidParameter);
+        };
+        let stored_length = large_blobs::size(&mut self.trussed, config.location)?;
+        if offset > stored_length {
+            return Err(Error::InvalidParameter);
+        };
+        // 5. Return requested data
+        info!("Reading large-blob array from offset {offset}");
+        large_blobs::read_chunk(&mut self.trussed, config.location, offset, length)
+            .map(|data| ctap2::large_blobs::Response { config: Some(data) })
+    }
+
+    fn large_blobs_set(
+        &mut self,
+        request: &ctap2::large_blobs::Request,
+        config: large_blobs::Config,
+        data: &[u8],
+    ) -> Result<ctap2::large_blobs::Response> {
+        debug!(
+            "large_blobs_set: |data| = {}, offset = {}, length = {:?}",
+            data.len(),
+            request.offset,
+            request.length
+        );
+        // 1. Validate data
+        if data.len() > sizes::LARGE_BLOB_MAX_FRAGMENT_LENGTH {
+            return Err(Error::InvalidLength);
+        }
+        if request.offset == 0 {
+            // 2. Calculate expected length and offset
+            // 2.1. Require length
+            let Some(length) = request.length else {
+                return Err(Error::InvalidParameter);
+            };
+            // 2.2. Check that length is not too big
+            let Ok(length) = usize::try_from(length) else {
+                return Err(Error::LargeBlobStorageFull);
+            };
+            if length > config.max_size {
+                return Err(Error::LargeBlobStorageFull);
+            }
+            // 2.3. Check that length is not too small
+            if length < large_blobs::MIN_SIZE {
+                return Err(Error::InvalidParameter);
+            }
+            // 2.4-5. Set expected length and offset
+            self.state.runtime.large_blobs.expected_length = length;
+            self.state.runtime.large_blobs.expected_next_offset = 0;
+        } else {
+            // 3. Validate parameters
+            if request.length.is_some() {
+                return Err(Error::InvalidParameter);
+            }
+        }
+
+        // 4. Validate offset
+        let Ok(offset) = usize::try_from(request.offset) else {
+            return Err(Error::InvalidSeq);
+        };
+        if offset != self.state.runtime.large_blobs.expected_next_offset {
+            return Err(Error::InvalidSeq);
+        }
+
+        // 5. Perform uv
+        // TODO: support alwaysUv
+        if self.state.persistent.pin_is_set() {
+            let Some(pin_uv_auth_param) = request.pin_uv_auth_param else {
+                return Err(Error::PinRequired);
+            };
+            let Some(pin_uv_auth_protocol) = request.pin_uv_auth_protocol else {
+                return Err(Error::PinRequired);
+            };
+            if pin_uv_auth_protocol != 1 {
+                return Err(Error::PinAuthInvalid);
+            }
+            // TODO: check pinUvAuthToken
+            let pin_auth: [u8; 16] = pin_uv_auth_param
+                .as_ref()
+                .try_into()
+                .map_err(|_| Error::PinAuthInvalid)?;
+
+            let mut auth_data: Bytes<70> = Bytes::new();
+            // 32x 0xff
+            auth_data.resize(32, 0xff).unwrap();
+            // h'0c00'
+            auth_data.push(0x0c).unwrap();
+            auth_data.push(0x00).unwrap();
+            // uint32LittleEndian(offset)
+            auth_data
+                .extend_from_slice(&request.offset.to_le_bytes())
+                .unwrap();
+            // SHA-256(data)
+            let mut hash_input = Message::new();
+            hash_input.extend_from_slice(&data).unwrap();
+            let hash = syscall!(self.trussed.hash(Mechanism::Sha256, hash_input)).hash;
+            auth_data.extend_from_slice(&hash).unwrap();
+
+            self.verify_pin(&pin_auth, &auth_data)?;
+        }
+
+        // 6. Validate data length
+        if offset + data.len() > self.state.runtime.large_blobs.expected_length {
+            return Err(Error::InvalidParameter);
+        }
+
+        // 7.-11. Write the buffer
+        info!("Writing large-blob array to offset {offset}");
+        large_blobs::write_chunk(
+            &mut self.trussed,
+            &mut self.state.runtime.large_blobs,
+            config.location,
+            data,
+        )?;
+
+        Ok(ctap2::large_blobs::Response::default())
     }
 }
 

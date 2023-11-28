@@ -453,6 +453,7 @@ where
             credential_id: Some(credential_id.into()),
             public_key: Some(cose_public_key),
             cred_protect,
+            large_blob_key: credential.data.large_blob_key,
             ..Default::default()
         };
 
