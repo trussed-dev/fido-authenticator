@@ -70,7 +70,7 @@ impl<const N: usize> CredentialCacheGeneric<N> {
 
 pub type CredentialCache = CredentialCacheGeneric<MAX_CREDENTIAL_COUNT_IN_LIST>;
 
-#[derive(Clone, Debug, /*uDebug, Eq, PartialEq,*/ serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug)]
 pub struct State {
     /// Batch device identity (aaguid, certificate, key).
     pub identity: Identity,
@@ -218,9 +218,7 @@ pub struct ActiveGetAssertionData {
     pub extensions: Option<ctap_types::ctap2::get_assertion::ExtensionsInput>,
 }
 
-#[derive(
-    Clone, Debug, /*uDebug,*/ Default, /*PartialEq,*/ serde::Deserialize, serde::Serialize,
-)]
+#[derive(Clone, Debug, Default)]
 pub struct RuntimeState {
     key_agreement_key: Option<KeyId>,
     pin_token: Option<KeyId>,
