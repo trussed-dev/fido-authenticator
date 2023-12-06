@@ -226,8 +226,6 @@ pub struct CredentialData {
     pub hmac_secret: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cred_protect: Option<CredentialProtectionPolicy>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub large_blob_key: Option<Bytes<32>>,
     // TODO: add `sig_counter: Option<CounterId>`,
     // and grant RKs a per-credential sig-counter.
 
@@ -237,6 +235,10 @@ pub struct CredentialData {
     // used as a marker for new credentials.
     #[serde(skip_serializing_if = "Option::is_none")]
     use_short_id: Option<bool>,
+
+    // extensions (cont. -- we can only append new options due to index-based deserialization)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub large_blob_key: Option<Bytes<32>>,
 }
 
 // TODO: figure out sizes
@@ -521,6 +523,7 @@ mod test {
             hmac_secret: Some(false),
             cred_protect: None,
             use_short_id: Some(true),
+            large_blob_key: Some(Bytes::from_slice(&[0xff; 32]).unwrap()),
         }
     }
 
@@ -599,6 +602,7 @@ mod test {
             hmac_secret: Some(false),
             cred_protect: None,
             use_short_id: Some(true),
+            large_blob_key: Some(random_bytes()),
         }
     }
 
@@ -680,6 +684,7 @@ mod test {
             nonce: Bytes::from_slice(&[u8::MAX; 12]).unwrap(),
             hmac_secret: Some(true),
             cred_protect: Some(CredentialProtectionPolicy::Required),
+            large_blob_key: Some(Bytes::from_slice(&[0xff; 32]).unwrap()),
         };
         trussed::virt::with_ram_client("fido", |mut client| {
             let kek = syscall!(client.generate_chacha8poly1305_key(Location::Internal)).key;
@@ -688,7 +693,7 @@ mod test {
                 .to_bytes()
                 .unwrap();
             let id = credential.id(&mut client, kek, &rp_id_hash).unwrap();
-            assert_eq!(id.0.len(), 204);
+            assert_eq!(id.0.len(), 239);
         });
     }
 
