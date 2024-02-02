@@ -18,6 +18,8 @@
 extern crate delog;
 generate_macros!();
 
+pub use state::migrate;
+
 use core::time::Duration;
 
 use trussed_core::{
@@ -161,13 +163,16 @@ where
 }
 
 // EWW.. this is a bit unsafe isn't it
-fn format_hex(data: &[u8], mut buffer: &mut [u8]) {
+fn format_hex<'a>(data: &[u8], buffer: &'a mut [u8]) -> &'a str {
     const HEX_CHARS: &[u8] = b"0123456789abcdef";
-    for byte in data.iter() {
-        buffer[0] = HEX_CHARS[(byte >> 4) as usize];
-        buffer[1] = HEX_CHARS[(byte & 0xf) as usize];
-        buffer = &mut buffer[2..];
+    assert!(data.len() * 2 >= buffer.len());
+    for (idx, byte) in data.iter().enumerate() {
+        buffer[idx * 2] = HEX_CHARS[(byte >> 4) as usize];
+        buffer[idx * 2 + 1] = HEX_CHARS[(byte & 0xf) as usize];
     }
+
+    // SAFETY: we just added only ascii chars to buffer from 0 to data.len() - 1
+    unsafe { core::str::from_utf8_unchecked(&buffer[0..data.len() * 2]) }
 }
 
 // NB: to actually use this, replace the constant implementation with the inline assembly.
@@ -334,4 +339,14 @@ where
 }
 
 #[cfg(test)]
-mod test {}
+mod test {
+    use super::*;
+
+    #[test]
+    fn hex() {
+        let data = [0x01, 0x02, 0xB1, 0xA1];
+        let buffer = &mut [0; 8];
+        assert_eq!(format_hex(&data, buffer), "0102b1a1");
+        assert_eq!(buffer, b"0102b1a1");
+    }
+}

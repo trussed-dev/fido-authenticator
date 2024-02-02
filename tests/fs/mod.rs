@@ -31,13 +31,7 @@ impl Entries {
     }
 
     pub fn try_remove_rks(&mut self) -> usize {
-        let n = self.0.len();
-        self.0.retain(|path, _| {
-            let (start, _) = path.rsplit_once('/').unwrap();
-            let start = start.rsplit_once('/').map(|(start, _)| start);
-            start != Some("fido/dat/rk")
-        });
-        n - self.0.len()
+        self.try_remove_dir("fido/dat/rk")
     }
 
     pub fn try_remove_dir(&mut self, dir: &str) -> usize {

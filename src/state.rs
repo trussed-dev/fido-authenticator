@@ -2,6 +2,10 @@
 //!
 //! Needs cleanup.
 
+pub mod migrate;
+
+use core::num::NonZeroU32;
+
 use ctap_types::{
     ctap2::AttestationFormatsPreference,
     // 2022-02-27: 10 credentials
@@ -200,14 +204,13 @@ impl Identity {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CredentialManagementEnumerateRps {
-    pub remaining: u32,
+    pub remaining: NonZeroU32,
     pub rp_id_hash: [u8; 32],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CredentialManagementEnumerateCredentials {
     pub remaining: u32,
-    pub rp_dir: PathBuf,
     pub prev_filename: PathBuf,
 }
 
@@ -251,7 +254,7 @@ pub struct RuntimeState {
 // Currently, this causes the entire authnr to reset state. Maybe it should even reformat disk
 //
 // - An alternative would be `heapless::Map`, but I'd prefer something more typed.
-#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, Default)]
 pub struct PersistentState {
     #[serde(skip)]
     // TODO: there has to be a better way than.. this
@@ -288,15 +291,15 @@ impl PersistentState {
 
         let data = result.unwrap().data;
 
-        let result = cbor_smol::cbor_deserialize(&data);
-
-        if result.is_err() {
-            info!("err deser'ing: {:?}", result.err().unwrap());
+        let state: Self = cbor_smol::cbor_deserialize(&data).map_err(|_err| {
+            info!("err deser'ing: {_err:?}",);
             info!("{}", hex_str!(&data));
-            return Err(Error::Other);
-        }
+            Error::Other
+        })?;
 
-        result.map_err(|_| Error::Other)
+        debug!("Loaded state: {state:#?}");
+
+        Ok(state)
     }
 
     pub fn save<T: FilesystemClient>(&self, trussed: &mut T) -> Result<()> {

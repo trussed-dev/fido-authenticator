@@ -31,6 +31,8 @@ impl<'a> CredMgmt<'a> {
         self.authenticator
             .make_credential(rp.clone(), user.clone())
             .inspect(|credential_data| {
+                self.credentials
+                    .retain(|(old_rp, old_user, _)| old_rp != &rp || old_user != &user);
                 self.credentials.push((rp, user, credential_data.clone()));
             })
     }
@@ -163,6 +165,32 @@ fn test_list_credentials_multi() {
                 cred_mgmt.make_credential(rp.clone(), user).unwrap();
             }
         }
+
+        cred_mgmt.list();
+    })
+}
+
+#[test]
+fn test_list_credentials_overwrite() {
+    let options = Options {
+        inspect_ifs: Some(Box::new(move |ifs| {
+            let mut files = list_fs(ifs);
+            files.remove_standard();
+            files.remove_state();
+            assert_eq!(files.try_remove_keys(), 2);
+            assert_eq!(files.try_remove_rks(), 1);
+            files.assert_empty();
+        })),
+        ..Default::default()
+    };
+
+    virt::run_ctap2_with_options(options, |device| {
+        let authenticator = Authenticator::new(device).set_pin(b"123456");
+        let mut cred_mgmt = CredMgmt::new(authenticator);
+        let rp = generate_rp(0);
+        let user = generate_user(0);
+        cred_mgmt.make_credential(rp.clone(), user.clone()).unwrap();
+        cred_mgmt.make_credential(rp, user).unwrap();
 
         cred_mgmt.list();
     })
@@ -339,7 +367,7 @@ fn test_filesystem_full() {
         max_resident_credential_count: Some(10),
         inspect_ifs: Some(Box::new(|ifs| {
             let blocks = ifs.available_blocks().unwrap();
-            assert!(blocks < 5, "{blocks}");
+            assert!(blocks < 10, "{blocks}");
             assert!(blocks > 1, "{blocks}");
         })),
         ..Default::default()
@@ -374,11 +402,12 @@ fn test_filesystem_full() {
             i += 1;
         }
 
-        // We should be able to create at least 1 but not more than n credentials.
-        assert!(i > 0);
-        assert!(i < n);
-        // Our estimate should not be more than one credential off.
-        assert!(n - i <= 1);
+        // We should be able to create at least one credential.
+        assert!(i > 0, "i = {i}");
+        // Our estimate should not be too low.
+        assert!(i >= n, "i = {i}, n = {n}");
+        // Our estime should not be more than five credentials too high.
+        assert!(i <= n + 5, "i = {i}, n = {n}");
 
         let metadata = authenticator.credentials_metadata();
         assert_eq!(metadata.existing, i);
@@ -392,7 +421,7 @@ fn test_filesystem_full_update_user() {
         max_resident_credential_count: Some(10),
         inspect_ifs: Some(Box::new(|ifs| {
             let blocks = ifs.available_blocks().unwrap();
-            assert!(blocks < 5, "{blocks}");
+            assert!(blocks < 10, "{blocks}");
             assert!(blocks > 1, "{blocks}");
         })),
         ..Default::default()
