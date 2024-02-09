@@ -10,6 +10,10 @@ description = "FIDO authenticator Trussed app"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[example]]
+name = "usbip"
+required-features = ["trussed/virt", "dispatch"]
+
 [dependencies]
 ctap-types = { version = "0.1.0", features = ["large-blobs"] }
 delog = "0.1.0"
@@ -41,9 +45,12 @@ log-warn = []
 log-error = []
 
 [dev-dependencies]
+env_logger = "0.11.0"
 # quickcheck = "1"
 rand = "0.8.4"
 trussed = { version = "0.1", features = ["virt"] }
+trussed-usbip = { version = "0.0.1", default-features = false, features = ["ctaphid"] }
+usbd-ctaphid = "0.1.0"
 
 [package.metadata.docs.rs]
 features = ["dispatch"]
@@ -55,3 +62,5 @@ apdu-dispatch = { git = "https://github.com/trussed-dev/apdu-dispatch.git", rev 
 trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b1781805a2e33615d2d00b8bec80c0b1f5870ca1" }
 trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging", rev = "3b9594d93f89a5e760fe78fa5a96f125dfdcd470" }
 serde-indexed = { git = "https://github.com/sosthene-nitrokey/serde-indexed.git", rev = "5005d23cb4ee8622e62188ea0f9466146f851f0d" }
+trussed-usbip = { git = "https://github.com/Nitrokey/pc-usbip-runner.git", tag = "v0.0.1-nitrokey.1" }
+usbd-ctaphid = { git = "https://github.com/Nitrokey/usbd-ctaphid.git", tag = "v0.1.0-nitrokey.2" }
