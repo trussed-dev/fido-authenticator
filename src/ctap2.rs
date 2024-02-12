@@ -1753,7 +1753,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                         user.name = None;
                         user.display_name = None;
                     }
-                    response.user = Some(user);
+                    response.user = Some(user.into());
                 }
             }
 

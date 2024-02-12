@@ -205,15 +205,104 @@ impl Credential {
     }
 }
 
+/// Copy of [`ctap_types::webauthn::PublicKeyCredentialUserEntity`] but with shorter field names serialization
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LocalPublicKeyCredentialRpEntity {
+    #[serde(rename = "i", alias = "id")]
+    pub id: String<256>,
+    // Compared to the ctap_types type, we can skip the truncate,
+    // since we know we only even deal with the correct length
+    #[serde(skip_serializing_if = "Option::is_none", rename = "n", alias = "name")]
+    pub name: Option<String<64>>,
+    // Icon is ignored
+}
+/// Copy of [`ctap_types::webauthn::PublicKeyCredentialUserEntity`] but with with shorter field names serialization
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LocalPublicKeyCredentialUserEntity {
+    #[serde(rename = "i", alias = "id")]
+    pub id: Bytes<64>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "I", alias = "icon")]
+    pub icon: Option<String<128>>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "n", alias = "name")]
+    pub name: Option<String<64>>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "d",
+        alias = "display_name"
+    )]
+    pub display_name: Option<String<64>>,
+}
+
+impl From<ctap_types::webauthn::PublicKeyCredentialRpEntity> for LocalPublicKeyCredentialRpEntity {
+    fn from(value: ctap_types::webauthn::PublicKeyCredentialRpEntity) -> Self {
+        let ctap_types::webauthn::PublicKeyCredentialRpEntity { id, name, icon } = value;
+        let _icon = icon;
+
+        Self { id, name }
+    }
+}
+
+impl From<LocalPublicKeyCredentialRpEntity> for ctap_types::webauthn::PublicKeyCredentialRpEntity {
+    fn from(value: LocalPublicKeyCredentialRpEntity) -> Self {
+        let LocalPublicKeyCredentialRpEntity { id, name } = value;
+
+        Self {
+            id,
+            name,
+            icon: None,
+        }
+    }
+}
+
+impl From<ctap_types::webauthn::PublicKeyCredentialUserEntity>
+    for LocalPublicKeyCredentialUserEntity
+{
+    fn from(value: ctap_types::webauthn::PublicKeyCredentialUserEntity) -> Self {
+        let ctap_types::webauthn::PublicKeyCredentialUserEntity {
+            id,
+            icon,
+            name,
+            display_name,
+        } = value;
+
+        Self {
+            id,
+            icon,
+            name,
+            display_name,
+        }
+    }
+}
+
+impl From<LocalPublicKeyCredentialUserEntity>
+    for ctap_types::webauthn::PublicKeyCredentialUserEntity
+{
+    fn from(value: LocalPublicKeyCredentialUserEntity) -> Self {
+        let LocalPublicKeyCredentialUserEntity {
+            id,
+            icon,
+            name,
+            display_name,
+        } = value;
+
+        Self {
+            id,
+            icon,
+            name,
+            display_name,
+        }
+    }
+}
+
 /// The main content of a `FullCredential`.
 #[derive(
     Clone, Debug, PartialEq, serde_indexed::DeserializeIndexed, serde_indexed::SerializeIndexed,
 )]
 pub struct CredentialData {
     // id, name, url
-    pub rp: ctap_types::webauthn::PublicKeyCredentialRpEntity,
+    pub rp: LocalPublicKeyCredentialRpEntity,
     // id, icon, name, display_name
-    pub user: ctap_types::webauthn::PublicKeyCredentialUserEntity,
+    pub user: LocalPublicKeyCredentialUserEntity,
 
     // can be just a counter, need to be able to determine "latest"
     pub creation_time: u32,
@@ -347,8 +436,8 @@ impl FullCredential {
     ) -> Self {
         info!("credential for algorithm {}", algorithm);
         let data = CredentialData {
-            rp: rp.clone(),
-            user: user.clone(),
+            rp: rp.clone().into(),
+            user: user.clone().into(),
 
             creation_time: timestamp,
             use_counter: true,
@@ -435,7 +524,6 @@ impl FullCredential {
         let data = &mut stripped.data;
 
         data.rp.name = None;
-        data.rp.icon = None;
 
         data.user.icon = None;
         data.user.name = None;
@@ -513,7 +601,6 @@ impl From<&FullCredential> for StrippedCredential {
 #[cfg(test)]
 mod test {
     use super::*;
-    use ctap_types::webauthn::{PublicKeyCredentialRpEntity, PublicKeyCredentialUserEntity};
     use trussed::{
         client::{Chacha8Poly1305, Sha256},
         types::Location,
@@ -521,12 +608,11 @@ mod test {
 
     fn credential_data() -> CredentialData {
         CredentialData {
-            rp: PublicKeyCredentialRpEntity {
+            rp: LocalPublicKeyCredentialRpEntity {
                 id: String::from("John Doe"),
                 name: None,
-                icon: None,
             },
-            user: PublicKeyCredentialUserEntity {
+            user: LocalPublicKeyCredentialUserEntity {
                 id: Bytes::from_slice(&[1, 2, 3]).unwrap(),
                 icon: None,
                 name: None,
@@ -608,12 +694,11 @@ mod test {
 
     fn random_credential_data() -> CredentialData {
         CredentialData {
-            rp: PublicKeyCredentialRpEntity {
+            rp: LocalPublicKeyCredentialRpEntity {
                 id: random_string(),
                 name: maybe_random_string(),
-                icon: None,
             },
-            user: PublicKeyCredentialUserEntity {
+            user: LocalPublicKeyCredentialUserEntity {
                 id: random_bytes(), //Bytes::from_slice(&[1,2,3]).unwrap(),
                 icon: maybe_random_string(),
                 name: maybe_random_string(),
@@ -722,6 +807,308 @@ mod test {
             let id = credential.id(&mut client, kek, &rp_id_hash).unwrap();
             assert_eq!(id.0.len(), 241);
         });
+    }
+
+    #[test]
+    fn local_derive_rp_name_none() {
+        use serde_test::{assert_de_tokens, assert_tokens, Token};
+        let rp_id = LocalPublicKeyCredentialRpEntity {
+            id: "Testing rp id".into(),
+            name: None,
+        };
+
+        assert_tokens(
+            &rp_id,
+            &[
+                Token::Struct {
+                    name: "LocalPublicKeyCredentialRpEntity",
+                    len: 1,
+                },
+                Token::Str("i"),
+                Token::Str("Testing rp id"),
+                Token::StructEnd,
+            ],
+        );
+        assert_de_tokens(
+            &rp_id,
+            &[
+                Token::Map { len: Some(1) },
+                Token::Str("id"),
+                Token::Str("Testing rp id"),
+                Token::MapEnd,
+            ],
+        );
+    }
+
+    #[test]
+    fn local_derive_rp_name_some() {
+        use serde_test::{assert_de_tokens, assert_tokens, Token};
+        let rp_id = LocalPublicKeyCredentialRpEntity {
+            id: "Testing rp id".into(),
+            name: Some("Testing rp name".into()),
+        };
+
+        assert_tokens(
+            &rp_id,
+            &[
+                Token::Struct {
+                    name: "LocalPublicKeyCredentialRpEntity",
+                    len: 2,
+                },
+                Token::Str("i"),
+                Token::Str("Testing rp id"),
+                Token::Str("n"),
+                Token::Some,
+                Token::Str("Testing rp name"),
+                Token::StructEnd,
+            ],
+        );
+        assert_de_tokens(
+            &rp_id,
+            &[
+                Token::Map { len: Some(2) },
+                Token::Str("id"),
+                Token::Str("Testing rp id"),
+                Token::Str("name"),
+                Token::Some,
+                Token::Str("Testing rp name"),
+                Token::MapEnd,
+            ],
+        );
+    }
+
+    #[test]
+    fn local_derive_user() {
+        use serde_test::{assert_de_tokens, assert_tokens, Token};
+
+        let rp_id = LocalPublicKeyCredentialUserEntity {
+            id: Bytes::from_slice(b"Testing user id").unwrap(),
+            icon: Some("Testing user icon".into()),
+            name: Some("Testing user name".into()),
+            display_name: Some("Testing user display_name".into()),
+        };
+        assert_tokens(
+            &rp_id,
+            &[
+                Token::Struct {
+                    name: "LocalPublicKeyCredentialUserEntity",
+                    len: 4,
+                },
+                Token::Str("i"),
+                Token::Bytes(b"Testing user id"),
+                Token::Str("I"),
+                Token::Some,
+                Token::Str("Testing user icon"),
+                Token::Str("n"),
+                Token::Some,
+                Token::Str("Testing user name"),
+                Token::Str("d"),
+                Token::Some,
+                Token::Str("Testing user display_name"),
+                Token::StructEnd,
+            ],
+        );
+        assert_de_tokens(
+            &rp_id,
+            &[
+                Token::Struct {
+                    name: "LocalPublicKeyCredentialUserEntity",
+                    len: 4,
+                },
+                Token::Str("id"),
+                Token::Bytes(b"Testing user id"),
+                Token::Str("icon"),
+                Token::Some,
+                Token::Str("Testing user icon"),
+                Token::Str("name"),
+                Token::Some,
+                Token::Str("Testing user name"),
+                Token::Str("display_name"),
+                Token::Some,
+                Token::Str("Testing user display_name"),
+                Token::StructEnd,
+            ],
+        );
+
+        let rp_id = LocalPublicKeyCredentialUserEntity {
+            id: Bytes::from_slice(b"Testing user id").unwrap(),
+            icon: None,
+            name: None,
+            display_name: Some("Testing user display_name".into()),
+        };
+        assert_tokens(
+            &rp_id,
+            &[
+                Token::Struct {
+                    name: "LocalPublicKeyCredentialUserEntity",
+                    len: 2,
+                },
+                Token::Str("i"),
+                Token::Bytes(b"Testing user id"),
+                Token::Str("d"),
+                Token::Some,
+                Token::Str("Testing user display_name"),
+                Token::StructEnd,
+            ],
+        );
+        assert_de_tokens(
+            &rp_id,
+            &[
+                Token::Struct {
+                    name: "LocalPublicKeyCredentialUserEntity",
+                    len: 2,
+                },
+                Token::Str("id"),
+                Token::Bytes(b"Testing user id"),
+                Token::Str("display_name"),
+                Token::Some,
+                Token::Str("Testing user display_name"),
+                Token::StructEnd,
+            ],
+        );
+
+        let rp_id = LocalPublicKeyCredentialUserEntity {
+            id: Bytes::from_slice(b"Testing user id").unwrap(),
+            icon: Some("Testing user icon".into()),
+            name: None,
+            display_name: Some("Testing user display_name".into()),
+        };
+        assert_tokens(
+            &rp_id,
+            &[
+                Token::Struct {
+                    name: "LocalPublicKeyCredentialUserEntity",
+                    len: 3,
+                },
+                Token::Str("i"),
+                Token::Bytes(b"Testing user id"),
+                Token::Str("I"),
+                Token::Some,
+                Token::Str("Testing user icon"),
+                Token::Str("d"),
+                Token::Some,
+                Token::Str("Testing user display_name"),
+                Token::StructEnd,
+            ],
+        );
+        assert_de_tokens(
+            &rp_id,
+            &[
+                Token::Map { len: Some(3) },
+                Token::Str("id"),
+                Token::Bytes(b"Testing user id"),
+                Token::Str("icon"),
+                Token::Some,
+                Token::Str("Testing user icon"),
+                Token::Str("display_name"),
+                Token::Some,
+                Token::Str("Testing user display_name"),
+                Token::MapEnd,
+            ],
+        );
+
+        let rp_id = LocalPublicKeyCredentialUserEntity {
+            id: Bytes::from_slice(b"Testing user id").unwrap(),
+            icon: Some("Testing user icon".into()),
+            name: None,
+            display_name: None,
+        };
+        assert_tokens(
+            &rp_id,
+            &[
+                Token::Struct {
+                    name: "LocalPublicKeyCredentialUserEntity",
+                    len: 2,
+                },
+                Token::Str("i"),
+                Token::Bytes(b"Testing user id"),
+                Token::Str("I"),
+                Token::Some,
+                Token::Str("Testing user icon"),
+                Token::StructEnd,
+            ],
+        );
+        assert_de_tokens(
+            &rp_id,
+            &[
+                Token::Map { len: Some(2) },
+                Token::Str("id"),
+                Token::Bytes(b"Testing user id"),
+                Token::Str("icon"),
+                Token::Some,
+                Token::Str("Testing user icon"),
+                Token::MapEnd,
+            ],
+        );
+
+        let rp_id = LocalPublicKeyCredentialUserEntity {
+            id: Bytes::from_slice(b"Testing user id").unwrap(),
+            icon: None,
+            name: None,
+            display_name: None,
+        };
+        assert_tokens(
+            &rp_id,
+            &[
+                Token::Struct {
+                    name: "LocalPublicKeyCredentialUserEntity",
+                    len: 1,
+                },
+                Token::Str("i"),
+                Token::Bytes(b"Testing user id"),
+                Token::StructEnd,
+            ],
+        );
+        assert_de_tokens(
+            &rp_id,
+            &[
+                Token::Map { len: Some(1) },
+                Token::Str("id"),
+                Token::Bytes(b"Testing user id"),
+                Token::MapEnd,
+            ],
+        );
+    }
+
+    // Test credentials that were serialized before the migration to shorter field names for serialization
+    #[test]
+    fn legacy_full_credential() {
+        use hex_literal::hex;
+        let data = hex!(
+            "
+            a3000201a700a16269646b776562617574686e2e696f01a2626964476447
+            567a644445646e616d65657465737431020003f504260582005037635754
+            c9882b21565a9f8a47b0ece408f5024cf62ca01ed181a3d03d561fc7
+        "
+        );
+
+        let credential = FullCredential::deserialize(&Bytes::from_slice(&data).unwrap()).unwrap();
+        assert!(matches!(credential.ctap, CtapVersion::Fido21Pre));
+        assert_eq!(credential.nonce, &hex!("F62CA01ED181A3D03D561FC7"));
+        assert_eq!(
+            credential.data,
+            CredentialData {
+                rp: LocalPublicKeyCredentialRpEntity {
+                    id: "webauthn.io".into(),
+                    name: None,
+                },
+                user: LocalPublicKeyCredentialUserEntity {
+                    id: Bytes::from_slice(&hex!("6447567A644445")).unwrap(),
+                    icon: None,
+                    name: Some("test1".into()),
+                    display_name: None,
+                },
+                creation_time: 0,
+                use_counter: true,
+                algorithm: -7,
+                key: Key::ResidentKey(KeyId::from_value(0x37635754C9882B21565A9F8A47B0ECE4)),
+                hmac_secret: None,
+                cred_protect: None,
+                use_short_id: Some(true),
+                large_blob_key: None,
+                third_party_payment: None,
+            },
+        );
     }
 
     // use quickcheck::TestResult;
