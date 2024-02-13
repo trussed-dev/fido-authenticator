@@ -1134,7 +1134,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 .trussed
                 .read_dir_first(Location::Internal, rp_rk_dir(rp_id_hash), None,))
             .entry
-            .map(|entry| PathBuf::try_from(entry.path()).unwrap());
+            .map(|entry| PathBuf::from(entry.path()));
 
         use crate::state::CachedCredential;
         use core::str::FromStr;
@@ -1156,7 +1156,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
             maybe_path = syscall!(self.trussed.read_dir_next())
                 .entry
-                .map(|entry| PathBuf::try_from(entry.path()).unwrap());
+                .map(|entry| PathBuf::from(entry.path()));
         }
 
         let num_credentials = self.state.runtime.remaining_credentials();
@@ -1355,7 +1355,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         // the idea is for multi-authnr scenario where platform
         // wants to enforce PIN and needs to figure out which authnrs support PIN
         if let Some(pin_auth) = pin_auth {
-            if pin_auth.len() == 0 {
+            if pin_auth.is_empty() {
                 self.up
                     .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
                 if !self.state.persistent.pin_is_set() {
@@ -1906,7 +1906,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 .extend_from_slice(&request.offset.to_le_bytes())
                 .unwrap();
             // SHA-256(data)
-            auth_data.extend_from_slice(&Sha256::digest(&data)).unwrap();
+            auth_data.extend_from_slice(&Sha256::digest(data)).unwrap();
 
             self.verify_pin(&pin_auth, &auth_data)?;
         }
