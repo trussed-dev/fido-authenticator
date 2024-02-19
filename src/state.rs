@@ -402,7 +402,7 @@ impl PersistentState {
     }
 
     pub fn retries(&self) -> u8 {
-        Self::RESET_RETRIES - self.consecutive_pin_mismatches
+        Self::RESET_RETRIES.saturating_sub(self.consecutive_pin_mismatches)
     }
 
     pub fn pin_blocked(&self) -> bool {

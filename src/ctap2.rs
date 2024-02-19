@@ -1185,12 +1185,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             self.state
                 .runtime
                 .rotate_key_agreement_key(&mut self.trussed);
-            if self.state.persistent.retries() == 0 {
-                return Err(Error::PinBlocked);
-            }
-            if self.state.persistent.pin_blocked() {
-                return Err(Error::PinAuthBlocked);
-            }
+            self.state.pin_blocked()?;
             return Err(Error::PinInvalid);
         }
 
