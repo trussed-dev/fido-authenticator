@@ -3,7 +3,7 @@
 use core::convert::TryFrom;
 
 use trussed::{
-    syscall,
+    syscall, try_syscall,
     types::{DirEntry, Location, Path, PathBuf},
 };
 
@@ -11,7 +11,7 @@ use ctap_types::{
     cose::PublicKey,
     ctap2::credential_management::{CredentialProtectionPolicy, Response},
     heapless_bytes::Bytes,
-    webauthn::PublicKeyCredentialDescriptor,
+    webauthn::{PublicKeyCredentialDescriptor, PublicKeyCredentialUserEntity},
     Error,
 };
 
@@ -460,22 +460,27 @@ where
         Ok(response)
     }
 
-    pub fn delete_credential(
-        &mut self,
-        credential_descriptor: &PublicKeyCredentialDescriptor,
-    ) -> Result<Response> {
-        info!("delete credential");
-        let credential_id_hash = self.hash(&credential_descriptor.id[..]);
+    fn find_credential(&mut self, credential: &PublicKeyCredentialDescriptor) -> Option<PathBuf> {
+        let credential_id_hash = self.hash(&credential.id[..]);
         let mut hex = [b'0'; 16];
         super::format_hex(&credential_id_hash[..8], &mut hex);
         let dir = PathBuf::from(b"rk");
         let filename = PathBuf::from(&hex);
 
-        let rk_path = syscall!(self
+        syscall!(self
             .trussed
             .locate_file(Location::Internal, Some(dir), filename,))
         .path
-        .ok_or(Error::InvalidCredential)?;
+    }
+
+    pub fn delete_credential(
+        &mut self,
+        credential_descriptor: &PublicKeyCredentialDescriptor,
+    ) -> Result<Response> {
+        info!("delete credential");
+        let rk_path = self
+            .find_credential(credential_descriptor)
+            .ok_or(Error::InvalidCredential)?;
 
         // DELETE
         self.delete_resident_key_by_path(&rk_path)?;
@@ -490,5 +495,50 @@ where
         // just return OK
         let response = Default::default();
         Ok(response)
+    }
+
+    pub fn update_user_information(
+        &mut self,
+        credential_descriptor: &PublicKeyCredentialDescriptor,
+        user: &PublicKeyCredentialUserEntity,
+    ) -> Result<Response> {
+        info!("update user information");
+
+        // locate and parse existing credential
+        let rk_path = self
+            .find_credential(credential_descriptor)
+            .ok_or(Error::NoCredentials)?;
+        let serialized = syscall!(self.trussed.read_file(Location::Internal, rk_path.clone())).data;
+        let mut credential =
+            FullCredential::deserialize(&serialized).map_err(|_| Error::InvalidCredential)?;
+
+        // TODO: check remaining space, return KeyStoreFull
+
+        // the updated user ID must match the stored user ID
+        if credential.user.id != user.id {
+            error!("updated user ID does not match original user ID");
+            return Err(Error::InvalidParameter);
+        }
+
+        // update user name and display name unless the values are not set or empty
+        credential.data.user.name = user
+            .name
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(Clone::clone);
+        credential.data.user.display_name = user
+            .display_name
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(Clone::clone);
+
+        // write updated credential
+        let serialized = credential.serialize()?;
+        try_syscall!(self
+            .trussed
+            .write_file(Location::Internal, rk_path, serialized, None))
+        .map_err(|_| Error::KeyStoreFull)?;
+
+        Ok(Default::default())
     }
 }

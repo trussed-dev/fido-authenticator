@@ -990,7 +990,19 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }
 
             // 0x7
-            Subcommand::UpdateUserInformation => Err(Error::InvalidParameter),
+            Subcommand::UpdateUserInformation => {
+                let sub_parameters = sub_parameters.as_ref().ok_or(Error::MissingParameter)?;
+                let credential_id = sub_parameters
+                    .credential_id
+                    .as_ref()
+                    .ok_or(Error::MissingParameter)?;
+                let user = sub_parameters
+                    .user
+                    .as_ref()
+                    .ok_or(Error::MissingParameter)?;
+
+                cred_mgmt.update_user_information(credential_id, user)
+            }
         }
     }
 
@@ -1338,7 +1350,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             sub_command @ Subcommand::GetCredsMetadata
             | sub_command @ Subcommand::EnumerateRpsBegin
             | sub_command @ Subcommand::EnumerateCredentialsBegin
-            | sub_command @ Subcommand::DeleteCredential => {
+            | sub_command @ Subcommand::DeleteCredential
+            | sub_command @ Subcommand::UpdateUserInformation => {
                 // check pinProtocol
                 let pin_protocol = parameters
                     // .sub_command_params.as_ref().ok_or(Error::MissingParameter)?
@@ -1350,7 +1363,9 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 let mut data: Bytes<{ sizes::MAX_CREDENTIAL_ID_LENGTH_PLUS_256 }> =
                     Bytes::from_slice(&[sub_command as u8]).unwrap();
                 let len = 1 + match sub_command {
-                    Subcommand::EnumerateCredentialsBegin | Subcommand::DeleteCredential => {
+                    Subcommand::EnumerateCredentialsBegin
+                    | Subcommand::DeleteCredential
+                    | Subcommand::UpdateUserInformation => {
                         data.resize_to_capacity();
                         // ble, need to reserialize
                         ctap_types::serde::cbor_serialize(
@@ -1395,9 +1410,6 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             // of already checked CredMgmt subcommands
             Subcommand::EnumerateRpsGetNextRp
             | Subcommand::EnumerateCredentialsGetNextCredential => Ok(()),
-
-            // not implemented
-            Subcommand::UpdateUserInformation => Err(Error::InvalidParameter),
         }
     }
 

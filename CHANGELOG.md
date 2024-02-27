@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Extract PIN protocol implementation into separate module ([#62][])
   - Implement PIN protocol 2 ([#63][])
   - Implement PIN token permissions ([#63][])
+- Implement UpdateUserInformation subcommand for CredentialManagement
 
 [#26]: https://github.com/solokeys/fido-authenticator/issues/26
 [#28]: https://github.com/solokeys/fido-authenticator/issues/28
