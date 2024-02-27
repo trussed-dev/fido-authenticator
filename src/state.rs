@@ -3,7 +3,6 @@
 //! Needs cleanup.
 
 use ctap_types::{
-    cose::EcdhEsHkdf256PublicKey as CoseEcdhEsHkdf256PublicKey,
     // 2022-02-27: 10 credentials
     sizes::MAX_CREDENTIAL_COUNT_IN_LIST, // U8 currently
     Bytes,
@@ -12,13 +11,17 @@ use ctap_types::{
 };
 use trussed::{
     client, syscall, try_syscall,
-    types::{self, KeyId, Location, Mechanism, PathBuf},
+    types::{KeyId, Location, Mechanism, PathBuf},
     Client as TrussedClient,
 };
 
 use heapless::binary_heap::{BinaryHeap, Max};
 
-use crate::{cbor_serialize_message, credential::FullCredential, ctap2, Result};
+use crate::{
+    credential::FullCredential,
+    ctap2::{self, pin::PinProtocolState},
+    Result, TrussedRequirements,
+};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CachedCredential {
@@ -70,7 +73,7 @@ impl<const N: usize> CredentialCacheGeneric<N> {
 
 pub type CredentialCache = CredentialCacheGeneric<MAX_CREDENTIAL_COUNT_IN_LIST>;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct State {
     /// Batch device identity (aaguid, certificate, key).
     pub identity: Identity,
@@ -218,12 +221,9 @@ pub struct ActiveGetAssertionData {
     pub extensions: Option<ctap_types::ctap2::get_assertion::ExtensionsInput>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct RuntimeState {
-    key_agreement_key: Option<KeyId>,
-    pin_token: Option<KeyId>,
-    // TODO: why is this field not used?
-    shared_secret: Option<KeyId>,
+    pin_protocol: Option<PinProtocolState>,
     consecutive_pin_mismatches: u8,
 
     // both of these are a cache for previous Get{Next,}Assertion call
@@ -496,99 +496,22 @@ impl RuntimeState {
         self.cached_credentials.len() as _
     }
 
-    pub fn key_agreement_key<T: client::P256>(&mut self, trussed: &mut T) -> KeyId {
-        match self.key_agreement_key {
-            Some(key) => key,
-            None => self.rotate_key_agreement_key(trussed),
-        }
-    }
-
-    pub fn rotate_key_agreement_key<T: client::P256>(&mut self, trussed: &mut T) -> KeyId {
-        // TODO: need to rotate pin token?
-        if let Some(key) = self.key_agreement_key {
-            syscall!(trussed.delete(key));
-        }
-        if let Some(previous_shared_secret) = self.shared_secret {
-            syscall!(trussed.delete(previous_shared_secret));
-        }
-
-        let key = syscall!(trussed.generate_p256_private_key(Location::Volatile)).key;
-        self.key_agreement_key = Some(key);
-        self.shared_secret = None;
-        key
-    }
-
-    pub fn pin_token(&mut self, trussed: &mut impl client::HmacSha256) -> KeyId {
-        match self.pin_token {
-            Some(token) => token,
-            None => self.rotate_pin_token(trussed),
-        }
-    }
-
-    pub fn rotate_pin_token<T: client::HmacSha256>(&mut self, trussed: &mut T) -> KeyId {
-        // TODO: need to rotate key agreement key?
-        if let Some(token) = self.pin_token {
-            syscall!(trussed.delete(token));
-        }
-        let token = syscall!(trussed.generate_secret_key(16, Location::Volatile)).key;
-        self.pin_token = Some(token);
-        token
-    }
-
-    pub fn reset<T: client::HmacSha256 + client::P256 + client::FilesystemClient>(
+    pub fn pin_protocol<T: TrussedRequirements>(
         &mut self,
         trussed: &mut T,
-    ) {
+    ) -> &mut PinProtocolState {
+        self.pin_protocol
+            .get_or_insert_with(|| PinProtocolState::new(trussed))
+    }
+
+    pub fn reset<T: TrussedRequirements>(&mut self, trussed: &mut T) {
         // Could use `free_credential_heap`, but since we're deleting everything here, this is quicker.
         syscall!(trussed.delete_all(Location::Volatile));
         self.clear_credential_cache();
         self.active_get_assertion = None;
 
-        self.rotate_pin_token(trussed);
-        self.rotate_key_agreement_key(trussed);
-    }
-
-    pub fn generate_shared_secret<T: client::P256>(
-        &mut self,
-        trussed: &mut T,
-        platform_key_agreement_key: &CoseEcdhEsHkdf256PublicKey,
-    ) -> Result<KeyId> {
-        let private_key = self.key_agreement_key(trussed);
-
-        let serialized_pkak = cbor_serialize_message(platform_key_agreement_key)
-            .map_err(|_| Error::InvalidParameter)?;
-        let platform_kak = try_syscall!(trussed.deserialize_p256_key(
-            &serialized_pkak,
-            types::KeySerialization::EcdhEsHkdf256,
-            types::StorageAttributes::new().set_persistence(types::Location::Volatile)
-        ))
-        .map_err(|_| Error::InvalidParameter)?
-        .key;
-
-        let pre_shared_secret = syscall!(trussed.agree(
-            types::Mechanism::P256,
-            private_key,
-            platform_kak,
-            types::StorageAttributes::new().set_persistence(types::Location::Volatile),
-        ))
-        .shared_secret;
-        syscall!(trussed.delete(platform_kak));
-
-        if let Some(previous_shared_secret) = self.shared_secret {
-            syscall!(trussed.delete(previous_shared_secret));
+        if let Some(pin_protocol) = self.pin_protocol.take() {
+            pin_protocol.reset(trussed);
         }
-
-        let shared_secret = syscall!(trussed.derive_key(
-            types::Mechanism::Sha256,
-            pre_shared_secret,
-            None,
-            types::StorageAttributes::new().set_persistence(types::Location::Volatile)
-        ))
-        .key;
-        self.shared_secret = Some(shared_secret);
-
-        syscall!(trussed.delete(pre_shared_secret));
-
-        Ok(shared_secret)
     }
 }

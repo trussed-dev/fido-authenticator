@@ -33,7 +33,9 @@ use crate::msp;
 
 pub mod credential_management;
 pub mod large_blobs;
-// pub mod pin;
+pub mod pin;
+
+use pin::{PinProtocol, PinProtocolVersion, SharedSecret};
 
 /// Implement `ctap2::Authenticator` for our Authenticator.
 impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenticator<UP, T> {
@@ -656,23 +658,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             Subcommand::GetKeyAgreement => {
                 debug_now!("CTAP2.Pin.GetKeyAgreement");
 
-                let private_key = self.state.runtime.key_agreement_key(&mut self.trussed);
-                let public_key = syscall!(self
-                    .trussed
-                    .derive_p256_public_key(private_key, Location::Volatile))
-                .key;
-                let serialized_cose_key = syscall!(self.trussed.serialize_key(
-                    Mechanism::P256,
-                    public_key,
-                    KeySerialization::EcdhEsHkdf256
-                ))
-                .serialized_key;
-                let cose_key = trussed::cbor_deserialize(&serialized_cose_key).unwrap();
-
-                syscall!(self.trussed.delete(public_key));
+                let key_agreement = self.pin_protocol().key_agreement_key();
 
                 ctap2::client_pin::Response {
-                    key_agreement: cose_key,
+                    key_agreement: Some(key_agreement),
                     pin_token: None,
                     retries: None,
                 }
@@ -706,22 +695,19 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 }
 
                 // 3. generate shared secret
-                let shared_secret = self
-                    .state
-                    .runtime
-                    .generate_shared_secret(&mut self.trussed, platform_kek)?;
+                let shared_secret = self.pin_protocol().shared_secret(platform_kek)?;
 
                 // TODO: there are moar early returns!!
                 // - implement Drop?
                 // - do garbage collection outside of this?
 
                 // 4. verify pinAuth
-                self.verify_pin_auth(shared_secret, new_pin_enc, pin_auth)?;
+                shared_secret.verify_pin_auth(&mut self.trussed, new_pin_enc, pin_auth)?;
 
                 // 5. decrypt and verify new PIN
-                let new_pin = self.decrypt_pin_check_length(shared_secret, new_pin_enc)?;
+                let new_pin = self.decrypt_pin_check_length(&shared_secret, new_pin_enc)?;
 
-                syscall!(self.trussed.delete(shared_secret));
+                shared_secret.delete(&mut self.trussed);
 
                 // 6. store LEFT(SHA-256(newPin), 16), set retries to 8
                 self.hash_store_pin(&new_pin)?;
@@ -769,10 +755,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 self.state.pin_blocked()?;
 
                 // 3. generate shared secret
-                let shared_secret = self
-                    .state
-                    .runtime
-                    .generate_shared_secret(&mut self.trussed, platform_kek)?;
+                let shared_secret = self.pin_protocol().shared_secret(platform_kek)?;
 
                 // 4. verify pinAuth
                 let mut data = MediumData::new();
@@ -780,24 +763,26 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     .map_err(|_| Error::InvalidParameter)?;
                 data.extend_from_slice(pin_hash_enc)
                     .map_err(|_| Error::InvalidParameter)?;
-                self.verify_pin_auth(shared_secret, &data, pin_auth)?;
+                shared_secret.verify_pin_auth(&mut self.trussed, &data, pin_auth)?;
 
                 // 5. decrement retries
                 self.state.decrement_retries(&mut self.trussed)?;
 
                 // 6. decrypt pinHashEnc, compare with stored
-                self.decrypt_pin_hash_and_maybe_escalate(shared_secret, pin_hash_enc)?;
+                self.decrypt_pin_hash_and_maybe_escalate(&shared_secret, pin_hash_enc)?;
 
                 // 7. reset retries
                 self.state.reset_retries(&mut self.trussed)?;
 
                 // 8. decrypt and verify new PIN
-                let new_pin = self.decrypt_pin_check_length(shared_secret, new_pin_enc)?;
+                let new_pin = self.decrypt_pin_check_length(&shared_secret, new_pin_enc)?;
 
-                syscall!(self.trussed.delete(shared_secret));
+                shared_secret.delete(&mut self.trussed);
 
                 // 9. store hashed PIN
                 self.hash_store_pin(&new_pin)?;
+
+                self.pin_protocol().reset_pin_token();
 
                 ctap2::client_pin::Response {
                     key_agreement: None,
@@ -827,38 +812,34 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 self.state.pin_blocked()?;
 
                 // 3. generate shared secret
-                let shared_secret = self
-                    .state
-                    .runtime
-                    .generate_shared_secret(&mut self.trussed, platform_kek)?;
+                let shared_secret = self.pin_protocol().shared_secret(platform_kek)?;
 
                 // 4. decrement retires
                 self.state.decrement_retries(&mut self.trussed)?;
 
                 // 5. decrypt and verify pinHashEnc
-                self.decrypt_pin_hash_and_maybe_escalate(shared_secret, pin_hash_enc)?;
+                self.decrypt_pin_hash_and_maybe_escalate(&shared_secret, pin_hash_enc)?;
 
                 // 6. reset retries
                 self.state.reset_retries(&mut self.trussed)?;
 
                 // 7. return encrypted pinToken
-                let pin_token = self.state.runtime.pin_token(&mut self.trussed);
                 debug_now!("wrapping pin token");
                 // info_now!("exists? {}", syscall!(self.trussed.exists(shared_secret)).exists);
-                let pin_token_enc =
-                    syscall!(self.trussed.wrap_key_aes256cbc(shared_secret, pin_token)).wrapped_key;
+                let pin_token_enc = self
+                    .pin_protocol()
+                    .reset_and_encrypt_pin_token(&shared_secret)?;
 
-                syscall!(self.trussed.delete(shared_secret));
+                shared_secret.delete(&mut self.trussed);
 
                 // ble...
                 if pin_token_enc.len() != 16 {
                     return Err(Error::Other);
                 }
-                let pin_token_enc_32 = Bytes::from_slice(&pin_token_enc).unwrap();
 
                 ctap2::client_pin::Response {
                     key_agreement: None,
-                    pin_token: Some(pin_token_enc_32),
+                    pin_token: Some(pin_token_enc),
                     retries: None,
                 }
             }
@@ -1053,6 +1034,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
 // impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenticator<UP, T>
 impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
+    fn pin_protocol(&mut self) -> PinProtocol<'_, T> {
+        let state = self.state.runtime.pin_protocol(&mut self.trussed);
+        PinProtocol::new(&mut self.trussed, state, PinProtocolVersion::V1)
+    }
+
     #[inline(never)]
     fn check_credential_applicable(
         &mut self,
@@ -1166,11 +1152,11 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
     fn decrypt_pin_hash_and_maybe_escalate(
         &mut self,
-        shared_secret: KeyId,
+        shared_secret: &SharedSecret,
         pin_hash_enc: &Bytes<64>,
     ) -> Result<()> {
-        let pin_hash = syscall!(self.trussed.decrypt_aes256cbc(shared_secret, pin_hash_enc))
-            .plaintext
+        let pin_hash = shared_secret
+            .decrypt(&mut self.trussed, pin_hash_enc)
             .ok_or(Error::Other)?;
 
         let stored_pin_hash = match self.state.persistent.pin_hash() {
@@ -1182,9 +1168,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
         if pin_hash != stored_pin_hash {
             // I) generate new KEK
-            self.state
-                .runtime
-                .rotate_key_agreement_key(&mut self.trussed);
+            self.pin_protocol().regenerate();
             self.state.pin_blocked()?;
             return Err(Error::PinInvalid);
         }
@@ -1205,7 +1189,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
     fn decrypt_pin_check_length(
         &mut self,
-        shared_secret: KeyId,
+        shared_secret: &SharedSecret,
         pin_enc: &[u8],
     ) -> Result<Message> {
         // pin is expected to be filled with null bytes to length at least 64
@@ -1214,8 +1198,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             return Err(Error::PinPolicyViolation);
         }
 
-        let mut pin = syscall!(self.trussed.decrypt_aes256cbc(shared_secret, pin_enc))
-            .plaintext
+        let mut pin = shared_secret
+            .decrypt(&mut self.trussed, pin_enc)
             .ok_or(Error::Other)?;
 
         // // temp
@@ -1235,25 +1219,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
     // fn verify_pin(&mut self, pin_auth: &Bytes<16>, client_data_hash: &Bytes<32>) -> bool {
     fn verify_pin(&mut self, pin_auth: &[u8; 16], data: &[u8]) -> Result<()> {
-        let key = self.state.runtime.pin_token(&mut self.trussed);
-        let tag = syscall!(self.trussed.sign_hmacsha256(key, data)).signature;
-        if pin_auth == &tag[..16] {
-            Ok(())
-        } else {
-            Err(Error::PinAuthInvalid)
-        }
-    }
-
-    fn verify_pin_auth(
-        &mut self,
-        shared_secret: KeyId,
-        data: &[u8],
-        pin_auth: &Bytes<16>,
-    ) -> Result<()> {
-        let expected_pin_auth =
-            syscall!(self.trussed.sign_hmacsha256(shared_secret, data)).signature;
-
-        if expected_pin_auth[..16] == pin_auth[..] {
+        let pin_verified = self.pin_protocol().verify_pin_token(data, pin_auth);
+        if pin_verified {
             Ok(())
         } else {
             Err(Error::PinAuthInvalid)
@@ -1283,7 +1250,6 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 }
 
                 // check pinAuth
-                let pin_token = self.state.runtime.pin_token(&mut self.trussed);
                 let mut data: Bytes<{ sizes::MAX_CREDENTIAL_ID_LENGTH_PLUS_256 }> =
                     Bytes::from_slice(&[sub_command as u8]).unwrap();
                 let len = 1 + match sub_command {
@@ -1303,16 +1269,12 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                     _ => 0,
                 };
 
-                // info_now!("input to hmacsha256: {:?}", &data[..len]);
-                let expected_pin_auth =
-                    syscall!(self.trussed.sign_hmacsha256(pin_token, &data[..len],)).signature;
-
                 let pin_auth = parameters
                     .pin_auth
                     .as_ref()
                     .ok_or(Error::MissingParameter)?;
 
-                if expected_pin_auth[..16] == pin_auth[..] {
+                if self.pin_protocol().verify_pin_token(&data[..len], pin_auth) {
                     info_now!("passed pinauth");
                     Ok(())
                 } else {
@@ -1466,12 +1428,14 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             .key;
 
             // Verify the auth tag, which uses the same process as the pinAuth
-            let kek = self
-                .state
-                .runtime
-                .generate_shared_secret(&mut self.trussed, &hmac_secret.key_agreement)?;
-            self.verify_pin_auth(kek, &hmac_secret.salt_enc, &hmac_secret.salt_auth)
-                .map_err(|_| Error::ExtensionFirst)?;
+            let shared_secret = self
+                .pin_protocol()
+                .shared_secret(&hmac_secret.key_agreement)?;
+            shared_secret.verify_pin_auth(
+                &mut self.trussed,
+                &hmac_secret.salt_enc,
+                &hmac_secret.salt_auth,
+            )?;
 
             if hmac_secret.salt_enc.len() != 32 && hmac_secret.salt_enc.len() != 64 {
                 debug_now!("invalid hmac-secret length");
@@ -1479,16 +1443,9 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             }
 
             // decrypt input salt_enc to get salt1 or (salt1 || salt2)
-            let salts = syscall!(self.trussed.decrypt(
-                Mechanism::Aes256Cbc,
-                kek,
-                &hmac_secret.salt_enc,
-                b"",
-                b"",
-                b""
-            ))
-            .plaintext
-            .ok_or(Error::InvalidOption)?;
+            let salts = shared_secret
+                .decrypt(&mut self.trussed, &hmac_secret.salt_enc)
+                .ok_or(Error::InvalidOption)?;
 
             let mut salt_output: Bytes<64> = Bytes::new();
 
@@ -1509,11 +1466,9 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             syscall!(self.trussed.delete(cred_random));
 
             // output_enc = aes256-cbc(sharedSecret, IV=0, output1 || output2)
-            let output_enc =
-                syscall!(self
-                    .trussed
-                    .encrypt(Mechanism::Aes256Cbc, kek, &salt_output, b"", None))
-                .ciphertext;
+            let output_enc = shared_secret.encrypt(&mut self.trussed, &salt_output);
+
+            shared_secret.delete(&mut self.trussed);
 
             Ok(Some(ctap2::get_assertion::ExtensionsOutput {
                 hmac_secret: Some(Bytes::from_slice(&output_enc).unwrap()),
