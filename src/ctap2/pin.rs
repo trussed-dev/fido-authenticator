@@ -110,23 +110,17 @@ impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
     }
 
     // in spec: verify(pinUvAuthToken, ...)
-    #[must_use]
-    pub fn verify_pin_token(&mut self, data: &[u8], signature: &[u8]) -> bool {
+    pub fn verify_pin_token(&mut self, data: &[u8], signature: &[u8]) -> Result<()> {
         // TODO: check if pin token is in use
-        verify(self.trussed, self.pin_token(), data, signature)
-    }
-
-    // in spec: resetPinUvAuthToken() + encrypt(..., pinUvAuthToken)
-    pub fn reset_and_encrypt_pin_token(
-        &mut self,
-        shared_secret: &SharedSecret,
-    ) -> Result<Bytes<32>> {
-        self.reset_pin_token();
-        self.encrypt_pin_token(shared_secret)
+        if verify(self.trussed, self.pin_token(), data, signature) {
+            Ok(())
+        } else {
+            Err(Error::PinAuthInvalid)
+        }
     }
 
     // in spec: encrypt(..., pinUvAuthToken)
-    fn encrypt_pin_token(&mut self, shared_secret: &SharedSecret) -> Result<Bytes<32>> {
+    pub fn encrypt_pin_token(&mut self, shared_secret: &SharedSecret) -> Result<Bytes<32>> {
         let token = syscall!(self
             .trussed
             .wrap_key_aes256cbc(shared_secret.key_id, self.pin_token()))
