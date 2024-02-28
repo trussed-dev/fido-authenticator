@@ -23,6 +23,7 @@ serde_cbor = { version = "0.11.0", default-features = false }
 serde-indexed = "0.1.0"
 sha2 = { version = "0.10", default-features = false }
 trussed = "0.1"
+trussed-hkdf = { version = "0.1.0" }
 trussed-staging = { version = "0.1.0", default-features = false, optional = true }
 
 apdu-dispatch = { version = "0.1", optional = true }
@@ -56,11 +57,13 @@ usbd-ctaphid = "0.1.0"
 features = ["dispatch"]
 
 [patch.crates-io]
-ctap-types = { git = "https://github.com/trussed-dev/ctap-types.git", rev = "7d4ad69e64ad308944c012aef5b9cfd7654d9be8" }
+ctap-types = { git = "https://github.com/trussed-dev/ctap-types.git", rev = "3735eb5a8e2b30b98afd35b64b4f470e690dcd19" }
 ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
 apdu-dispatch = { git = "https://github.com/trussed-dev/apdu-dispatch.git", rev = "915fc237103fcecc29d0f0b73391f19abf6576de" }
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b1781805a2e33615d2d00b8bec80c0b1f5870ca1" }
-trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging", rev = "3b9594d93f89a5e760fe78fa5a96f125dfdcd470" }
+littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "ebd27e49ca321089d01d8c9b169c4aeb58ceeeca" }
 serde-indexed = { git = "https://github.com/sosthene-nitrokey/serde-indexed.git", rev = "5005d23cb4ee8622e62188ea0f9466146f851f0d" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "cff2e663841b6a68d3a8ce12647d57b2b6fbc36c" }
+trussed-hkdf = { git = "https://github.com/Nitrokey/trussed-hkdf-backend.git", tag = "v0.1.0" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging", rev = "3b9594d93f89a5e760fe78fa5a96f125dfdcd470" }
 trussed-usbip = { git = "https://github.com/Nitrokey/pc-usbip-runner.git", tag = "v0.0.1-nitrokey.1" }
 usbd-ctaphid = { git = "https://github.com/Nitrokey/usbd-ctaphid.git", tag = "v0.1.0-nitrokey.2" }

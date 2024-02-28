@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implement the `largeBlobKey` extension and the `largeBlobs` command ([#38][])
 - Fix error type for third invalid PIN entry ([#60][])
 - Fix error type for cancelled user presence ([#61][])
-- Extract PIN protocol implementation into separate module ([#62][])
+- PIN protocol changes:
+  - Extract PIN protocol implementation into separate module ([#62][])
+  - Implement PIN protocol 2 ([#63][])
 
 [#26]: https://github.com/solokeys/fido-authenticator/issues/26
 [#28]: https://github.com/solokeys/fido-authenticator/issues/28
@@ -31,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#60]: https://github.com/Nitrokey/fido-authenticator/pull/60
 [#61]: https://github.com/Nitrokey/fido-authenticator/pull/61
 [#62]: https://github.com/Nitrokey/fido-authenticator/pull/62
+[#63]: https://github.com/Nitrokey/fido-authenticator/pull/63
 
 ## [0.1.1] - 2022-08-22
 - Fix bug that treated U2F payloads as APDU over APDU in NFC transport @conorpp
