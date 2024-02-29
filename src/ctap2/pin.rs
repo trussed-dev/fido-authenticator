@@ -1,11 +1,13 @@
 use crate::{cbor_serialize_message, TrussedRequirements};
-use ctap_types::{cose::EcdhEsHkdf256PublicKey, Error, Result};
+use core::mem;
+use ctap_types::{cose::EcdhEsHkdf256PublicKey, ctap2::client_pin::Permissions, Error, Result};
 use trussed::{
     cbor_deserialize,
     client::{CryptoClient, HmacSha256, P256},
     syscall, try_syscall,
     types::{
         Bytes, KeyId, KeySerialization, Location, Mechanism, Message, ShortData, StorageAttributes,
+        String,
     },
 };
 use trussed_hkdf::{KeyOrData, OkmId};
@@ -29,6 +31,56 @@ impl From<PinProtocolVersion> for u8 {
 }
 
 #[derive(Debug)]
+pub struct PinToken {
+    key_id: KeyId,
+    state: PinTokenState,
+}
+
+impl PinToken {
+    fn generate<T: HmacSha256>(trussed: &mut T) -> PinToken {
+        let key_id =
+            syscall!(trussed.generate_secret_key(PIN_TOKEN_LENGTH, Location::Volatile)).key;
+        Self::new(key_id)
+    }
+
+    fn new(key_id: KeyId) -> Self {
+        Self {
+            key_id,
+            state: Default::default(),
+        }
+    }
+
+    fn delete<T: CryptoClient>(self, trussed: &mut T) {
+        syscall!(trussed.delete(self.key_id));
+    }
+
+    pub fn require_permissions(&self, permissions: Permissions) -> Result<()> {
+        if self.state.permissions.contains(permissions) {
+            Ok(())
+        } else {
+            Err(Error::PinAuthInvalid)
+        }
+    }
+
+    pub fn require_valid_for_rp_id(&self, rp_id: Option<&str>) -> Result<()> {
+        if self.state.rp_id.is_none() || self.state.rp_id.as_deref() == rp_id {
+            Ok(())
+        } else {
+            Err(Error::PinAuthInvalid)
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct PinTokenState {
+    permissions: Permissions,
+    rp_id: Option<String<256>>,
+    is_user_present: bool,
+    is_user_verified: bool,
+    is_in_use: bool,
+}
+
+#[derive(Debug)]
 pub struct PinProtocolState {
     key_agreement_key: KeyId,
     // only used to delete the old shared secret from VFS when generating a new one.  ideally, the
@@ -36,9 +88,9 @@ pub struct PinProtocolState {
     shared_secret: Option<SharedSecret>,
 
     // for protocol version 1
-    pin_token_v1: KeyId,
+    pin_token_v1: PinToken,
     // for protocol version 2
-    pin_token_v2: KeyId,
+    pin_token_v2: PinToken,
 }
 
 impl PinProtocolState {
@@ -47,13 +99,14 @@ impl PinProtocolState {
         Self {
             key_agreement_key: generate_key_agreement_key(trussed),
             shared_secret: None,
-            pin_token_v1: generate_pin_token(trussed),
-            pin_token_v2: generate_pin_token(trussed),
+            pin_token_v1: PinToken::generate(trussed),
+            pin_token_v2: PinToken::generate(trussed),
         }
     }
 
     pub fn reset<T: TrussedRequirements>(self, trussed: &mut T) {
-        syscall!(trussed.delete(self.pin_token_v1));
+        self.pin_token_v1.delete(trussed);
+        self.pin_token_v2.delete(trussed);
         syscall!(trussed.delete(self.key_agreement_key));
         if let Some(shared_secret) = self.shared_secret {
             shared_secret.delete(trussed);
@@ -81,17 +134,17 @@ impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
         }
     }
 
-    fn pin_token(&self) -> KeyId {
+    fn pin_token(&self) -> &PinToken {
         match self.version {
-            PinProtocolVersion::V1 => self.state.pin_token_v1,
-            PinProtocolVersion::V2 => self.state.pin_token_v2,
+            PinProtocolVersion::V1 => &self.state.pin_token_v1,
+            PinProtocolVersion::V2 => &self.state.pin_token_v2,
         }
     }
 
-    fn set_pin_token(&mut self, pin_token: KeyId) {
+    fn pin_token_mut(&mut self) -> &mut PinToken {
         match self.version {
-            PinProtocolVersion::V1 => self.state.pin_token_v1 = pin_token,
-            PinProtocolVersion::V2 => self.state.pin_token_v2 = pin_token,
+            PinProtocolVersion::V1 => &mut self.state.pin_token_v1,
+            PinProtocolVersion::V2 => &mut self.state.pin_token_v2,
         }
     }
 
@@ -105,9 +158,24 @@ impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
 
     // in spec: resetPinUvAuthToken()
     pub fn reset_pin_token(&mut self) {
-        syscall!(self.trussed.delete(self.pin_token()));
-        let pin_token = generate_pin_token(self.trussed);
-        self.set_pin_token(pin_token);
+        let new = PinToken::generate(self.trussed);
+        mem::replace(self.pin_token_mut(), new).delete(self.trussed);
+    }
+
+    pub fn restrict_pin_token(&mut self, permissions: Permissions, rp_id: Option<String<256>>) {
+        let pin_token = self.pin_token_mut();
+        pin_token.state.permissions = permissions;
+        pin_token.state.rp_id = rp_id;
+    }
+
+    // in spec: beginUsingPinUvAuthToken(userIsPresent)
+    pub fn begin_using_pin_token(&mut self, is_user_present: bool) {
+        let pin_token = self.pin_token_mut();
+        pin_token.state.is_user_present = is_user_present;
+        pin_token.state.is_user_verified = true;
+        // TODO: set initial usage time limit
+        // TODO: start and observe usage timer
+        pin_token.state.is_in_use = true;
     }
 
     // in spec: getPublicKey
@@ -139,10 +207,10 @@ impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
     }
 
     // in spec: verify(pinUvAuthToken, ...)
-    pub fn verify_pin_token(&mut self, data: &[u8], signature: &[u8]) -> Result<()> {
-        // TODO: check if pin token is in use
-        if self.verify(self.pin_token(), data, signature) {
-            Ok(())
+    pub fn verify_pin_token(&mut self, data: &[u8], signature: &[u8]) -> Result<&PinToken> {
+        let pin_token = self.pin_token();
+        if pin_token.state.is_in_use && self.verify(pin_token.key_id, data, signature) {
+            Ok(self.pin_token())
         } else {
             Err(Error::PinAuthInvalid)
         }
@@ -165,7 +233,7 @@ impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
 
     // in spec: encrypt(..., pinUvAuthToken)
     pub fn encrypt_pin_token(&mut self, shared_secret: &SharedSecret) -> Result<Bytes<48>> {
-        let token = shared_secret.wrap(self.trussed, self.pin_token());
+        let token = shared_secret.wrap(self.trussed, self.pin_token().key_id);
         Bytes::from_slice(&token).map_err(|_| Error::Other)
     }
 
@@ -358,10 +426,6 @@ impl SharedSecret {
             }
         }
     }
-}
-
-fn generate_pin_token<T: HmacSha256>(trussed: &mut T) -> KeyId {
-    syscall!(trussed.generate_secret_key(PIN_TOKEN_LENGTH, Location::Volatile)).key
 }
 
 fn generate_key_agreement_key<T: P256>(trussed: &mut T) -> KeyId {

@@ -1,7 +1,7 @@
 //! The `ctap_types::ctap2::Authenticator` implementation.
 
 use ctap_types::{
-    ctap2::{self, Authenticator, VendorOperation},
+    ctap2::{self, client_pin::Permissions, Authenticator, VendorOperation},
     heapless::{String, Vec},
     heapless_bytes::Bytes,
     sizes, Error,
@@ -86,6 +86,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             },
             credential_mgmt_preview: Some(true),
             large_blobs: Some(self.config.supports_large_blobs()),
+            pin_uv_auth_token: Some(true),
             ..Default::default()
         };
         // options.rk = true;
@@ -174,6 +175,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             parameters.pin_auth.map(AsRef::as_ref),
             parameters.pin_protocol,
             parameters.client_data_hash.as_ref(),
+            Permissions::MAKE_CREDENTIAL,
+            &parameters.rp.id,
         )?;
 
         // 5. "persist credProtect value for this credential"
@@ -644,28 +647,19 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // info_now!("{:?}", parameters);
 
         let pin_protocol = self.parse_pin_protocol(parameters.pin_protocol)?;
+        let mut response = ctap2::client_pin::Response::default();
 
-        Ok(match parameters.sub_command {
+        match parameters.sub_command {
             Subcommand::GetRetries => {
                 debug_now!("CTAP2.Pin.GetRetries");
 
-                ctap2::client_pin::Response {
-                    key_agreement: None,
-                    pin_token: None,
-                    retries: Some(self.state.persistent.retries()),
-                }
+                response.retries = Some(self.state.persistent.retries());
             }
 
             Subcommand::GetKeyAgreement => {
                 debug_now!("CTAP2.Pin.GetKeyAgreement");
 
-                let key_agreement = self.pin_protocol(pin_protocol).key_agreement_key();
-
-                ctap2::client_pin::Response {
-                    key_agreement: Some(key_agreement),
-                    pin_token: None,
-                    retries: None,
-                }
+                response.key_agreement = Some(self.pin_protocol(pin_protocol).key_agreement_key());
             }
 
             Subcommand::SetPin => {
@@ -716,12 +710,6 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 self.state
                     .reset_retries(&mut self.trussed)
                     .map_err(|_| Error::Other)?;
-
-                ctap2::client_pin::Response {
-                    key_agreement: None,
-                    pin_token: None,
-                    retries: None,
-                }
             }
 
             Subcommand::ChangePin => {
@@ -792,83 +780,162 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 for pin_protocol in self.pin_protocols() {
                     self.pin_protocol(*pin_protocol).reset_pin_token();
                 }
-
-                ctap2::client_pin::Response {
-                    key_agreement: None,
-                    pin_token: None,
-                    retries: None,
-                }
             }
 
+            // § 6.5.5.7.1 No 4
             Subcommand::GetPinToken => {
                 debug_now!("CTAP2.Pin.GetPinToken");
 
-                // 1. check mandatory parameters
-                let platform_kek = match parameters.key_agreement.as_ref() {
-                    Some(key) => key,
-                    None => {
-                        return Err(Error::MissingParameter);
-                    }
-                };
-                let pin_hash_enc = match parameters.pin_hash_enc.as_ref() {
-                    Some(hash) => hash,
-                    None => {
-                        return Err(Error::MissingParameter);
-                    }
-                };
+                // 1. Check mandatory parameters
+                let key_agreement = parameters
+                    .key_agreement
+                    .as_ref()
+                    .ok_or(Error::MissingParameter)?;
+                let pin_hash_enc = parameters
+                    .pin_hash_enc
+                    .as_ref()
+                    .ok_or(Error::MissingParameter)?;
 
-                // 2. fail if no retries left
+                // 2. Check PIN protocol
+                let pin_protocol = self.parse_pin_protocol(parameters.pin_protocol)?;
+
+                // 3. + 4. Check invalid parameters
+                if parameters.permissions.is_some() || parameters.rp_id.is_some() {
+                    return Err(Error::InvalidParameter);
+                }
+
+                // 5. Check PIN retries
                 self.state.pin_blocked()?;
 
-                // 3. generate shared secret
+                // 6. Obtain shared secret
                 let shared_secret = self
                     .pin_protocol(pin_protocol)
-                    .shared_secret(platform_kek)?;
+                    .shared_secret(key_agreement)?;
 
-                // 4. decrement retires
+                // 7. Request user consent using display -- skipped
+
+                // 8. Decrement PIN retries
                 self.state.decrement_retries(&mut self.trussed)?;
 
-                // 5. decrypt and verify pinHashEnc
+                // 9. Check PIN
                 self.decrypt_pin_hash_and_maybe_escalate(
                     pin_protocol,
                     &shared_secret,
                     pin_hash_enc,
                 )?;
 
-                // 6. reset retries
+                // 10. Reset PIN retries
                 self.state.reset_retries(&mut self.trussed)?;
 
-                // 7. return encrypted pinToken
-                debug_now!("wrapping pin token");
-                // info_now!("exists? {}", syscall!(self.trussed.exists(shared_secret)).exists);
+                // 11. Check forcePINChange -- skipped
+
+                // 12. Reset all PIN tokens
                 for pin_protocol in self.pin_protocols() {
                     self.pin_protocol(*pin_protocol).reset_pin_token();
                 }
-                let pin_token_enc = self
-                    .pin_protocol(pin_protocol)
-                    .encrypt_pin_token(&shared_secret)?;
+
+                // 13. Call beginUsingPinUvAuthToken
+                let mut pin_protocol = self.pin_protocol(pin_protocol);
+                pin_protocol.begin_using_pin_token(false);
+
+                // 14. Assign the default permissions
+                let mut permissions = Permissions::empty();
+                permissions.insert(Permissions::MAKE_CREDENTIAL);
+                permissions.insert(Permissions::GET_ASSERTION);
+                pin_protocol.restrict_pin_token(permissions, None);
+
+                // 15. Return PIN token
+                response.pin_token = Some(pin_protocol.encrypt_pin_token(&shared_secret)?);
 
                 shared_secret.delete(&mut self.trussed);
-
-                // ble...
-                if pin_token_enc.len() != 16 {
-                    return Err(Error::Other);
-                }
-
-                ctap2::client_pin::Response {
-                    key_agreement: None,
-                    pin_token: Some(pin_token_enc),
-                    retries: None,
-                }
             }
 
-            Subcommand::GetPinUvAuthTokenUsingUvWithPermissions
-            | Subcommand::GetUVRetries
-            | Subcommand::GetPinUvAuthTokenUsingPinWithPermissions => {
+            // § 6.5.5.7.2 No 4
+            Subcommand::GetPinUvAuthTokenUsingPinWithPermissions => {
+                debug_now!("CTAP2.Pin.GetPinUvAuthTokenUsingPinWithPermissions");
+
+                // 1. Check mandatory parameters
+                let key_agreement = parameters
+                    .key_agreement
+                    .as_ref()
+                    .ok_or(Error::MissingParameter)?;
+                let pin_hash_enc = parameters
+                    .pin_hash_enc
+                    .as_ref()
+                    .ok_or(Error::MissingParameter)?;
+                let permissions = parameters.permissions.ok_or(Error::MissingParameter)?;
+
+                // 2. Check PIN protocol
+                let pin_protocol = self.parse_pin_protocol(parameters.pin_protocol)?;
+
+                // 3. Check that permissions are not empty
+                let permissions = Permissions::from_bits_truncate(permissions);
+                if permissions.is_empty() {
+                    return Err(Error::InvalidParameter);
+                }
+
+                // 4. Check that all requested permissions are supported
+                let mut unauthorized_permissions = Permissions::empty();
+                unauthorized_permissions.insert(Permissions::BIO_ENROLLMENT);
+                if !self.config.supports_large_blobs() {
+                    unauthorized_permissions.insert(Permissions::LARGE_BLOB_WRITE);
+                }
+                unauthorized_permissions.insert(Permissions::AUTHENTICATOR_CONFIGURATION);
+                if permissions.intersects(unauthorized_permissions) {
+                    return Err(Error::UnauthorizedPermission);
+                }
+
+                // 5. Check PIN retries
+                self.state.pin_blocked()?;
+
+                // 6. Obtain shared secret
+                let shared_secret = self
+                    .pin_protocol(pin_protocol)
+                    .shared_secret(key_agreement)?;
+
+                // 7. Request user consent using display -- skipped
+
+                // 8. Decrement PIN retries
+                self.state.decrement_retries(&mut self.trussed)?;
+
+                // 9. Check PIN
+                self.decrypt_pin_hash_and_maybe_escalate(
+                    pin_protocol,
+                    &shared_secret,
+                    pin_hash_enc,
+                )?;
+
+                // 10. Reset PIN retries
+                self.state.reset_retries(&mut self.trussed)?;
+
+                // 11. Check forcePINChange -- skipped
+
+                // 12. Reset all PIN tokens
+                for pin_protocol in self.pin_protocols() {
+                    self.pin_protocol(*pin_protocol).reset_pin_token();
+                }
+
+                // 13. Call beginUsingPinUvAuthToken
+                let mut pin_protocol = self.pin_protocol(pin_protocol);
+                pin_protocol.begin_using_pin_token(false);
+
+                // 14. Assign the requested permissions
+                // 15. Assign the requested RP id
+                pin_protocol.restrict_pin_token(permissions, parameters.rp_id.clone());
+
+                // 16. Return PIN token
+                response.pin_token = Some(pin_protocol.encrypt_pin_token(&shared_secret)?);
+
+                shared_secret.delete(&mut self.trussed);
+            }
+
+            Subcommand::GetPinUvAuthTokenUsingUvWithPermissions | Subcommand::GetUVRetries => {
                 // todo!("not implemented yet")
                 return Err(Error::InvalidParameter);
             }
-        })
+        }
+
+        Ok(response)
     }
 
     #[inline(never)]
@@ -880,7 +947,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         use ctap2::credential_management::Subcommand;
 
         // TODO: I see "failed pinauth" output, but then still continuation...
-        self.verify_pin_auth_using_token(parameters)?;
+        // TODO: determine rp_id
+        self.verify_pin_auth_using_token(parameters, None)?;
 
         let mut cred_mgmt = cm::CredentialManagement::new(self);
         let sub_parameters = &parameters.sub_command_params;
@@ -920,6 +988,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                         .ok_or(Error::MissingParameter)?,
                 )
             }
+
+            // 0x7
+            Subcommand::UpdateUserInformation => Err(Error::InvalidParameter),
         }
     }
 
@@ -949,6 +1020,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             parameters.pin_auth.map(AsRef::as_ref),
             parameters.pin_protocol,
             parameters.client_data_hash.as_ref(),
+            Permissions::GET_ASSERTION,
+            &parameters.rp_id,
         ) {
             Ok(b) => b,
             Err(Error::PinRequired) => {
@@ -1256,6 +1329,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
     fn verify_pin_auth_using_token(
         &mut self,
         parameters: &ctap2::credential_management::Request,
+        rp_id: Option<&str>,
     ) -> Result<()> {
         // info_now!("CM params: {:?}", parameters);
         use ctap2::credential_management::Subcommand;
@@ -1297,12 +1371,11 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                     .as_ref()
                     .ok_or(Error::MissingParameter)?;
 
-                if self
-                    .pin_protocol(pin_protocol)
-                    .verify_pin_token(&data[..len], pin_auth)
-                    .is_ok()
-                {
+                let mut pin_protocol = self.pin_protocol(pin_protocol);
+                if let Ok(pin_token) = pin_protocol.verify_pin_token(&data[..len], pin_auth) {
                     info_now!("passed pinauth");
+                    pin_token.require_permissions(Permissions::CREDENTIAL_MANAGEMENT)?;
+                    pin_token.require_valid_for_rp_id(rp_id)?;
                     Ok(())
                 } else {
                     info_now!("failed pinauth!");
@@ -1322,6 +1395,9 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             // of already checked CredMgmt subcommands
             Subcommand::EnumerateRpsGetNextRp
             | Subcommand::EnumerateCredentialsGetNextCredential => Ok(()),
+
+            // not implemented
+            Subcommand::UpdateUserInformation => Err(Error::InvalidParameter),
         }
     }
 
@@ -1332,6 +1408,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         pin_auth: Option<&[u8]>,
         pin_protocol: Option<u32>,
         data: &[u8],
+        permissions: Permissions,
+        rp_id: &str,
     ) -> Result<bool> {
         // 1. pinAuth zero length -> wait for user touch, then
         // return PinNotSet if not set, PinInvalid if set
@@ -1385,8 +1463,10 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                     // 5. if pinAuth is present and pinProtocol = 1, verify
                     // success --> set uv = 1
                     // error --> PinAuthInvalid
-                    self.pin_protocol(pin_protocol)
-                        .verify_pin_token(data, pin_auth)?;
+                    let mut pin_protocol = self.pin_protocol(pin_protocol);
+                    let pin_token = pin_protocol.verify_pin_token(data, pin_auth)?;
+                    pin_token.require_permissions(permissions)?;
+                    pin_token.require_valid_for_rp_id(Some(rp_id))?;
 
                     return Ok(true);
                 } else {
@@ -1885,8 +1965,9 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             // SHA-256(data)
             auth_data.extend_from_slice(&Sha256::digest(data)).unwrap();
 
-            self.pin_protocol(pin_protocol)
-                .verify_pin_token(&pin_auth, &auth_data)?;
+            let mut pin_protocol = self.pin_protocol(pin_protocol);
+            let pin_token = pin_protocol.verify_pin_token(&pin_auth, &auth_data)?;
+            pin_token.require_permissions(Permissions::LARGE_BLOB_WRITE)?;
         }
 
         // 6. Validate data length

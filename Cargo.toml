@@ -57,7 +57,7 @@ usbd-ctaphid = "0.1.0"
 features = ["dispatch"]
 
 [patch.crates-io]
-ctap-types = { git = "https://github.com/trussed-dev/ctap-types.git", rev = "3735eb5a8e2b30b98afd35b64b4f470e690dcd19" }
+ctap-types = { git = "https://github.com/trussed-dev/ctap-types.git", rev = "4846817d9cd44604121680a19d46f3264973a3ce" }
 ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
 apdu-dispatch = { git = "https://github.com/trussed-dev/apdu-dispatch.git", rev = "915fc237103fcecc29d0f0b73391f19abf6576de" }
 littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "ebd27e49ca321089d01d8c9b169c4aeb58ceeeca" }
