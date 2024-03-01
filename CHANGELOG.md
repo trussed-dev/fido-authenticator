@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Implement PIN protocol 2 ([#63][])
   - Implement PIN token permissions ([#63][])
 - Implement UpdateUserInformation subcommand for CredentialManagement
+- Support CTAP 2.1
 
 [#26]: https://github.com/solokeys/fido-authenticator/issues/26
 [#28]: https://github.com/solokeys/fido-authenticator/issues/28

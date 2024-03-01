@@ -49,13 +49,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         versions
             .push(String::from_str("FIDO_2_0").unwrap())
             .unwrap();
-        // #[cfg(feature = "enable-fido-pre")]
         versions
-            .push(String::from_str("FIDO_2_1_PRE").unwrap())
+            .push(String::from_str("FIDO_2_1").unwrap())
             .unwrap();
 
         let mut extensions = Vec::<String<13>, 4>::new();
-        // extensions.push(String::from_str("credProtect").unwrap()).unwrap();
         extensions
             .push(String::from_str("credProtect").unwrap())
             .unwrap();
@@ -84,25 +82,15 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 true => Some(true),
                 false => Some(false),
             },
-            credential_mgmt_preview: Some(true),
             large_blobs: Some(self.config.supports_large_blobs()),
             pin_uv_auth_token: Some(true),
             ..Default::default()
         };
-        // options.rk = true;
-        // options.up = true;
-        // options.uv = None; // "uv" here refers to "in itself", e.g. biometric
-        // options.plat = Some(false);
-        // options.cred_mgmt = Some(true);
-        // options.credential_mgmt_preview = Some(true);
-        // // options.client_pin = None; // not capable of PIN
-        // options.client_pin = match self.state.persistent.pin_is_set() {
-        //     true => Some(true),
-        //     false => Some(false),
-        // };
 
         let mut transports = Vec::new();
-        transports.push(String::from("nfc")).unwrap();
+        if self.config.nfc_transport {
+            transports.push(String::from("nfc")).unwrap();
+        }
         transports.push(String::from("usb")).unwrap();
 
         let (_, aaguid) = self.state.identity.attestation(&mut self.trussed);
@@ -169,6 +157,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             if options.up.is_some() {
                 return Err(Error::InvalidOption);
             }
+        }
+        if parameters.enterprise_attestation.is_some() {
+            return Err(Error::InvalidParameter);
         }
         let uv_performed = self.pin_prechecks(
             &parameters.options,
@@ -1553,17 +1544,15 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 &hmac_secret.salt_auth,
             )?;
 
-            if hmac_secret.salt_enc.len() != 32
-                && (hmac_secret.salt_enc.len() != 64 || hmac_secret.salt_enc.len() == 80)
-            {
-                debug_now!("invalid hmac-secret length");
-                return Err(Error::InvalidLength);
-            }
-
             // decrypt input salt_enc to get salt1 or (salt1 || salt2)
             let salts = shared_secret
                 .decrypt(&mut self.trussed, &hmac_secret.salt_enc)
                 .ok_or(Error::InvalidOption)?;
+
+            if salts.len() != 32 && salts.len() != 64 {
+                debug_now!("invalid hmac-secret length");
+                return Err(Error::InvalidLength);
+            }
 
             let mut salt_output: Bytes<64> = Bytes::new();
 

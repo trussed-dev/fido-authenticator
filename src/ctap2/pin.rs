@@ -406,7 +406,7 @@ impl SharedSecret {
                 data.split_at(16)
             }
         };
-        try_syscall!(trussed.decrypt(Mechanism::Aes256Cbc, key_id, data, iv, b"", b""))
+        try_syscall!(trussed.decrypt(Mechanism::Aes256Cbc, key_id, data, b"", iv, b""))
             .ok()
             .and_then(|response| response.plaintext)
     }

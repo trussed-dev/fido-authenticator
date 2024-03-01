@@ -103,6 +103,8 @@ pub struct Config {
     ///
     /// If this is `None`, the extension and the command are disabled.
     pub large_blobs: Option<ctap2::large_blobs::Config>,
+    /// Whether the authenticator supports the NFC transport.
+    pub nfc_transport: bool,
 }
 
 impl Config {

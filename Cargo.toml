@@ -33,7 +33,6 @@ iso7816 = { version = "0.1", optional = true }
 [features]
 dispatch = ["apdu-dispatch", "ctaphid-dispatch", "iso7816"]
 disable-reset-time-window = []
-enable-fido-pre = []
 
 # enables support for a large-blob array longer than 1024 bytes
 chunked = ["trussed-staging/chunked"]
