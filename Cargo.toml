@@ -12,7 +12,7 @@ description = "FIDO authenticator Trussed app"
 
 [[example]]
 name = "usbip"
-required-features = ["trussed/virt", "dispatch"]
+required-features = ["trussed-hkdf/virt", "trussed/virt", "dispatch"]
 
 [dependencies]
 ctap-types = { version = "0.1.0", features = ["large-blobs"] }

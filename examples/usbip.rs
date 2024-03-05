@@ -15,15 +15,17 @@ const PRODUCT: &str = "Nitrokey 3";
 const VID: u16 = 0x20a0;
 const PID: u16 = 0x42b2;
 
-type VirtClient = ClientImplementation<trussed_usbip::Service<Ram, CoreOnly>, CoreOnly>;
+pub use trussed_hkdf::virt::Dispatcher;
+
+type VirtClient = ClientImplementation<trussed_usbip::Service<Ram, Dispatcher>, Dispatcher>;
 
 struct FidoApp {
     fido: fido_authenticator::Authenticator<fido_authenticator::Conforming, VirtClient>,
 }
 
-impl trussed_usbip::Apps<'static, VirtClient, CoreOnly> for FidoApp {
+impl trussed_usbip::Apps<'static, VirtClient, Dispatcher> for FidoApp {
     type Data = ();
-    fn new<B: ClientBuilder<VirtClient, CoreOnly>>(builder: &B, _data: ()) -> Self {
+    fn new<B: ClientBuilder<VirtClient, Dispatcher>>(builder: &B, _data: ()) -> Self {
         let large_blogs = Some(fido_authenticator::LargeBlobsConfig {
             location: Location::External,
             #[cfg(feature = "chunked")]
@@ -39,6 +41,7 @@ impl trussed_usbip::Apps<'static, VirtClient, CoreOnly> for FidoApp {
                     skip_up_timeout: None,
                     max_resident_credential_count: Some(10),
                     large_blobs: large_blogs,
+                    nfc_transport: false,
                 },
             ),
         }
@@ -63,6 +66,7 @@ fn main() {
         pid: PID,
     };
     trussed_usbip::Builder::new(virt::Ram::default(), options)
+        .dispatch(Dispatcher)
         .build::<FidoApp>()
         .exec(|_platform| {});
 }
