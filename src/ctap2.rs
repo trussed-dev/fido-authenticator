@@ -768,9 +768,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 // 9. store hashed PIN
                 self.hash_store_pin(&new_pin)?;
 
-                for pin_protocol in self.pin_protocols() {
-                    self.pin_protocol(*pin_protocol).reset_pin_token();
-                }
+                self.pin_protocol(pin_protocol).reset_pin_tokens();
             }
 
             // § 6.5.5.7.1 No 4
@@ -821,22 +819,18 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 // 11. Check forcePINChange -- skipped
 
                 // 12. Reset all PIN tokens
-                for pin_protocol in self.pin_protocols() {
-                    self.pin_protocol(*pin_protocol).reset_pin_token();
-                }
-
                 // 13. Call beginUsingPinUvAuthToken
                 let mut pin_protocol = self.pin_protocol(pin_protocol);
-                pin_protocol.begin_using_pin_token(false);
+                let mut pin_token = pin_protocol.reset_and_begin_using_pin_token(false);
 
                 // 14. Assign the default permissions
                 let mut permissions = Permissions::empty();
                 permissions.insert(Permissions::MAKE_CREDENTIAL);
                 permissions.insert(Permissions::GET_ASSERTION);
-                pin_protocol.restrict_pin_token(permissions, None);
+                pin_token.restrict(permissions, None);
 
                 // 15. Return PIN token
-                response.pin_token = Some(pin_protocol.encrypt_pin_token(&shared_secret)?);
+                response.pin_token = Some(pin_token.encrypt(&shared_secret)?);
 
                 shared_secret.delete(&mut self.trussed);
             }
@@ -902,20 +896,16 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 // 11. Check forcePINChange -- skipped
 
                 // 12. Reset all PIN tokens
-                for pin_protocol in self.pin_protocols() {
-                    self.pin_protocol(*pin_protocol).reset_pin_token();
-                }
-
                 // 13. Call beginUsingPinUvAuthToken
                 let mut pin_protocol = self.pin_protocol(pin_protocol);
-                pin_protocol.begin_using_pin_token(false);
+                let mut pin_token = pin_protocol.reset_and_begin_using_pin_token(false);
 
                 // 14. Assign the requested permissions
                 // 15. Assign the requested RP id
-                pin_protocol.restrict_pin_token(permissions, parameters.rp_id.clone());
+                pin_token.restrict(permissions, parameters.rp_id.clone());
 
                 // 16. Return PIN token
-                response.pin_token = Some(pin_protocol.encrypt_pin_token(&shared_secret)?);
+                response.pin_token = Some(pin_token.encrypt(&shared_secret)?);
 
                 shared_secret.delete(&mut self.trussed);
             }

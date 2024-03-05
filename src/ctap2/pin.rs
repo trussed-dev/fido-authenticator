@@ -1,5 +1,4 @@
 use crate::{cbor_serialize_message, TrussedRequirements};
-use core::mem;
 use ctap_types::{cose::EcdhEsHkdf256PublicKey, ctap2::client_pin::Permissions, Error, Result};
 use trussed::{
     cbor_deserialize,
@@ -71,6 +70,25 @@ impl PinToken {
     }
 }
 
+#[derive(Debug)]
+pub struct PinTokenMut<'a, T: CryptoClient> {
+    pin_token: &'a mut PinToken,
+    trussed: &'a mut T,
+}
+
+impl<T: CryptoClient> PinTokenMut<'_, T> {
+    pub fn restrict(&mut self, permissions: Permissions, rp_id: Option<String<256>>) {
+        self.pin_token.state.permissions = permissions;
+        self.pin_token.state.rp_id = rp_id;
+    }
+
+    // in spec: encrypt(..., pinUvAuthToken)
+    pub fn encrypt(&mut self, shared_secret: &SharedSecret) -> Result<Bytes<48>> {
+        let token = shared_secret.wrap(self.trussed, self.pin_token.key_id);
+        Bytes::from_slice(&token).map_err(|_| Error::Other)
+    }
+}
+
 #[derive(Debug, Default)]
 struct PinTokenState {
     permissions: Permissions,
@@ -88,9 +106,9 @@ pub struct PinProtocolState {
     shared_secret: Option<SharedSecret>,
 
     // for protocol version 1
-    pin_token_v1: PinToken,
+    pin_token_v1: Option<PinToken>,
     // for protocol version 2
-    pin_token_v2: PinToken,
+    pin_token_v2: Option<PinToken>,
 }
 
 impl PinProtocolState {
@@ -99,14 +117,18 @@ impl PinProtocolState {
         Self {
             key_agreement_key: generate_key_agreement_key(trussed),
             shared_secret: None,
-            pin_token_v1: PinToken::generate(trussed),
-            pin_token_v2: PinToken::generate(trussed),
+            pin_token_v1: None,
+            pin_token_v2: None,
         }
     }
 
     pub fn reset<T: TrussedRequirements>(self, trussed: &mut T) {
-        self.pin_token_v1.delete(trussed);
-        self.pin_token_v2.delete(trussed);
+        if let Some(token) = self.pin_token_v1 {
+            token.delete(trussed);
+        }
+        if let Some(token) = self.pin_token_v2 {
+            token.delete(trussed);
+        }
         syscall!(trussed.delete(self.key_agreement_key));
         if let Some(shared_secret) = self.shared_secret {
             shared_secret.delete(trussed);
@@ -134,17 +156,10 @@ impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
         }
     }
 
-    fn pin_token(&self) -> &PinToken {
+    fn pin_token(&self) -> Option<&PinToken> {
         match self.version {
-            PinProtocolVersion::V1 => &self.state.pin_token_v1,
-            PinProtocolVersion::V2 => &self.state.pin_token_v2,
-        }
-    }
-
-    fn pin_token_mut(&mut self) -> &mut PinToken {
-        match self.version {
-            PinProtocolVersion::V1 => &mut self.state.pin_token_v1,
-            PinProtocolVersion::V2 => &mut self.state.pin_token_v2,
+            PinProtocolVersion::V1 => self.state.pin_token_v1.as_ref(),
+            PinProtocolVersion::V2 => self.state.pin_token_v2.as_ref(),
         }
     }
 
@@ -157,25 +172,38 @@ impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
     }
 
     // in spec: resetPinUvAuthToken()
-    pub fn reset_pin_token(&mut self) {
-        let new = PinToken::generate(self.trussed);
-        mem::replace(self.pin_token_mut(), new).delete(self.trussed);
-    }
-
-    pub fn restrict_pin_token(&mut self, permissions: Permissions, rp_id: Option<String<256>>) {
-        let pin_token = self.pin_token_mut();
-        pin_token.state.permissions = permissions;
-        pin_token.state.rp_id = rp_id;
+    pub fn reset_pin_tokens(&mut self) {
+        if let Some(token) = self.state.pin_token_v1.take() {
+            token.delete(self.trussed);
+        }
+        if let Some(token) = self.state.pin_token_v2.take() {
+            token.delete(self.trussed);
+        }
     }
 
     // in spec: beginUsingPinUvAuthToken(userIsPresent)
-    pub fn begin_using_pin_token(&mut self, is_user_present: bool) {
-        let pin_token = self.pin_token_mut();
+    fn begin_using_pin_token(&mut self, is_user_present: bool) -> PinTokenMut<'_, T> {
+        // we assume that the previous PIN token has already been reset so we don’t need to delete it
+        let mut pin_token = PinToken::generate(self.trussed);
         pin_token.state.is_user_present = is_user_present;
         pin_token.state.is_user_verified = true;
         // TODO: set initial usage time limit
         // TODO: start and observe usage timer
         pin_token.state.is_in_use = true;
+        let pin_token_field = match self.version {
+            PinProtocolVersion::V1 => &mut self.state.pin_token_v1,
+            PinProtocolVersion::V2 => &mut self.state.pin_token_v2,
+        };
+        let pin_token = pin_token_field.insert(pin_token);
+        PinTokenMut {
+            pin_token,
+            trussed: self.trussed,
+        }
+    }
+
+    pub fn reset_and_begin_using_pin_token(&mut self, is_user_present: bool) -> PinTokenMut<'_, T> {
+        self.reset_pin_tokens();
+        self.begin_using_pin_token(is_user_present)
     }
 
     // in spec: getPublicKey
@@ -208,9 +236,12 @@ impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
 
     // in spec: verify(pinUvAuthToken, ...)
     pub fn verify_pin_token(&mut self, data: &[u8], signature: &[u8]) -> Result<&PinToken> {
-        let pin_token = self.pin_token();
+        let pin_token = self.pin_token().ok_or(Error::PinAuthInvalid)?;
         if pin_token.state.is_in_use && self.verify(pin_token.key_id, data, signature) {
-            Ok(self.pin_token())
+            // We previously checked that `pin_token()` is not None in the first line of this
+            // function so this cannot panic, but we cannot return the `pin_token` variable here
+            // because of the `verify` call after it.
+            Ok(self.pin_token().unwrap())
         } else {
             Err(Error::PinAuthInvalid)
         }
@@ -229,12 +260,6 @@ impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
         } else {
             Err(Error::PinAuthInvalid)
         }
-    }
-
-    // in spec: encrypt(..., pinUvAuthToken)
-    pub fn encrypt_pin_token(&mut self, shared_secret: &SharedSecret) -> Result<Bytes<48>> {
-        let token = shared_secret.wrap(self.trussed, self.pin_token().key_id);
-        Bytes::from_slice(&token).map_err(|_| Error::Other)
     }
 
     // in spec: decapsulate(...) = ecdh(...)

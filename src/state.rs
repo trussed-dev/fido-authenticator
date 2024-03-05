@@ -513,5 +513,7 @@ impl RuntimeState {
         if let Some(pin_protocol) = self.pin_protocol.take() {
             pin_protocol.reset(trussed);
         }
+        // to speed up future operations, we already generate the key agreement key
+        self.pin_protocol = Some(PinProtocolState::new(trussed));
     }
 }
