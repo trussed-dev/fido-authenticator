@@ -45,11 +45,19 @@ log-warn = []
 log-error = []
 
 [dev-dependencies]
+ciborium = { version = "0.2.2" }
+ctaphid = { version = "0.3.1", default-features = false }
+delog = { version = "0.1.6", features = ["std-log"] }
 env_logger = "0.11.0"
+interchange = "0.3.0"
+log = "0.4.21"
 # quickcheck = "1"
 rand = "0.8.4"
+serde_cbor = { version = "0.11.0", features = ["std"] }
 trussed = { version = "0.1", features = ["virt"] }
+trussed-hkdf = { version = "0.1", features = ["virt"] }
 trussed-usbip = { version = "0.0.1", default-features = false, features = ["ctaphid"] }
+trussed-staging = { version = "0.2.0", default-features = false, features = ["chunked"] }
 usbd-ctaphid = "0.1.0"
 
 [package.metadata.docs.rs]
@@ -64,5 +72,6 @@ serde-indexed = { git = "https://github.com/sosthene-nitrokey/serde-indexed.git"
 trussed = { git = "https://github.com/Nitrokey/trussed.git", tag = "v0.1.0-nitrokey.18" }
 trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "chunked-v0.1.0" }
 trussed-hkdf = { git = "https://github.com/Nitrokey/trussed-hkdf-backend.git", tag = "v0.1.0" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.2.0" }
 trussed-usbip = { git = "https://github.com/Nitrokey/pc-usbip-runner.git", tag = "v0.0.1-nitrokey.1" }
 usbd-ctaphid = { git = "https://github.com/Nitrokey/usbd-ctaphid.git", tag = "v0.1.0-nitrokey.2" }

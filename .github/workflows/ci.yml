@@ -49,7 +49,7 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
 
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --verbose --features dispatch
         if: matrix.target == 'x86_64-unknown-linux-gnu'
 
       - name: Check formatting
