@@ -81,10 +81,10 @@ pub trait ExtensionRequirements {}
 impl<T> ExtensionRequirements for T {}
 
 #[cfg(feature = "chunked")]
-pub trait ExtensionRequirements: trussed_staging::streaming::ChunkedClient {}
+pub trait ExtensionRequirements: trussed_chunked::ChunkedClient {}
 
 #[cfg(feature = "chunked")]
-impl<T> ExtensionRequirements for T where T: trussed_staging::streaming::ChunkedClient {}
+impl<T> ExtensionRequirements for T where T: trussed_chunked::ChunkedClient {}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 /// Externally defined configuration.
