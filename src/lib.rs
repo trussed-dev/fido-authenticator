@@ -7,6 +7,9 @@
 //!
 //! With feature `dispatch` activated, it also implements the `App` traits
 //! of [`apdu_dispatch`] and [`ctaphid_dispatch`].
+//!
+//! [`apdu_dispatch`]: https://docs.rs/apdu-dispatch
+//! [`ctaphid_dispatch`]: https://docs.rs/ctaphid-dispatch
 
 #![cfg_attr(not(test), no_std)]
 // #![warn(missing_docs)]
