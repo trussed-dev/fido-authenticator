@@ -35,9 +35,9 @@ fn handle_ctap1_from_hid<T, UP>(
     );
     {
         let command = apdu_dispatch::Command::try_from(data);
-        if let Err(status) = command {
+        if let Err(_status) = command {
             let code: [u8; 2] = (Status::IncorrectDataParameter).into();
-            debug!("CTAP1 parse error: {:?} ({})", status, hex_str!(&code));
+            debug!("CTAP1 parse error: {:?} ({})", _status, hex_str!(&code));
             response.extend_from_slice(&code).ok();
             return;
         }

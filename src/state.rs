@@ -229,7 +229,6 @@ pub struct RuntimeState {
     // both of these are a cache for previous Get{Next,}Assertion call
     cached_credentials: CredentialCache,
     pub active_get_assertion: Option<ActiveGetAssertionData>,
-    channel: Option<u32>,
     pub cached_rp: Option<CredentialManagementEnumerateRps>,
     pub cached_rk: Option<CredentialManagementEnumerateCredentials>,
 

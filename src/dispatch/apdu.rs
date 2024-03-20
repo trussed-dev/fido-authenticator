@@ -65,7 +65,7 @@ where
         match instruction {
             // U2F instruction codes
             // NB(nickray): I don't think 0x00 is a valid case.
-            0x00 | 0x01 | 0x02 => super::try_handle_ctap1(self, apdu, response)?, //self.call_authenticator_u2f(apdu, response),
+            0x00..=0x02 => super::try_handle_ctap1(self, apdu, response)?, //self.call_authenticator_u2f(apdu, response),
 
             _ => {
                 match ctaphid::Command::try_from(instruction) {
