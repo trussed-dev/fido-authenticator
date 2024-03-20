@@ -510,7 +510,15 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // how browsers firefox this
 
         let (signature, attestation_algorithm) = {
-            if attestation_maybe.is_none() {
+            if let Some(attestation) = attestation_maybe.as_ref() {
+                let signature = syscall!(self.trussed.sign_p256(
+                    attestation.0,
+                    &commitment,
+                    SignatureSerialization::Asn1Der,
+                ))
+                .signature;
+                (signature.to_bytes().map_err(|_| Error::Other)?, -7)
+            } else {
                 match algorithm {
                     SigningAlgorithm::Ed25519 => {
                         let signature =
@@ -544,14 +552,6 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                       //     (signature.to_bytes().map_err(|_| Error::Other)?, -7)
                       // }
                 }
-            } else {
-                let signature = syscall!(self.trussed.sign_p256(
-                    attestation_maybe.as_ref().unwrap().0,
-                    &commitment,
-                    SignatureSerialization::Asn1Der,
-                ))
-                .signature;
-                (signature.to_bytes().map_err(|_| Error::Other)?, -7)
             }
         };
         // debug_now!("SIG = {:?}", &signature);
@@ -564,16 +564,13 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let packed_attn_stmt = ctap2::make_credential::PackedAttestationStatement {
             alg: attestation_algorithm,
             sig: signature,
-            x5c: match attestation_maybe.is_some() {
-                false => None,
-                true => {
-                    // See: https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation-cert-requirements
-                    let cert = attestation_maybe.as_ref().unwrap().1.clone();
-                    let mut x5c = Vec::new();
-                    x5c.push(cert).ok();
-                    Some(x5c)
-                }
-            },
+            x5c: attestation_maybe.as_ref().map(|attestation| {
+                // See: https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation-cert-requirements
+                let cert = attestation.1.clone();
+                let mut x5c = Vec::new();
+                x5c.push(cert).ok();
+                x5c
+            }),
         };
 
         let fmt = String::<32>::from("packed");
@@ -1049,8 +1046,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         }
 
         // UP occurs by default, but option could specify not to.
-        let do_up = if parameters.options.is_some() {
-            parameters.options.as_ref().unwrap().up.unwrap_or(true)
+        let do_up = if let Some(options) = parameters.options.as_ref() {
+            options.up.unwrap_or(true)
         } else {
             true
         };
@@ -1820,15 +1817,15 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 .read_dir_first(Location::Internal, rp_path.clone(), None,))
             .entry;
 
-        if maybe_first_remaining_rk.is_none() {
-            info!("deleting parent {:?} as this was its last RK", &rp_path);
-            syscall!(self.trussed.remove_dir(Location::Internal, rp_path,));
-        } else {
+        if let Some(_first_remaining_rk) = maybe_first_remaining_rk {
             info!(
                 "not deleting deleting parent {:?} as there is {:?}",
                 &rp_path,
-                &maybe_first_remaining_rk.unwrap().path(),
+                &_first_remaining_rk.path(),
             );
+        } else {
+            info!("deleting parent {:?} as this was its last RK", &rp_path);
+            syscall!(self.trussed.remove_dir(Location::Internal, rp_path,));
         }
     }
 
