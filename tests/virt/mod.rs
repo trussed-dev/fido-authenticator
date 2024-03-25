@@ -1,4 +1,3 @@
-mod dispatch;
 mod pipe;
 
 use std::{
@@ -24,10 +23,7 @@ use ctaphid_dispatch::{
 };
 use fido_authenticator::{Authenticator, Config, Conforming};
 use serde::de::DeserializeOwned;
-use trussed::{
-    backend::BackendId,
-    virt::{self, Ram},
-};
+use trussed_staging::virt;
 
 use pipe::Pipe;
 
@@ -41,52 +37,40 @@ where
     INIT_LOGGER.call_once(|| {
         env_logger::init();
     });
-    virt::with_platform(Ram::default(), |platform| {
-        platform.run_client_with_backends(
-            "fido",
-            dispatch::Dispatch::default(),
-            &[
-                BackendId::Core,
-                BackendId::Custom(dispatch::Backend::Hkdf),
-                #[cfg(feature = "chunked")]
-                BackendId::Custom(dispatch::Backend::Staging),
-            ],
-            |client| {
-                // TODO: setup attestation cert
+    virt::with_ram_client("fido", |client| {
+        // TODO: setup attestation cert
 
-                let mut authenticator = Authenticator::new(
-                    client,
-                    Conforming {},
-                    Config {
-                        max_msg_size: 0,
-                        skip_up_timeout: None,
-                        max_resident_credential_count: None,
-                        large_blobs: None,
-                        nfc_transport: false,
-                    },
-                );
-
-                let channel = CHANNEL.get_or_init(Channel::new);
-                let (rq, rp) = channel.split().unwrap();
-
-                let stop = Arc::new(AtomicBool::new(false));
-                let poller_stop = stop.clone();
-                let poller = thread::spawn(move || {
-                    let mut dispatch = Dispatch::new(rp);
-                    while !poller_stop.load(Ordering::Relaxed) {
-                        dispatch.poll(&mut [&mut authenticator]);
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                });
-
-                let device = Device::new(rq);
-                let device = ctaphid::Device::new(device, DeviceInfo).unwrap();
-                let result = f(device);
-                stop.store(true, Ordering::Relaxed);
-                poller.join().unwrap();
-                result
+        let mut authenticator = Authenticator::new(
+            client,
+            Conforming {},
+            Config {
+                max_msg_size: 0,
+                skip_up_timeout: None,
+                max_resident_credential_count: None,
+                large_blobs: None,
+                nfc_transport: false,
             },
-        )
+        );
+
+        let channel = CHANNEL.get_or_init(Channel::new);
+        let (rq, rp) = channel.split().unwrap();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let poller_stop = stop.clone();
+        let poller = thread::spawn(move || {
+            let mut dispatch = Dispatch::new(rp);
+            while !poller_stop.load(Ordering::Relaxed) {
+                dispatch.poll(&mut [&mut authenticator]);
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+
+        let device = Device::new(rq);
+        let device = ctaphid::Device::new(device, DeviceInfo).unwrap();
+        let result = f(device);
+        stop.store(true, Ordering::Relaxed);
+        poller.join().unwrap();
+        result
     })
 }
 

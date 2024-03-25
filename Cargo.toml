@@ -12,7 +12,7 @@ description = "FIDO authenticator Trussed app"
 
 [[example]]
 name = "usbip"
-required-features = ["trussed-hkdf/virt", "trussed/virt", "dispatch"]
+required-features = ["dispatch"]
 
 [dependencies]
 ctap-types = { version = "0.1.0", features = ["large-blobs"] }
@@ -23,7 +23,7 @@ serde_cbor = { version = "0.11.0", default-features = false }
 serde-indexed = "0.1.0"
 sha2 = { version = "0.10", default-features = false }
 trussed = "0.1"
-trussed-hkdf = { version = "0.1.0" }
+trussed-hkdf = { version = "0.2.0" }
 trussed-chunked = { version = "0.1.0", optional = true }
 
 apdu-dispatch = { version = "0.1", optional = true }
@@ -55,9 +55,8 @@ log = "0.4.21"
 rand = "0.8.4"
 serde_cbor = { version = "0.11.0", features = ["std"] }
 trussed = { version = "0.1", features = ["virt"] }
-trussed-hkdf = { version = "0.1", features = ["virt"] }
 trussed-usbip = { version = "0.0.1", default-features = false, features = ["ctaphid"] }
-trussed-staging = { version = "0.2.0", default-features = false, features = ["chunked"] }
+trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt"] }
 usbd-ctaphid = "0.1.0"
 
 [package.metadata.docs.rs]
@@ -71,7 +70,7 @@ littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "ebd27
 serde-indexed = { git = "https://github.com/sosthene-nitrokey/serde-indexed.git", rev = "5005d23cb4ee8622e62188ea0f9466146f851f0d" }
 trussed = { git = "https://github.com/Nitrokey/trussed.git", tag = "v0.1.0-nitrokey.18" }
 trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "chunked-v0.1.0" }
-trussed-hkdf = { git = "https://github.com/Nitrokey/trussed-hkdf-backend.git", tag = "v0.1.0" }
-trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.2.0" }
+trussed-hkdf = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "hkdf-v0.2.0" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.3.0" }
 trussed-usbip = { git = "https://github.com/Nitrokey/pc-usbip-runner.git", tag = "v0.0.1-nitrokey.1" }
 usbd-ctaphid = { git = "https://github.com/Nitrokey/usbd-ctaphid.git", tag = "v0.1.0-nitrokey.2" }
