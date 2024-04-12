@@ -521,16 +521,12 @@ where
         }
 
         // update user name and display name unless the values are not set or empty
-        credential.data.user.name = user
-            .name
-            .as_ref()
-            .filter(|s| !s.is_empty())
-            .map(Clone::clone);
+        credential.data.user.name = user.name.as_ref().filter(|s| !s.is_empty()).cloned();
         credential.data.user.display_name = user
             .display_name
             .as_ref()
             .filter(|s| !s.is_empty())
-            .map(Clone::clone);
+            .cloned();
 
         // write updated credential
         let serialized = credential.serialize()?;
