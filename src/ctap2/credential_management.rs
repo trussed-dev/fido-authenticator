@@ -397,39 +397,16 @@ where
         };
 
         use crate::SigningAlgorithm;
-        use trussed_core::types::{KeySerialization, Mechanism};
 
         let algorithm = SigningAlgorithm::try_from(credential.algorithm)?;
+        let cose_public_key = algorithm.derive_public_key(&mut self.trussed, private_key);
         let cose_public_key = match algorithm {
             SigningAlgorithm::P256 => {
-                let public_key = syscall!(self
-                    .trussed
-                    .derive_p256_public_key(private_key, Location::Volatile))
-                .key;
-                let cose_public_key = syscall!(self.trussed.serialize_key(
-                    Mechanism::P256,
-                    public_key,
-                    // KeySerialization::EcdhEsHkdf256
-                    KeySerialization::Cose,
-                ))
-                .serialized_key;
-                syscall!(self.trussed.delete(public_key));
                 PublicKey::P256Key(ctap_types::serde::cbor_deserialize(&cose_public_key).unwrap())
             }
-            SigningAlgorithm::Ed25519 => {
-                let public_key = syscall!(self
-                    .trussed
-                    .derive_ed255_public_key(private_key, Location::Volatile))
-                .key;
-                let cose_public_key = syscall!(self
-                    .trussed
-                    .serialize_ed255_key(public_key, KeySerialization::Cose))
-                .serialized_key;
-                syscall!(self.trussed.delete(public_key));
-                PublicKey::Ed25519Key(
-                    ctap_types::serde::cbor_deserialize(&cose_public_key).unwrap(),
-                )
-            }
+            SigningAlgorithm::Ed25519 => PublicKey::Ed25519Key(
+                ctap_types::serde::cbor_deserialize(&cose_public_key).unwrap(),
+            ),
         };
         let cred_protect = match credential.cred_protect {
             Some(x) => Some(x),

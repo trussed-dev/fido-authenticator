@@ -18,10 +18,7 @@ use sha2::{Digest as _, Sha256};
 
 use trussed_core::{
     syscall, try_syscall,
-    types::{
-        KeyId, KeySerialization, Location, Mechanism, MediumData, Message, SignatureSerialization,
-        StorageAttributes,
-    },
+    types::{KeyId, Location, Mechanism, MediumData, Message, StorageAttributes},
 };
 
 use crate::{
@@ -272,42 +269,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             true => Location::Internal,
             false => Location::Volatile,
         };
-
-        let private_key: KeyId;
-        let public_key: KeyId;
-        let cose_public_key;
-        match algorithm {
-            SigningAlgorithm::P256 => {
-                private_key = syscall!(self.trussed.generate_p256_private_key(location)).key;
-                public_key = syscall!(self
-                    .trussed
-                    .derive_p256_public_key(private_key, Location::Volatile))
-                .key;
-                cose_public_key = syscall!(self.trussed.serialize_key(
-                    Mechanism::P256,
-                    public_key,
-                    KeySerialization::Cose
-                ))
-                .serialized_key;
-                let _success = syscall!(self.trussed.delete(public_key)).success;
-                info_now!("deleted public P256 key: {}", _success);
-            }
-            SigningAlgorithm::Ed25519 => {
-                private_key = syscall!(self.trussed.generate_ed255_private_key(location)).key;
-                public_key = syscall!(self
-                    .trussed
-                    .derive_ed255_public_key(private_key, Location::Volatile))
-                .key;
-                cose_public_key = syscall!(self.trussed.serialize_key(
-                    Mechanism::Ed255,
-                    public_key,
-                    KeySerialization::Cose
-                ))
-                .serialized_key;
-                let _success = syscall!(self.trussed.delete(public_key)).success;
-                info_now!("deleted public Ed25519 key: {}", _success);
-            }
-        }
+        let private_key = algorithm.generate_private_key(&mut self.trussed, location);
+        let cose_public_key = algorithm.derive_public_key(&mut self.trussed, private_key);
 
         // 12. if `rk` is set, store or overwrite key pair, if full error KeyStoreFull
 
@@ -478,39 +441,15 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                         .extend_from_slice(parameters.client_data_hash)
                         .map_err(|_| Error::Other)?;
 
-                    let (signature, attestation_algorithm) = {
-                        if let Some(attestation) = attestation_maybe.as_ref() {
-                            let signature = syscall!(self.trussed.sign_p256(
-                                attestation.0,
-                                &commitment,
-                                SignatureSerialization::Asn1Der,
-                            ))
-                            .signature;
-                            (signature.to_bytes().map_err(|_| Error::Other)?, -7)
-                        } else {
-                            match algorithm {
-                                SigningAlgorithm::Ed25519 => {
-                                    let signature =
-                                        syscall!(self.trussed.sign_ed255(private_key, &commitment))
-                                            .signature;
-                                    (signature.to_bytes().map_err(|_| Error::Other)?, -8)
-                                }
-                                SigningAlgorithm::P256 => {
-                                    // DO NOT prehash here, `trussed` does that
-                                    let der_signature = syscall!(self.trussed.sign_p256(
-                                        private_key,
-                                        &commitment,
-                                        SignatureSerialization::Asn1Der
-                                    ))
-                                    .signature;
-                                    (der_signature.to_bytes().map_err(|_| Error::Other)?, -7)
-                                }
-                            }
-                        }
-                    };
+                    let (attestation_key, attestation_algorithm) = attestation_maybe
+                        .as_ref()
+                        .map(|attestation| (attestation.0, SigningAlgorithm::P256))
+                        .unwrap_or((private_key, algorithm));
+                    let signature =
+                        attestation_algorithm.sign(&mut self.trussed, attestation_key, &commitment);
                     let packed = PackedAttestationStatement {
-                        alg: attestation_algorithm,
-                        sig: signature,
+                        alg: attestation_algorithm.into(),
+                        sig: signature.to_bytes().map_err(|_| Error::Other)?,
                         x5c: attestation_maybe.as_ref().map(|attestation| {
                             // See: https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation-cert-requirements
                             let cert = attestation.1.clone();
@@ -1485,11 +1424,9 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             Key::WrappedKey(_) => true,
             Key::ResidentKey(key) => {
                 debug_now!("checking if ResidentKey {:?} exists", key);
-                match alg {
-                    -7 => syscall!(self.trussed.exists(Mechanism::P256, *key)).exists,
-                    -8 => syscall!(self.trussed.exists(Mechanism::Ed255, *key)).exists,
-                    _ => false,
-                }
+                SigningAlgorithm::try_from(alg)
+                    .map(|alg| syscall!(self.trussed.exists(alg.mechanism(), *key)).exists)
+                    .unwrap_or_default()
             }
         }
     }
@@ -1666,21 +1603,12 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             .extend_from_slice(&data.client_data_hash)
             .map_err(|_| Error::Other)?;
 
-        let (mechanism, serialization) = match credential.algorithm() {
-            -7 => (Mechanism::P256, SignatureSerialization::Asn1Der),
-            -8 => (Mechanism::Ed255, SignatureSerialization::Raw),
-            _ => {
-                return Err(Error::Other);
-            }
-        };
-
-        debug_now!("signing with {:?}, {:?}", &mechanism, &serialization);
-        let signature = syscall!(self
-            .trussed
-            .sign(mechanism, key, &commitment, serialization))
-        .signature
-        .to_bytes()
-        .unwrap();
+        let signing_algorithm =
+            SigningAlgorithm::try_from(credential.algorithm()).map_err(|_| Error::Other)?;
+        let signature = signing_algorithm
+            .sign(&mut self.trussed, key, &commitment)
+            .to_bytes()
+            .unwrap();
 
         // select preferred format or skip attestation statement
         let att_stmt_fmt = data
@@ -1696,13 +1624,16 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                     let (attestation_maybe, _) = self.state.identity.attestation(&mut self.trussed);
                     let (signature, attestation_algorithm) = {
                         if let Some(attestation) = attestation_maybe.as_ref() {
-                            let signature = syscall!(self.trussed.sign_p256(
+                            let signing_algorithm = SigningAlgorithm::P256;
+                            let signature = signing_algorithm.sign(
+                                &mut self.trussed,
                                 attestation.0,
                                 &commitment,
-                                SignatureSerialization::Asn1Der,
-                            ))
-                            .signature;
-                            (signature.to_bytes().map_err(|_| Error::Other)?, -7)
+                            );
+                            (
+                                signature.to_bytes().map_err(|_| Error::Other)?,
+                                signing_algorithm.into(),
+                            )
                         } else {
                             (signature.clone(), credential.algorithm())
                         }

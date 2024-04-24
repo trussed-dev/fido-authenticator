@@ -23,8 +23,12 @@ pub use state::migrate;
 use core::time::Duration;
 
 use trussed_core::{
-    mechanisms, syscall, types::Location, CertificateClient, CryptoClient, FilesystemClient,
-    ManagementClient, UiClient,
+    mechanisms, syscall,
+    types::{
+        KeyId, KeySerialization, Location, Mechanism, SerializedKey, Signature,
+        SignatureSerialization, StorageAttributes,
+    },
+    CertificateClient, CryptoClient, FilesystemClient, ManagementClient, UiClient,
 };
 use trussed_fs_info::{FsInfoClient, FsInfoReply};
 use trussed_hkdf::HkdfClient;
@@ -204,8 +208,73 @@ pub enum SigningAlgorithm {
     P256 = -7,
 }
 
-impl core::convert::TryFrom<i32> for SigningAlgorithm {
+impl SigningAlgorithm {
+    pub fn mechanism(&self) -> Mechanism {
+        match self {
+            Self::Ed25519 => Mechanism::Ed255,
+            Self::P256 => Mechanism::P256,
+        }
+    }
+
+    pub fn signature_serialization(&self) -> SignatureSerialization {
+        match self {
+            Self::Ed25519 => SignatureSerialization::Raw,
+            Self::P256 => SignatureSerialization::Asn1Der,
+        }
+    }
+
+    pub fn generate_private_key<C: CryptoClient>(
+        &self,
+        trussed: &mut C,
+        location: Location,
+    ) -> KeyId {
+        syscall!(trussed.generate_key(
+            self.mechanism(),
+            StorageAttributes::new().set_persistence(location)
+        ))
+        .key
+    }
+
+    pub fn derive_public_key<C: CryptoClient>(
+        &self,
+        trussed: &mut C,
+        private_key: KeyId,
+    ) -> SerializedKey {
+        let mechanism = self.mechanism();
+        let public_key = syscall!(trussed.derive_key(
+            mechanism,
+            private_key,
+            None,
+            StorageAttributes::new().set_persistence(Location::Volatile)
+        ))
+        .key;
+        let cose_public_key =
+            syscall!(trussed.serialize_key(mechanism, public_key, KeySerialization::Cose))
+                .serialized_key;
+        if !syscall!(trussed.delete(public_key)).success {
+            error!("failed to delete credential public key");
+        }
+        cose_public_key
+    }
+
+    pub fn sign<C: CryptoClient>(&self, trussed: &mut C, key: KeyId, data: &[u8]) -> Signature {
+        syscall!(trussed.sign(self.mechanism(), key, data, self.signature_serialization()))
+            .signature
+    }
+}
+
+impl From<SigningAlgorithm> for i32 {
+    fn from(alg: SigningAlgorithm) -> Self {
+        match alg {
+            SigningAlgorithm::P256 => -7,
+            SigningAlgorithm::Ed25519 => -8,
+        }
+    }
+}
+
+impl TryFrom<i32> for SigningAlgorithm {
     type Error = Error;
+
     fn try_from(alg: i32) -> Result<Self> {
         Ok(match alg {
             -7 => SigningAlgorithm::P256,
