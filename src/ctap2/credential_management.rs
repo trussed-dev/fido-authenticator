@@ -429,9 +429,7 @@ where
                 PublicKey::Ed25519Key(
                     ctap_types::serde::cbor_deserialize(&cose_public_key).unwrap(),
                 )
-            } // SigningAlgorithm::Totp => {
-              //     PublicKey::TotpKey(Default::default())
-              // }
+            }
         };
         let cred_protect = match credential.cred_protect {
             Some(x) => Some(x),

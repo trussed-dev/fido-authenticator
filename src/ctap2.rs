@@ -206,7 +206,6 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 -8 => {
                     algorithm = Some(SigningAlgorithm::Ed25519);
                 }
-                // -9 => { algorithm = Some(SigningAlgorithm::Totp); }
                 _ => {}
             }
         }
@@ -307,20 +306,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 .serialized_key;
                 let _success = syscall!(self.trussed.delete(public_key)).success;
                 info_now!("deleted public Ed25519 key: {}", _success);
-            } // SigningAlgorithm::Totp => {
-              //     if parameters.client_data_hash.len() != 32 {
-              //         return Err(Error::InvalidParameter);
-              //     }
-              //     // b'TOTP---W\x0e\xf1\xe0\xd7\x83\xfe\t\xd1\xc1U\xbf\x08T_\x07v\xb2\xc6--TOTP'
-              //     let totp_secret: [u8; 20] = parameters.client_data_hash[6..26].try_into().unwrap();
-              //     private_key = syscall!(self.trussed.unsafe_inject_shared_key(
-              //         &totp_secret, Location::Internal)).key;
-              //     // info_now!("totes injected");
-              //     let fake_cose_pk = ctap_types::cose::TotpPublicKey {};
-              //     let fake_serialized_cose_pk = trussed::cbor_serialize_bytes(&fake_cose_pk)
-              //         .map_err(|_| Error::NotAllowed)?;
-              //     cose_public_key = fake_serialized_cose_pk; // Bytes::from_slice(&[0u8; 20]).unwrap();
-              // }
+            }
         }
 
         // 12. if `rk` is set, store or overwrite key pair, if full error KeyStoreFull
@@ -509,7 +495,6 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                                             .signature;
                                     (signature.to_bytes().map_err(|_| Error::Other)?, -8)
                                 }
-
                                 SigningAlgorithm::P256 => {
                                     // DO NOT prehash here, `trussed` does that
                                     let der_signature = syscall!(self.trussed.sign_p256(
@@ -1503,11 +1488,6 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 match alg {
                     -7 => syscall!(self.trussed.exists(Mechanism::P256, *key)).exists,
                     -8 => syscall!(self.trussed.exists(Mechanism::Ed255, *key)).exists,
-                    // -9 => {
-                    //     let exists = syscall!(self.trussed.exists(Mechanism::Totp, key)).exists;
-                    //     info_now!("found it");
-                    //     exists
-                    // }
                     _ => false,
                 }
             }
@@ -1689,7 +1669,6 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         let (mechanism, serialization) = match credential.algorithm() {
             -7 => (Mechanism::P256, SignatureSerialization::Asn1Der),
             -8 => (Mechanism::Ed255, SignatureSerialization::Raw),
-            // -9 => (Mechanism::Totp, SignatureSerialization::Raw),
             _ => {
                 return Err(Error::Other);
             }
