@@ -114,7 +114,11 @@ impl Ctap2<'_> {
                 }
                 err => panic!("failed to execute CTAP2 command: {err:?}"),
             })?;
-        let value: Value = ciborium::from_reader(reply.as_slice()).unwrap();
+        let value: Value = if reply.is_empty() {
+            Value::Map(Vec::new())
+        } else {
+            ciborium::from_reader(reply.as_slice()).unwrap()
+        };
         log::debug!("Received reply {value:?}");
         Ok(value.into())
     }
