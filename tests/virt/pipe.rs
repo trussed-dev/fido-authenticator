@@ -93,10 +93,10 @@ enum State {
     Sending((Response, MessageState)),
 }
 
-pub struct Pipe {
+pub struct Pipe<'a> {
     queue: VecDeque<[u8; PACKET_SIZE]>,
     state: State,
-    interchange: Requester<'static>,
+    interchange: Requester<'a>,
     buffer: [u8; MESSAGE_SIZE],
     last_channel: u32,
     implements: u8,
@@ -106,8 +106,8 @@ pub struct Pipe {
     version: Version,
 }
 
-impl Pipe {
-    pub fn new(interchange: Requester<'static>) -> Self {
+impl<'a> Pipe<'a> {
+    pub fn new(interchange: Requester<'a>) -> Self {
         Self {
             queue: Default::default(),
             state: State::Idle,

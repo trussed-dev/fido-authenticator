@@ -5,7 +5,7 @@ use std::{
     cell::RefCell,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Once, OnceLock,
+        Arc, Once,
     },
     thread,
     time::{Duration, SystemTime},
@@ -28,11 +28,11 @@ use trussed_staging::virt;
 use pipe::Pipe;
 
 static INIT_LOGGER: Once = Once::new();
-static CHANNEL: OnceLock<Channel> = OnceLock::new();
 
 pub fn run_ctaphid<F, T>(f: F) -> T
 where
-    F: FnOnce(ctaphid::Device<Device>) -> T,
+    F: FnOnce(ctaphid::Device<Device>) -> T + Send,
+    T: Send,
 {
     INIT_LOGGER.call_once(|| {
         env_logger::init();
@@ -52,38 +52,45 @@ where
             },
         );
 
-        let channel = CHANNEL.get_or_init(Channel::new);
+        let channel = Channel::new();
         let (rq, rp) = channel.split().unwrap();
 
-        let stop = Arc::new(AtomicBool::new(false));
-        let poller_stop = stop.clone();
-        let poller = thread::spawn(move || {
-            let mut dispatch = Dispatch::new(rp);
-            while !poller_stop.load(Ordering::Relaxed) {
-                dispatch.poll(&mut [&mut authenticator]);
-                thread::sleep(Duration::from_millis(10));
-            }
-        });
+        thread::scope(|s| {
+            let stop = Arc::new(AtomicBool::new(false));
+            let poller_stop = stop.clone();
+            let poller = s.spawn(move || {
+                let mut dispatch = Dispatch::new(rp);
+                while !poller_stop.load(Ordering::Relaxed) {
+                    dispatch.poll(&mut [&mut authenticator]);
+                    thread::sleep(Duration::from_millis(10));
+                }
+            });
 
-        let device = Device::new(rq);
-        let device = ctaphid::Device::new(device, DeviceInfo).unwrap();
-        let result = f(device);
-        stop.store(true, Ordering::Relaxed);
-        poller.join().unwrap();
-        result
+            let runner = s.spawn(move || {
+                let device = Device::new(rq);
+                let device = ctaphid::Device::new(device, DeviceInfo).unwrap();
+                f(device)
+            });
+
+            let result = runner.join();
+            stop.store(true, Ordering::Relaxed);
+            poller.join().unwrap();
+            result.unwrap()
+        })
     })
 }
 
 pub fn run_ctap2<F, T>(f: F) -> T
 where
-    F: FnOnce(Ctap2) -> T,
+    F: FnOnce(Ctap2) -> T + Send,
+    T: Send,
 {
     run_ctaphid(|device| f(Ctap2(device)))
 }
 
-pub struct Ctap2(ctaphid::Device<Device>);
+pub struct Ctap2<'a>(ctaphid::Device<Device<'a>>);
 
-impl Ctap2 {
+impl Ctap2<'_> {
     pub fn call<T: DeserializeOwned>(&self, operation: Operation, data: &Value) -> T {
         let mut serialized = Vec::new();
         ciborium::into_writer(data, &mut serialized).unwrap();
@@ -109,15 +116,15 @@ impl HidDeviceInfo for DeviceInfo {
     }
 }
 
-pub struct Device(RefCell<Pipe>);
+pub struct Device<'a>(RefCell<Pipe<'a>>);
 
-impl Device {
-    fn new(requester: Requester<'static>) -> Self {
+impl<'a> Device<'a> {
+    fn new(requester: Requester<'a>) -> Self {
         Self(RefCell::new(Pipe::new(requester)))
     }
 }
 
-impl HidDevice for Device {
+impl HidDevice for Device<'_> {
     type Info = DeviceInfo;
 
     fn send(&self, data: &[u8]) -> Result<(), RequestError> {
