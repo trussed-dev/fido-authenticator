@@ -3,6 +3,7 @@ mod pipe;
 use std::{
     borrow::Cow,
     cell::RefCell,
+    fmt::{self, Debug, Formatter},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Once,
@@ -91,11 +92,34 @@ where
 pub struct Ctap2<'a>(ctaphid::Device<Device<'a>>);
 
 impl Ctap2<'_> {
-    pub fn call<T: DeserializeOwned>(&self, operation: Operation, data: &Value) -> T {
+    pub fn call<T: DeserializeOwned>(
+        &self,
+        operation: Operation,
+        data: &Value,
+    ) -> Result<T, Ctap2Error> {
         let mut serialized = Vec::new();
         ciborium::into_writer(data, &mut serialized).unwrap();
-        let reply = self.0.ctap2(operation.into(), &serialized).unwrap();
-        ciborium::from_reader(reply.as_slice()).unwrap()
+        let reply = self
+            .0
+            .ctap2(operation.into(), &serialized)
+            .map_err(|err| match err {
+                ctaphid::error::Error::CommandError(ctaphid::error::CommandError::CborError(
+                    value,
+                )) => Ctap2Error(value),
+                err => panic!("failed to execute CTAP2 command: {err:?}"),
+            })?;
+        Ok(ciborium::from_reader(reply.as_slice()).unwrap())
+    }
+}
+
+#[derive(PartialEq)]
+pub struct Ctap2Error(pub u8);
+
+impl Debug for Ctap2Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Ctap2Error")
+            .field(&format_args!("{:#x}", self.0))
+            .finish()
     }
 }
 
