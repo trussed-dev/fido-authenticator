@@ -13,6 +13,7 @@ use std::{
 };
 
 use ciborium::Value;
+use ctap_types::ctap2::Operation;
 use ctaphid::{
     error::{RequestError, ResponseError},
     HidDevice, HidDeviceInfo,
@@ -93,7 +94,12 @@ pub struct Ctap2<'a>(ctaphid::Device<Device<'a>>);
 
 impl Ctap2<'_> {
     pub fn exec<R: Request>(&self, request: R) -> Result<R::Reply, Ctap2Error> {
+        let operation = Operation::try_from(R::COMMAND)
+            .map(|op| format!("{op:?}"))
+            .unwrap_or_else(|_| "?".to_owned());
+        log::info!("Executing command {:#x} ({})", R::COMMAND, operation);
         let request = request.into();
+        log::debug!("Sending request {request:?}");
         let mut serialized = Vec::new();
         ciborium::into_writer(&request, &mut serialized).unwrap();
         let reply = self
@@ -102,10 +108,14 @@ impl Ctap2<'_> {
             .map_err(|err| match err {
                 ctaphid::error::Error::CommandError(ctaphid::error::CommandError::CborError(
                     value,
-                )) => Ctap2Error(value),
+                )) => {
+                    log::warn!("Received CTAP2 error {value:#x}");
+                    Ctap2Error(value)
+                }
                 err => panic!("failed to execute CTAP2 command: {err:?}"),
             })?;
         let value: Value = ciborium::from_reader(reply.as_slice()).unwrap();
+        log::debug!("Received reply {value:?}");
         Ok(value.into())
     }
 }
