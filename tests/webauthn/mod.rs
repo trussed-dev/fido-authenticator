@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use ciborium::Value;
 
 #[derive(Default)]
@@ -13,6 +15,12 @@ impl From<Map> for Value {
     fn from(map: Map) -> Value {
         Value::from(map.0)
     }
+}
+
+pub trait Request: Into<Value> {
+    const COMMAND: u8;
+
+    type Reply: From<Value>;
 }
 
 pub struct Rp {
@@ -108,14 +116,14 @@ impl From<PubKeyCredParam> for Value {
     }
 }
 
-pub struct MakeCredentialRequest {
+pub struct MakeCredential {
     client_data_hash: Vec<u8>,
     rp: Rp,
     user: User,
     pub_key_cred_params: Vec<PubKeyCredParam>,
 }
 
-impl MakeCredentialRequest {
+impl MakeCredential {
     pub fn new(
         client_data_hash: impl Into<Vec<u8>>,
         rp: Rp,
@@ -131,8 +139,8 @@ impl MakeCredentialRequest {
     }
 }
 
-impl From<MakeCredentialRequest> for Value {
-    fn from(request: MakeCredentialRequest) -> Value {
+impl From<MakeCredential> for Value {
+    fn from(request: MakeCredential) -> Value {
         let mut map = Map::default();
         map.push(1, request.client_data_hash);
         map.push(2, request.rp);
@@ -146,5 +154,56 @@ impl From<MakeCredentialRequest> for Value {
                 .collect::<Vec<_>>(),
         );
         map.into()
+    }
+}
+
+impl Request for MakeCredential {
+    const COMMAND: u8 = 0x01;
+
+    type Reply = MakeCredentialReply;
+}
+
+#[derive(Debug, PartialEq)]
+pub struct MakeCredentialReply {
+    pub fmt: String,
+    pub auth_data: Value,
+    pub att_stmt: Value,
+}
+
+impl From<Value> for MakeCredentialReply {
+    fn from(value: Value) -> Self {
+        let mut map: BTreeMap<u8, Value> = value.deserialized().unwrap();
+        Self {
+            fmt: map.remove(&1).unwrap().deserialized().unwrap(),
+            auth_data: map.remove(&2).unwrap(),
+            att_stmt: map.remove(&3).unwrap(),
+        }
+    }
+}
+
+pub struct GetInfo;
+
+impl From<GetInfo> for Value {
+    fn from(_: GetInfo) -> Self {
+        Self::Null
+    }
+}
+
+impl Request for GetInfo {
+    const COMMAND: u8 = 0x04;
+
+    type Reply = GetInfoReply;
+}
+
+pub struct GetInfoReply {
+    pub versions: Vec<String>,
+}
+
+impl From<Value> for GetInfoReply {
+    fn from(value: Value) -> Self {
+        let mut map: BTreeMap<u8, Value> = value.deserialized().unwrap();
+        Self {
+            versions: map.remove(&1).unwrap().deserialized().unwrap(),
+        }
     }
 }

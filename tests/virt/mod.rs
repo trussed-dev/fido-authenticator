@@ -13,7 +13,6 @@ use std::{
 };
 
 use ciborium::Value;
-use ctap_types::ctap2::Operation;
 use ctaphid::{
     error::{RequestError, ResponseError},
     HidDevice, HidDeviceInfo,
@@ -23,8 +22,9 @@ use ctaphid_dispatch::{
     types::{Channel, Requester},
 };
 use fido_authenticator::{Authenticator, Config, Conforming};
-use serde::de::DeserializeOwned;
 use trussed_staging::virt;
+
+use crate::webauthn::Request;
 
 use pipe::Pipe;
 
@@ -92,23 +92,21 @@ where
 pub struct Ctap2<'a>(ctaphid::Device<Device<'a>>);
 
 impl Ctap2<'_> {
-    pub fn call<T: DeserializeOwned>(
-        &self,
-        operation: Operation,
-        data: &Value,
-    ) -> Result<T, Ctap2Error> {
+    pub fn exec<R: Request>(&self, request: R) -> Result<R::Reply, Ctap2Error> {
+        let request = request.into();
         let mut serialized = Vec::new();
-        ciborium::into_writer(data, &mut serialized).unwrap();
+        ciborium::into_writer(&request, &mut serialized).unwrap();
         let reply = self
             .0
-            .ctap2(operation.into(), &serialized)
+            .ctap2(R::COMMAND, &serialized)
             .map_err(|err| match err {
                 ctaphid::error::Error::CommandError(ctaphid::error::CommandError::CborError(
                     value,
                 )) => Ctap2Error(value),
                 err => panic!("failed to execute CTAP2 command: {err:?}"),
             })?;
-        Ok(ciborium::from_reader(reply.as_slice()).unwrap())
+        let value: Value = ciborium::from_reader(reply.as_slice()).unwrap();
+        Ok(value.into())
     }
 }
 
