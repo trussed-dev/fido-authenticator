@@ -35,7 +35,7 @@ pub mod credential_management;
 pub mod large_blobs;
 pub mod pin;
 
-use pin::{PinProtocol, PinProtocolVersion, SharedSecret};
+use pin::{PinProtocol, PinProtocolVersion, RpScope, SharedSecret};
 
 /// Implement `ctap2::Authenticator` for our Authenticator.
 impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenticator<UP, T> {
@@ -924,9 +924,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         use credential_management as cm;
         use ctap2::credential_management::Subcommand;
 
-        // TODO: I see "failed pinauth" output, but then still continuation...
-        // TODO: determine rp_id
-        self.verify_pin_auth_using_token(parameters, None)?;
+        self.verify_credential_management_pin_auth(parameters)?;
 
         let mut cred_mgmt = cm::CredentialManagement::new(self);
         let sub_parameters = &parameters.sub_command_params;
@@ -1315,32 +1313,40 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         Ok(pin)
     }
 
-    // fn verify_pin_auth_using_token(&mut self, data: &[u8], pin_auth: &Bytes<16>)
-    fn verify_pin_auth_using_token(
+    fn verify_credential_management_pin_auth(
         &mut self,
         parameters: &ctap2::credential_management::Request,
-        rp_id: Option<&str>,
     ) -> Result<()> {
-        // info_now!("CM params: {:?}", parameters);
         use ctap2::credential_management::Subcommand;
-        match parameters.sub_command {
-            // are we Haskell yet lol
-            sub_command @ Subcommand::GetCredsMetadata
-            | sub_command @ Subcommand::EnumerateRpsBegin
-            | sub_command @ Subcommand::EnumerateCredentialsBegin
-            | sub_command @ Subcommand::DeleteCredential
-            | sub_command @ Subcommand::UpdateUserInformation => {
-                // check pinProtocol
-                let pin_protocol = parameters
-                    // .sub_command_params.as_ref().ok_or(Error::MissingParameter)?
-                    .pin_protocol
+        let rp_scope = match parameters.sub_command {
+            Subcommand::EnumerateCredentialsBegin => {
+                let rp_id_hash = parameters
+                    .sub_command_params
+                    .as_ref()
+                    .and_then(|subparams| subparams.rp_id_hash.as_deref())
                     .ok_or(Error::MissingParameter)?;
+                RpScope::RpIdHash(rp_id_hash)
+            }
+            Subcommand::DeleteCredential | Subcommand::UpdateUserInformation => {
+                // TODO: determine RP ID from credential ID
+                RpScope::All
+            }
+            _ => RpScope::All,
+        };
+        match parameters.sub_command {
+            Subcommand::GetCredsMetadata
+            | Subcommand::EnumerateRpsBegin
+            | Subcommand::EnumerateCredentialsBegin
+            | Subcommand::DeleteCredential
+            | Subcommand::UpdateUserInformation => {
+                // check pinProtocol
+                let pin_protocol = parameters.pin_protocol.ok_or(Error::MissingParameter)?;
                 let pin_protocol = self.parse_pin_protocol(pin_protocol)?;
 
                 // check pinAuth
                 let mut data: Bytes<{ sizes::MAX_CREDENTIAL_ID_LENGTH_PLUS_256 }> =
-                    Bytes::from_slice(&[sub_command as u8]).unwrap();
-                let len = 1 + match sub_command {
+                    Bytes::from_slice(&[parameters.sub_command as u8]).unwrap();
+                let len = 1 + match parameters.sub_command {
                     Subcommand::EnumerateCredentialsBegin
                     | Subcommand::DeleteCredential
                     | Subcommand::UpdateUserInformation => {
@@ -1368,7 +1374,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 if let Ok(pin_token) = pin_protocol.verify_pin_token(&data[..len], pin_auth) {
                     info_now!("passed pinauth");
                     pin_token.require_permissions(Permissions::CREDENTIAL_MANAGEMENT)?;
-                    pin_token.require_valid_for_rp_id(rp_id)?;
+                    pin_token.require_valid_for_rp(rp_scope)?;
                     Ok(())
                 } else {
                     info_now!("failed pinauth!");
@@ -1456,7 +1462,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                     let mut pin_protocol = self.pin_protocol(pin_protocol);
                     let pin_token = pin_protocol.verify_pin_token(data, pin_auth)?;
                     pin_token.require_permissions(permissions)?;
-                    pin_token.require_valid_for_rp_id(Some(rp_id))?;
+                    pin_token.require_valid_for_rp(RpScope::RpId(rp_id))?;
 
                     return Ok(true);
                 } else {

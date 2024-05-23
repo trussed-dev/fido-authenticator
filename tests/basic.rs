@@ -98,34 +98,116 @@ fn test_get_pin_token() {
     })
 }
 
-#[test]
-fn test_make_credential() {
-    virt::run_ctap2(|device| {
-        let rp = Rp::new("example.com");
-        let user = User::new(b"id123")
-            .name("john.doe")
-            .display_name("John Doe");
-        let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
-        let request = MakeCredential::new(b"", rp, user, pub_key_cred_params);
-        let reply = device.exec(request).unwrap();
-        assert_eq!(reply.fmt, "packed");
-        assert!(reply.auth_data.is_bytes());
-        assert!(reply.att_stmt.is_map());
-    });
+#[derive(Clone, Debug)]
+struct RequestPinToken {
+    permissions: u8,
+    rp_id: Option<String>,
+}
+
+#[derive(Debug)]
+struct TestMakeCredential {
+    pin_token: Option<RequestPinToken>,
+    pub_key_alg: i32,
+}
+
+impl TestMakeCredential {
+    fn run(&self) {
+        let key_agreement_key = KeyAgreementKey::generate();
+        let pin = b"123456";
+        let rp_id = "example.com";
+        // TODO: client data
+        let client_data_hash = b"";
+
+        virt::run_ctap2(|device| {
+            let pin_auth = self.pin_token.as_ref().map(|pin_token| {
+                let shared_secret = get_shared_secret(&device, &key_agreement_key);
+                set_pin(&device, &key_agreement_key, &shared_secret, pin);
+                let pin_token = get_pin_token(
+                    &device,
+                    &key_agreement_key,
+                    &shared_secret,
+                    pin,
+                    pin_token.permissions,
+                    pin_token.rp_id.clone(),
+                );
+                pin_token.authenticate(client_data_hash)
+            });
+
+            let rp = Rp::new(rp_id);
+            let user = User::new(b"id123")
+                .name("john.doe")
+                .display_name("John Doe");
+            let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", self.pub_key_alg)];
+            let mut request = MakeCredential::new(client_data_hash, rp, user, pub_key_cred_params);
+            if let Some(pin_auth) = pin_auth {
+                request.pin_auth = Some(pin_auth);
+                request.pin_protocol = Some(2);
+            }
+
+            let result = device.exec(request);
+            if let Some(error) = self.expected_error() {
+                assert_eq!(result, Err(Ctap2Error(error)));
+            } else {
+                let reply = result.unwrap();
+                assert_eq!(reply.fmt, "packed");
+                assert!(reply.auth_data.is_bytes());
+                assert!(reply.att_stmt.is_map());
+            }
+        });
+    }
+
+    fn expected_error(&self) -> Option<u8> {
+        if let Some(pin_token) = &self.pin_token {
+            if pin_token.permissions != 0x01 {
+                return Some(0x33);
+            }
+            if let Some(rp_id) = &pin_token.rp_id {
+                if rp_id != "example.com" {
+                    return Some(0x33);
+                }
+            }
+        }
+        if self.pub_key_alg != -7 {
+            return Some(0x26);
+        }
+        None
+    }
 }
 
 #[test]
-fn test_make_credential_invalid_params() {
-    virt::run_ctap2(|device| {
-        let rp = Rp::new("example.com");
-        let user = User::new(b"id123")
-            .name("john.doe")
-            .display_name("John Doe");
-        let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -11)];
-        let request = MakeCredential::new(b"", rp, user, pub_key_cred_params);
-        let result = device.exec(request);
-        assert_eq!(result, Err(Ctap2Error(0x26)));
-    });
+fn test_make_credential() {
+    let pin_tokens = [
+        None,
+        Some(RequestPinToken {
+            permissions: 0x01,
+            rp_id: None,
+        }),
+        Some(RequestPinToken {
+            permissions: 0x01,
+            rp_id: Some("example.com".to_owned()),
+        }),
+        Some(RequestPinToken {
+            permissions: 0x01,
+            rp_id: Some("test.com".to_owned()),
+        }),
+        Some(RequestPinToken {
+            permissions: 0x04,
+            rp_id: None,
+        }),
+    ];
+    for pin_token in pin_tokens {
+        for pub_key_alg in [-7, -11] {
+            let test = TestMakeCredential {
+                pin_token: pin_token.clone(),
+                pub_key_alg,
+            };
+            println!("{}", "=".repeat(80));
+            println!("Running test:");
+            println!("{test:#?}");
+            println!();
+            test.run();
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -220,12 +302,6 @@ impl TestListCredentials {
 #[test]
 fn test_list_credentials() {
     for pin_token_rp_id in [false, true] {
-        // true is omitted because it currently fails, see:
-        // https://github.com/Nitrokey/fido-authenticator/issues/80
-        if pin_token_rp_id {
-            continue;
-        }
-
         let test = TestListCredentials { pin_token_rp_id };
         println!("{}", "=".repeat(80));
         println!("Running test:");

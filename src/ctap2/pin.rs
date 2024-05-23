@@ -30,6 +30,13 @@ impl From<PinProtocolVersion> for u8 {
 }
 
 #[derive(Debug)]
+pub enum RpScope<'a> {
+    All,
+    RpId(&'a str),
+    RpIdHash(&'a [u8]),
+}
+
+#[derive(Debug)]
 pub struct PinToken {
     key_id: KeyId,
     state: PinTokenState,
@@ -61,8 +68,22 @@ impl PinToken {
         }
     }
 
-    pub fn require_valid_for_rp_id(&self, rp_id: Option<&str>) -> Result<()> {
-        if self.state.rp_id.is_none() || self.state.rp_id.as_deref() == rp_id {
+    fn is_valid_for_rp(&self, scope: RpScope<'_>) -> bool {
+        if let Some(rp) = self.state.rp.as_ref() {
+            // if an RP id is set, the token is only valid for that scope
+            match scope {
+                RpScope::All => false,
+                RpScope::RpId(rp_id) => rp.id == rp_id,
+                RpScope::RpIdHash(hash) => rp.hash == hash,
+            }
+        } else {
+            // if no RP ID is set, the token is valid for all scopes
+            true
+        }
+    }
+
+    pub fn require_valid_for_rp(&self, scope: RpScope<'_>) -> Result<()> {
+        if self.is_valid_for_rp(scope) {
             Ok(())
         } else {
             Err(Error::PinAuthInvalid)
@@ -79,7 +100,7 @@ pub struct PinTokenMut<'a, T: CryptoClient> {
 impl<T: CryptoClient> PinTokenMut<'_, T> {
     pub fn restrict(&mut self, permissions: Permissions, rp_id: Option<String<256>>) {
         self.pin_token.state.permissions = permissions;
-        self.pin_token.state.rp_id = rp_id;
+        self.pin_token.state.rp = rp_id.map(|id| Rp::new(self.trussed, id));
     }
 
     // in spec: encrypt(..., pinUvAuthToken)
@@ -89,10 +110,27 @@ impl<T: CryptoClient> PinTokenMut<'_, T> {
     }
 }
 
+#[derive(Debug)]
+struct Rp {
+    id: String<256>,
+    hash: Bytes<32>,
+}
+
+impl Rp {
+    fn new<T: CryptoClient>(trussed: &mut T, id: String<256>) -> Self {
+        let hash =
+            syscall!(trussed.hash(Mechanism::Sha256, Message::from_slice(id.as_ref()).unwrap()))
+                .hash
+                .to_bytes()
+                .unwrap();
+        Self { id, hash }
+    }
+}
+
 #[derive(Debug, Default)]
 struct PinTokenState {
     permissions: Permissions,
-    rp_id: Option<String<256>>,
+    rp: Option<Rp>,
     is_user_present: bool,
     is_user_verified: bool,
     is_in_use: bool,
