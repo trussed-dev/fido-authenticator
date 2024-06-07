@@ -7,12 +7,11 @@ use trussed::{
     types::{DirEntry, Location, Path, PathBuf},
 };
 
+use cosey::PublicKey;
 use ctap_types::{
-    cose::PublicKey,
     ctap2::credential_management::{CredentialProtectionPolicy, Response},
-    heapless_bytes::Bytes,
-    webauthn::{PublicKeyCredentialDescriptor, PublicKeyCredentialUserEntity},
-    Error,
+    webauthn::{PublicKeyCredentialDescriptorRef, PublicKeyCredentialUserEntity},
+    ByteArray, Error,
 };
 
 use crate::{
@@ -167,7 +166,7 @@ where
 
                     let rp = credential.data.rp;
 
-                    response.rp_id_hash = Some(self.hash(rp.id.as_ref()));
+                    response.rp_id_hash = Some(ByteArray::new(self.hash(rp.id.as_ref())));
                     response.rp = Some(rp);
                 }
             }
@@ -175,7 +174,7 @@ where
             // cache state for next call
             if let Some(total_rps) = response.total_rps {
                 if total_rps > 1 {
-                    let rp_id_hash = response.rp_id_hash.as_ref().unwrap().clone();
+                    let rp_id_hash = response.rp_id_hash.unwrap().into_array();
                     self.state.runtime.cached_rp = Some(CredentialManagementEnumerateRps {
                         remaining: total_rps - 1,
                         rp_id_hash,
@@ -244,12 +243,12 @@ where
 
                     let rp = credential.data.rp;
 
-                    response.rp_id_hash = Some(self.hash(rp.id.as_ref()));
+                    response.rp_id_hash = Some(ByteArray::new(self.hash(rp.id.as_ref())));
                     response.rp = Some(rp);
 
                     // cache state for next call
                     if remaining > 1 {
-                        let rp_id_hash = response.rp_id_hash.as_ref().unwrap().clone();
+                        let rp_id_hash = response.rp_id_hash.unwrap().into_array();
                         self.state.runtime.cached_rp = Some(CredentialManagementEnumerateRps {
                             remaining: remaining - 1,
                             rp_id_hash,
@@ -286,7 +285,7 @@ where
         (num_rks, Some(first_rk))
     }
 
-    pub fn first_credential(&mut self, rp_id_hash: &Bytes<32>) -> Result<Response> {
+    pub fn first_credential(&mut self, rp_id_hash: &[u8; 32]) -> Result<Response> {
         info!("first credential");
 
         self.state.runtime.cached_rk = None;
@@ -448,20 +447,20 @@ where
             None => Some(CredentialProtectionPolicy::Optional),
         };
 
-        let response = Response {
-            user: Some(credential.data.user),
-            credential_id: Some(credential_id.into()),
-            public_key: Some(cose_public_key),
-            cred_protect,
-            large_blob_key: credential.data.large_blob_key,
-            ..Default::default()
-        };
-
+        let mut response = Response::default();
+        response.user = Some(credential.data.user);
+        response.credential_id = Some(credential_id.into());
+        response.public_key = Some(cose_public_key);
+        response.cred_protect = cred_protect;
+        response.large_blob_key = credential.data.large_blob_key;
         Ok(response)
     }
 
-    fn find_credential(&mut self, credential: &PublicKeyCredentialDescriptor) -> Option<PathBuf> {
-        let credential_id_hash = self.hash(&credential.id[..]);
+    fn find_credential(
+        &mut self,
+        credential: &PublicKeyCredentialDescriptorRef<'_>,
+    ) -> Option<PathBuf> {
+        let credential_id_hash = self.hash(credential.id);
         let mut hex = [b'0'; 16];
         super::format_hex(&credential_id_hash[..8], &mut hex);
         let dir = PathBuf::from(b"rk");
@@ -475,7 +474,7 @@ where
 
     pub fn delete_credential(
         &mut self,
-        credential_descriptor: &PublicKeyCredentialDescriptor,
+        credential_descriptor: &PublicKeyCredentialDescriptorRef<'_>,
     ) -> Result<Response> {
         info!("delete credential");
         let rk_path = self
@@ -499,7 +498,7 @@ where
 
     pub fn update_user_information(
         &mut self,
-        credential_descriptor: &PublicKeyCredentialDescriptor,
+        credential_descriptor: &PublicKeyCredentialDescriptorRef<'_>,
         user: &PublicKeyCredentialUserEntity,
     ) -> Result<Response> {
         info!("update user information");

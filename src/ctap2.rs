@@ -4,7 +4,7 @@ use ctap_types::{
     ctap2::{self, client_pin::Permissions, Authenticator, VendorOperation},
     heapless::{String, Vec},
     heapless_bytes::Bytes,
-    sizes, Error,
+    sizes, ByteArray, Error,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -71,21 +71,17 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             pin_protocols.push(u8::from(*pin_protocol)).unwrap();
         }
 
-        let options = ctap2::get_info::CtapOptions {
-            ep: None,
-            rk: true,
-            up: true,
-            uv: None,
-            plat: Some(false),
-            cred_mgmt: Some(true),
-            client_pin: match self.state.persistent.pin_is_set() {
-                true => Some(true),
-                false => Some(false),
-            },
-            large_blobs: Some(self.config.supports_large_blobs()),
-            pin_uv_auth_token: Some(true),
-            ..Default::default()
+        let mut options = ctap2::get_info::CtapOptions::default();
+        options.rk = true;
+        options.up = true;
+        options.plat = Some(false);
+        options.cred_mgmt = Some(true);
+        options.client_pin = match self.state.persistent.pin_is_set() {
+            true => Some(true),
+            false => Some(false),
         };
+        options.large_blobs = Some(self.config.supports_large_blobs());
+        options.pin_uv_auth_token = Some(true);
 
         let mut transports = Vec::new();
         if self.config.nfc_transport {
@@ -95,19 +91,18 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let (_, aaguid) = self.state.identity.attestation(&mut self.trussed);
 
-        ctap2::get_info::Response {
-            versions,
-            extensions: Some(extensions),
-            aaguid: Bytes::from_slice(&aaguid).unwrap(),
-            options: Some(options),
-            transports: Some(transports),
-            // 1200
-            max_msg_size: Some(self.config.max_msg_size),
-            pin_protocols: Some(pin_protocols),
-            max_creds_in_list: Some(ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST),
-            max_cred_id_length: Some(ctap_types::sizes::MAX_CREDENTIAL_ID_LENGTH),
-            ..ctap2::get_info::Response::default()
-        }
+        let mut response = ctap2::get_info::Response::default();
+        response.versions = versions;
+        response.extensions = Some(extensions);
+        response.aaguid = Bytes::from_slice(&aaguid).unwrap();
+        response.options = Some(options);
+        response.transports = Some(transports);
+        // 1200
+        response.max_msg_size = Some(self.config.max_msg_size);
+        response.pin_protocols = Some(pin_protocols);
+        response.max_creds_in_list = Some(ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST);
+        response.max_cred_id_length = Some(ctap_types::sizes::MAX_CREDENTIAL_ID_LENGTH);
+        response
     }
 
     #[inline(never)]
@@ -345,11 +340,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         };
 
         // injecting this is a bit mehhh..
-        let nonce = syscall!(self.trussed.random_bytes(12))
-            .bytes
-            .as_slice()
-            .try_into()
-            .unwrap();
+        let nonce = self.nonce();
         info_now!("nonce = {:?}", &nonce);
 
         // 12.b generate credential ID { = AEAD(Serialize(Credential)) }
@@ -362,7 +353,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // TODO: overwrite, error handling with KeyStoreFull
 
         let large_blob_key = if large_blob_key_requested {
-            Some(Bytes::from_slice(&syscall!(self.trussed.random_bytes(32)).bytes).unwrap())
+            let key = syscall!(self.trussed.random_bytes(32)).bytes;
+            Some(ByteArray::new(key.as_slice().try_into().unwrap()))
         } else {
             None
         };
@@ -376,7 +368,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             self.state.persistent.timestamp(&mut self.trussed)?,
             hmac_secret_requested,
             cred_protect_requested,
-            large_blob_key.clone(),
+            large_blob_key,
             nonce,
         );
 
@@ -441,7 +433,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let (attestation_maybe, aaguid) = self.state.identity.attestation(&mut self.trussed);
 
         let authenticator_data = ctap2::make_credential::AuthenticatorData {
-            rp_id_hash: rp_id_hash.to_bytes().map_err(|_| Error::Other)?,
+            rp_id_hash: &rp_id_hash,
 
             flags: {
                 let mut flags = Flags::USER_PRESENCE;
@@ -462,9 +454,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             attested_credential_data: {
                 // debug_now!("acd in, cid len {}, pk len {}", credential_id.0.len(), cose_public_key.len());
                 let attested_credential_data = ctap2::make_credential::AttestedCredentialData {
-                    aaguid: Bytes::from_slice(&aaguid).unwrap(),
-                    credential_id: credential_id.0.to_bytes().unwrap(),
-                    credential_public_key: cose_public_key.to_bytes().unwrap(),
+                    aaguid: &aaguid,
+                    credential_id: &credential_id.0,
+                    credential_public_key: &cose_public_key,
                 };
                 // debug_now!("cose PK = {:?}", &attested_credential_data.credential_public_key);
                 Some(attested_credential_data)
@@ -472,11 +464,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
             extensions: {
                 if hmac_secret_requested.is_some() || cred_protect_requested.is_some() {
-                    Some(ctap2::make_credential::Extensions {
-                        cred_protect: parameters.extensions.as_ref().unwrap().cred_protect,
-                        hmac_secret: parameters.extensions.as_ref().unwrap().hmac_secret,
-                        large_blob_key: None,
-                    })
+                    let mut extensions = ctap2::make_credential::Extensions::default();
+                    extensions.cred_protect = parameters.extensions.as_ref().unwrap().cred_protect;
+                    extensions.hmac_secret = parameters.extensions.as_ref().unwrap().hmac_secret;
+                    Some(extensions)
                 } else {
                     None
                 }
@@ -484,7 +475,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         };
         // debug_now!("authData = {:?}", &authenticator_data);
 
-        let serialized_auth_data = authenticator_data.serialize();
+        let serialized_auth_data = authenticator_data.serialize()?;
 
         // 13.b The Signature
 
@@ -576,14 +567,13 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let fmt = String::<32>::from("packed");
         let att_stmt = ctap2::make_credential::AttestationStatement::Packed(packed_attn_stmt);
 
-        let attestation_object = ctap2::make_credential::Response {
+        let mut attestation_object = ctap2::make_credential::ResponseBuilder {
             fmt,
             auth_data: serialized_auth_data,
-            att_stmt,
-            ep_att: None,
-            large_blob_key,
-        };
-
+        }
+        .build();
+        attestation_object.att_stmt = Some(att_stmt);
+        attestation_object.large_blob_key = large_blob_key;
         Ok(attestation_object)
     }
 
@@ -628,7 +618,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
     #[inline(never)]
     fn client_pin(
         &mut self,
-        parameters: &ctap2::client_pin::Request,
+        parameters: &ctap2::client_pin::Request<'_>,
     ) -> Result<ctap2::client_pin::Response> {
         use ctap2::client_pin::PinV1Subcommand as Subcommand;
         debug_now!("CTAP2.PIN...");
@@ -899,7 +889,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
                 // 14. Assign the requested permissions
                 // 15. Assign the requested RP id
-                pin_token.restrict(permissions, parameters.rp_id.clone());
+                let rp_id = parameters
+                    .rp_id
+                    .map(TryInto::try_into)
+                    .transpose()
+                    .map_err(|_| Error::InvalidParameter)?;
+                pin_token.restrict(permissions, rp_id);
 
                 // 16. Return PIN token
                 response.pin_token = Some(pin_token.encrypt(&shared_secret)?);
@@ -911,6 +906,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 // todo!("not implemented yet")
                 return Err(Error::InvalidParameter);
             }
+
+            _ => {
+                return Err(Error::InvalidParameter);
+            }
         }
 
         Ok(response)
@@ -919,7 +918,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
     #[inline(never)]
     fn credential_management(
         &mut self,
-        parameters: &ctap2::credential_management::Request,
+        parameters: &ctap2::credential_management::Request<'_>,
     ) -> Result<ctap2::credential_management::Response> {
         use credential_management as cm;
         use ctap2::credential_management::Subcommand;
@@ -928,6 +927,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let mut cred_mgmt = cm::CredentialManagement::new(self);
         let sub_parameters = &parameters.sub_command_params;
+        // TODO: use custom enum of known commands
         match parameters.sub_command {
             // 0x1
             Subcommand::GetCredsMetadata => Ok(cred_mgmt.get_creds_metadata()),
@@ -979,6 +979,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
                 cred_mgmt.update_user_information(credential_id, user)
             }
+
+            _ => Err(Error::InvalidParameter),
         }
     }
 
@@ -1009,7 +1011,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             parameters.pin_protocol,
             parameters.client_data_hash.as_ref(),
             Permissions::GET_ASSERTION,
-            &parameters.rp_id,
+            parameters.rp_id,
         ) {
             Ok(b) => b,
             Err(Error::PinRequired) => {
@@ -1072,7 +1074,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             },
             client_data_hash: {
                 let mut buf = [0u8; 32];
-                buf.copy_from_slice(&parameters.client_data_hash);
+                buf.copy_from_slice(parameters.client_data_hash);
                 buf
             },
             uv_performed,
@@ -1162,7 +1164,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
     #[inline(never)]
     fn prepare_credentials(
         &mut self,
-        rp_id_hash: &Bytes<32>,
+        rp_id_hash: &[u8; 32],
         allow_list: &Option<ctap2::get_assertion::AllowList>,
         uv_performed: bool,
     ) -> Option<(Credential, u32)> {
@@ -1249,7 +1251,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         &mut self,
         pin_protocol: PinProtocolVersion,
         shared_secret: &SharedSecret,
-        pin_hash_enc: &Bytes<80>,
+        pin_hash_enc: &[u8],
     ) -> Result<()> {
         let pin_hash = shared_secret
             .decrypt(&mut self.trussed, pin_hash_enc)
@@ -1323,7 +1325,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 let rp_id_hash = parameters
                     .sub_command_params
                     .as_ref()
-                    .and_then(|subparams| subparams.rp_id_hash.as_deref())
+                    .and_then(|subparams| subparams.rp_id_hash)
                     .ok_or(Error::MissingParameter)?;
                 RpScope::RpIdHash(rp_id_hash)
             }
@@ -1394,6 +1396,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             // of already checked CredMgmt subcommands
             Subcommand::EnumerateRpsGetNextRp
             | Subcommand::EnumerateCredentialsGetNextCredential => Ok(()),
+
+            _ => Err(Error::InvalidParameter),
         }
     }
 
@@ -1570,9 +1574,9 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
             shared_secret.delete(&mut self.trussed);
 
-            Ok(Some(ctap2::get_assertion::ExtensionsOutput {
-                hmac_secret: Some(Bytes::from_slice(&output_enc).unwrap()),
-            }))
+            let mut extensions = ctap2::get_assertion::ExtensionsOutput::default();
+            extensions.hmac_secret = Some(Bytes::from_slice(&output_enc).unwrap());
+            Ok(Some(extensions))
         } else {
             Ok(None)
         }
@@ -1585,7 +1589,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         credential: Credential,
     ) -> Result<ctap2::get_assertion::Response> {
         let data = self.state.runtime.active_get_assertion.clone().unwrap();
-        let rp_id_hash = Bytes::from_slice(&data.rp_id_hash).unwrap();
+        let rp_id_hash = &data.rp_id_hash;
 
         let (key, is_rk) = match credential.key().clone() {
             Key::ResidentKey(key) => (key, true),
@@ -1632,7 +1636,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             .state
             .persistent
             .key_encryption_key(&mut self.trussed)?;
-        let credential_id = credential.id(&mut self.trussed, kek, &rp_id_hash)?;
+        let credential_id = credential.id(&mut self.trussed, kek, rp_id_hash)?;
 
         use ctap2::AuthenticatorDataFlags as Flags;
 
@@ -1660,7 +1664,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             extensions: extensions_output,
         };
 
-        let serialized_auth_data = authenticator_data.serialize();
+        let serialized_auth_data = authenticator_data.serialize()?;
 
         let mut commitment = Bytes::<1024>::new();
         commitment
@@ -1691,15 +1695,13 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             syscall!(self.trussed.delete(key));
         }
 
-        let mut response = ctap2::get_assertion::Response {
-            credential: Some(credential_id.into()),
-            auth_data: Bytes::from_slice(&serialized_auth_data).map_err(|_| Error::Other)?,
+        let mut response = ctap2::get_assertion::ResponseBuilder {
+            credential: credential_id.into(),
+            auth_data: serialized_auth_data,
             signature,
-            user: None,
-            number_of_credentials: num_credentials,
-            user_selected: None,
-            large_blob_key: None,
-        };
+        }
+        .build();
+        response.number_of_credentials = num_credentials;
 
         // User with empty IDs are ignored for compatibility
         if is_rk {
@@ -1733,7 +1735,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
     #[inline(never)]
     fn delete_resident_key_by_user_id(
         &mut self,
-        rp_id_hash: &Bytes<32>,
+        rp_id_hash: &[u8; 32],
         user_id: &Bytes<64>,
     ) -> Result<()> {
         // Prepare to iterate over all credentials associated to RP.
@@ -1872,8 +1874,10 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         };
         // 5. Return requested data
         info!("Reading large-blob array from offset {offset}");
-        large_blobs::read_chunk(&mut self.trussed, config.location, offset, length)
-            .map(|data| ctap2::large_blobs::Response { config: Some(data) })
+        let data = large_blobs::read_chunk(&mut self.trussed, config.location, offset, length)?;
+        let mut response = ctap2::large_blobs::Response::default();
+        response.config = Some(data);
+        Ok(response)
     }
 
     fn large_blobs_set(
@@ -1982,7 +1986,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
     }
 }
 
-fn rp_rk_dir(rp_id_hash: &Bytes<32>) -> PathBuf {
+fn rp_rk_dir(rp_id_hash: &[u8; 32]) -> PathBuf {
     // uses only first 8 bytes of hash, which should be "good enough"
     let mut hex = [b'0'; 16];
     format_hex(&rp_id_hash[..8], &mut hex);
@@ -1993,7 +1997,7 @@ fn rp_rk_dir(rp_id_hash: &Bytes<32>) -> PathBuf {
     dir
 }
 
-fn rk_path(rp_id_hash: &Bytes<32>, credential_id_hash: &Bytes<32>) -> PathBuf {
+fn rk_path(rp_id_hash: &[u8; 32], credential_id_hash: &[u8; 32]) -> PathBuf {
     let mut path = rp_rk_dir(rp_id_hash);
 
     let mut hex = [0u8; 16];

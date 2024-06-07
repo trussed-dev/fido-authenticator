@@ -201,18 +201,20 @@ where
 }
 
 #[allow(unused)]
-fn request_operation(request: &ctap2::Request) -> ctap2::Operation {
+fn request_operation(request: &ctap2::Request) -> Option<ctap2::Operation> {
+    // TODO: move into ctap-types
     match request {
-        ctap2::Request::MakeCredential(_) => ctap2::Operation::MakeCredential,
-        ctap2::Request::GetAssertion(_) => ctap2::Operation::GetAssertion,
-        ctap2::Request::GetNextAssertion => ctap2::Operation::GetNextAssertion,
-        ctap2::Request::GetInfo => ctap2::Operation::GetInfo,
-        ctap2::Request::ClientPin(_) => ctap2::Operation::ClientPin,
-        ctap2::Request::Reset => ctap2::Operation::Reset,
-        ctap2::Request::CredentialManagement(_) => ctap2::Operation::CredentialManagement,
-        ctap2::Request::Selection => ctap2::Operation::Selection,
-        ctap2::Request::LargeBlobs(_) => ctap2::Operation::LargeBlobs,
-        ctap2::Request::Vendor(operation) => ctap2::Operation::Vendor(*operation),
+        ctap2::Request::MakeCredential(_) => Some(ctap2::Operation::MakeCredential),
+        ctap2::Request::GetAssertion(_) => Some(ctap2::Operation::GetAssertion),
+        ctap2::Request::GetNextAssertion => Some(ctap2::Operation::GetNextAssertion),
+        ctap2::Request::GetInfo => Some(ctap2::Operation::GetInfo),
+        ctap2::Request::ClientPin(_) => Some(ctap2::Operation::ClientPin),
+        ctap2::Request::Reset => Some(ctap2::Operation::Reset),
+        ctap2::Request::CredentialManagement(_) => Some(ctap2::Operation::CredentialManagement),
+        ctap2::Request::Selection => Some(ctap2::Operation::Selection),
+        ctap2::Request::LargeBlobs(_) => Some(ctap2::Operation::LargeBlobs),
+        ctap2::Request::Vendor(operation) => Some(ctap2::Operation::Vendor(*operation)),
+        _ => None,
     }
 }
 
@@ -229,5 +231,6 @@ fn response_operation(request: &ctap2::Response) -> Option<ctap2::Operation> {
         ctap2::Response::Selection => Some(ctap2::Operation::Selection),
         ctap2::Response::LargeBlobs(_) => Some(ctap2::Operation::LargeBlobs),
         ctap2::Response::Vendor => None,
+        _ => None,
     }
 }

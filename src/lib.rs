@@ -23,8 +23,6 @@ use core::time::Duration;
 use trussed::{client, syscall, types::Message, Client as TrussedClient};
 use trussed_hkdf::HkdfClient;
 
-use ctap_types::heapless_bytes::Bytes;
-
 /// Re-export of `ctap-types` authenticator errors.
 pub use ctap_types::Error;
 
@@ -268,9 +266,14 @@ where
         }
     }
 
-    fn hash(&mut self, data: &[u8]) -> Bytes<32> {
+    fn hash(&mut self, data: &[u8]) -> [u8; 32] {
         let hash = syscall!(self.trussed.hash_sha256(data)).hash;
-        hash.to_bytes().expect("hash should fit")
+        hash.as_slice().try_into().expect("hash should fit")
+    }
+
+    fn nonce(&mut self) -> [u8; 12] {
+        let bytes = syscall!(self.trussed.random_bytes(12)).bytes;
+        bytes.as_slice().try_into().expect("hash should fit")
     }
 
     fn skip_up_check(&mut self) -> bool {

@@ -3,6 +3,7 @@
 use core::cmp::Ordering;
 
 use serde::Serialize;
+use serde_bytes::ByteArray;
 use trussed::{client, syscall, try_syscall, types::KeyId};
 
 pub(crate) use ctap_types::{
@@ -35,20 +36,19 @@ impl CredentialId {
         trussed: &mut T,
         credential: &C,
         key_encryption_key: KeyId,
-        rp_id_hash: &Bytes<32>,
-        nonce: &Bytes<12>,
+        rp_id_hash: &[u8; 32],
+        nonce: &[u8; 12],
     ) -> Result<Self> {
         let serialized_credential: SerializedCredential =
             trussed::cbor_serialize_bytes(credential).map_err(|_| Error::Other)?;
         let message = &serialized_credential;
         // info!("serialized cred = {:?}", message).ok();
         let associated_data = &rp_id_hash[..];
-        let nonce: [u8; 12] = nonce.as_slice().try_into().unwrap();
         let encrypted_serialized_credential = syscall!(trussed.encrypt_chacha8poly1305(
             key_encryption_key,
             message,
             associated_data,
-            Some(&nonce)
+            Some(nonce)
         ));
         EncryptedSerializedCredential(encrypted_serialized_credential)
             .try_into()
@@ -117,7 +117,7 @@ pub enum Credential {
 impl Credential {
     pub fn try_from<UP: UserPresence, T: client::Client + client::Chacha8Poly1305>(
         authnr: &mut Authenticator<UP, T>,
-        rp_id_hash: &Bytes<32>,
+        rp_id_hash: &[u8; 32],
         descriptor: &PublicKeyCredentialDescriptorRef,
     ) -> Result<Self> {
         Self::try_from_bytes(authnr, rp_id_hash, descriptor.id)
@@ -125,7 +125,7 @@ impl Credential {
 
     pub fn try_from_bytes<UP: UserPresence, T: client::Client + client::Chacha8Poly1305>(
         authnr: &mut Authenticator<UP, T>,
-        rp_id_hash: &Bytes<32>,
+        rp_id_hash: &[u8; 32],
         id: &[u8],
     ) -> Result<Self> {
         let mut cred: Bytes<MAX_CREDENTIAL_ID_LENGTH> = Bytes::new();
@@ -162,7 +162,7 @@ impl Credential {
         &self,
         trussed: &mut T,
         key_encryption_key: KeyId,
-        rp_id_hash: &Bytes<32>,
+        rp_id_hash: &[u8; 32],
     ) -> Result<CredentialId> {
         match self {
             Self::Full(credential) => credential.id(trussed, key_encryption_key, Some(rp_id_hash)),
@@ -238,7 +238,7 @@ pub struct CredentialData {
 
     // extensions (cont. -- we can only append new options due to index-based deserialization)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub large_blob_key: Option<Bytes<32>>,
+    pub large_blob_key: Option<ByteArray<32>>,
 }
 
 // TODO: figure out sizes
@@ -248,7 +248,7 @@ pub struct CredentialData {
 pub struct FullCredential {
     ctap: CtapVersion,
     pub data: CredentialData,
-    nonce: Bytes<12>,
+    nonce: ByteArray<12>,
 }
 
 // Alas... it would be more symmetrical to have Credential { meta, data },
@@ -331,7 +331,7 @@ impl FullCredential {
         timestamp: u32,
         hmac_secret: Option<bool>,
         cred_protect: Option<CredentialProtectionPolicy>,
-        large_blob_key: Option<Bytes<32>>,
+        large_blob_key: Option<ByteArray<32>>,
         nonce: [u8; 12],
     ) -> Self {
         info!("credential for algorithm {}", algorithm);
@@ -354,7 +354,7 @@ impl FullCredential {
         FullCredential {
             ctap,
             data,
-            nonce: Bytes::from_slice(&nonce).unwrap(),
+            nonce: ByteArray::new(nonce),
         }
     }
 
@@ -375,14 +375,15 @@ impl FullCredential {
         &self,
         trussed: &mut T,
         key_encryption_key: KeyId,
-        rp_id_hash: Option<&Bytes<32>>,
+        rp_id_hash: Option<&[u8; 32]>,
     ) -> Result<CredentialId> {
-        let rp_id_hash: Bytes<32> = if let Some(hash) = rp_id_hash {
-            hash.clone()
+        let rp_id_hash: [u8; 32] = if let Some(hash) = rp_id_hash {
+            *hash
         } else {
             syscall!(trussed.hash_sha256(self.rp.id.as_ref()))
                 .hash
-                .to_bytes()
+                .as_slice()
+                .try_into()
                 .map_err(|_| Error::Other)?
         };
         if self.use_short_id.unwrap_or_default() {
@@ -446,7 +447,7 @@ pub struct StrippedCredential {
     pub use_counter: bool,
     pub algorithm: i32,
     pub key: Key,
-    pub nonce: Bytes<12>,
+    pub nonce: ByteArray<12>,
     // extensions
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hmac_secret: Option<bool>,
@@ -454,7 +455,7 @@ pub struct StrippedCredential {
     pub cred_protect: Option<CredentialProtectionPolicy>,
     // TODO: HACK -- remove
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub large_blob_key: Option<Bytes<32>>,
+    pub large_blob_key: Option<ByteArray<32>>,
 }
 
 impl StrippedCredential {
@@ -472,7 +473,7 @@ impl StrippedCredential {
         &self,
         trussed: &mut T,
         key_encryption_key: KeyId,
-        rp_id_hash: &Bytes<32>,
+        rp_id_hash: &[u8; 32],
     ) -> Result<CredentialId> {
         CredentialId::new(trussed, self, key_encryption_key, rp_id_hash, &self.nonce)
     }
@@ -486,10 +487,10 @@ impl From<&FullCredential> for StrippedCredential {
             use_counter: credential.data.use_counter,
             algorithm: credential.data.algorithm,
             key: credential.data.key.clone(),
-            nonce: credential.nonce.clone(),
+            nonce: credential.nonce,
             hmac_secret: credential.data.hmac_secret,
             cred_protect: credential.data.cred_protect,
-            large_blob_key: credential.data.large_blob_key.clone(),
+            large_blob_key: credential.data.large_blob_key,
         }
     }
 }
@@ -523,8 +524,15 @@ mod test {
             hmac_secret: Some(false),
             cred_protect: None,
             use_short_id: Some(true),
-            large_blob_key: Some(Bytes::from_slice(&[0xff; 32]).unwrap()),
+            large_blob_key: Some(ByteArray::new([0xff; 32])),
         }
+    }
+
+    fn random_byte_array<const N: usize>() -> ByteArray<N> {
+        use rand::{rngs::OsRng, RngCore};
+        let mut bytes = [0; N];
+        OsRng.fill_bytes(&mut bytes);
+        ByteArray::new(bytes)
     }
 
     fn random_bytes<const N: usize>() -> Bytes<N> {
@@ -602,7 +610,7 @@ mod test {
             hmac_secret: Some(false),
             cred_protect: None,
             use_short_id: Some(true),
-            large_blob_key: Some(random_bytes()),
+            large_blob_key: Some(random_byte_array()),
         }
     }
 
@@ -627,8 +635,7 @@ mod test {
     fn credential_ids() {
         trussed::virt::with_ram_client("fido", |mut client| {
             let kek = syscall!(client.generate_chacha8poly1305_key(Location::Internal)).key;
-            let mut nonce = Bytes::new();
-            nonce.extend_from_slice(&[0; 12]).unwrap();
+            let nonce = ByteArray::new([0; 12]);
             let data = credential_data();
             let mut full_credential = FullCredential {
                 ctap: CtapVersion::Fido21Pre,
@@ -637,7 +644,8 @@ mod test {
             };
             let rp_id_hash = syscall!(client.hash_sha256(full_credential.rp.id.as_ref()))
                 .hash
-                .to_bytes()
+                .as_slice()
+                .try_into()
                 .unwrap();
 
             // Case 1: credential with use_short_id = Some(true) uses new (short) format
@@ -681,16 +689,17 @@ mod test {
             use_counter: true,
             algorithm: i32::MAX,
             key: Key::WrappedKey(key),
-            nonce: Bytes::from_slice(&[u8::MAX; 12]).unwrap(),
+            nonce: ByteArray::new([u8::MAX; 12]),
             hmac_secret: Some(true),
             cred_protect: Some(CredentialProtectionPolicy::Required),
-            large_blob_key: Some(Bytes::from_slice(&[0xff; 32]).unwrap()),
+            large_blob_key: Some(ByteArray::new([0xff; 32])),
         };
         trussed::virt::with_ram_client("fido", |mut client| {
             let kek = syscall!(client.generate_chacha8poly1305_key(Location::Internal)).key;
             let rp_id_hash = syscall!(client.hash_sha256(rp_id.as_ref()))
                 .hash
-                .to_bytes()
+                .as_slice()
+                .try_into()
                 .unwrap();
             let id = credential.id(&mut client, kek, &rp_id_hash).unwrap();
             assert_eq!(id.0.len(), 239);

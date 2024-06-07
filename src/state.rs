@@ -5,7 +5,6 @@
 use ctap_types::{
     // 2022-02-27: 10 credentials
     sizes::MAX_CREDENTIAL_COUNT_IN_LIST, // U8 currently
-    Bytes,
     Error,
     String,
 };
@@ -23,7 +22,7 @@ use crate::{
     Result, TrussedRequirements,
 };
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CachedCredential {
     pub timestamp: u32,
     // PathBuf has length 255 + 1, we only need 36 + 1
@@ -43,7 +42,7 @@ impl Ord for CachedCredential {
     }
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Default)]
 pub struct CredentialCacheGeneric<const N: usize>(BinaryHeap<CachedCredential, Max, N>);
 impl<const N: usize> CredentialCacheGeneric<N> {
     pub fn push(&mut self, item: CachedCredential) {
@@ -128,7 +127,7 @@ impl State {
 }
 
 /// Batch device identity (aaguid, certificate, key).
-#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Identity {
     // can this be [u8; 16] or need Bytes for serialization?
     // aaguid: Option<Bytes<consts::U16>>,
@@ -196,22 +195,20 @@ impl Identity {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CredentialManagementEnumerateRps {
     pub remaining: u32,
-    pub rp_id_hash: Bytes<32>,
+    pub rp_id_hash: [u8; 32],
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CredentialManagementEnumerateCredentials {
     pub remaining: u32,
     pub rp_dir: PathBuf,
     pub prev_filename: PathBuf,
 }
 
-#[derive(
-    Clone, Debug, /*uDebug,*/ Default, /*PartialEq,*/ serde::Deserialize, serde::Serialize,
-)]
+#[derive(Clone, Debug, Default)]
 pub struct ActiveGetAssertionData {
     pub rp_id_hash: [u8; 32],
     pub client_data_hash: [u8; 32],

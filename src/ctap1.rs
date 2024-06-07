@@ -4,6 +4,7 @@ use ctap_types::{
     ctap1::{authenticate, register, Authenticator, ControlByte, Error, Result},
     heapless_bytes::Bytes,
 };
+use serde_bytes::ByteArray;
 
 use trussed::{
     syscall,
@@ -50,7 +51,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             .serialize_p256_key(public_key, KeySerialization::EcdhEsHkdf256))
         .serialized_key;
         syscall!(self.trussed.delete(public_key));
-        let cose_key: ctap_types::cose::EcdhEsHkdf256PublicKey =
+        let cose_key: cosey::EcdhEsHkdf256PublicKey =
             trussed::cbor_deserialize(&serialized_cose_public_key).unwrap();
 
         let wrapping_key = self
@@ -74,8 +75,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 .to_bytes()
                 .map_err(|_| Error::UnspecifiedCheckingError)?,
         );
-        let nonce = syscall!(self.trussed.random_bytes(12)).bytes;
-        let nonce = Bytes::from_slice(&nonce).unwrap();
+        let nonce = ByteArray::new(self.nonce());
 
         let credential = StrippedCredential {
             ctap: credential::CtapVersion::U2fV2,
@@ -102,14 +102,14 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             .key_encryption_key(&mut self.trussed)
             .map_err(|_| Error::NotEnoughMemory)?;
         let credential_id = credential
-            .id(&mut self.trussed, kek, &reg.app_id)
+            .id(&mut self.trussed, kek, reg.app_id)
             .map_err(|_| Error::NotEnoughMemory)?;
 
         let mut commitment = Commitment::new();
 
         commitment.push(0).unwrap(); // reserve byte
-        commitment.extend_from_slice(&reg.app_id).unwrap();
-        commitment.extend_from_slice(&reg.challenge).unwrap();
+        commitment.extend_from_slice(reg.app_id).unwrap();
+        commitment.extend_from_slice(reg.challenge).unwrap();
 
         commitment.extend_from_slice(&credential_id.0).unwrap();
 
@@ -144,14 +144,14 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         Ok(register::Response::new(
             0x05,
             &cose_key,
-            &credential_id.0,
+            credential_id.0,
             signature,
-            &cert,
+            cert,
         ))
     }
 
     fn authenticate(&mut self, auth: &authenticate::Request) -> Result<authenticate::Response> {
-        let cred = Credential::try_from_bytes(self, &auth.app_id, &auth.key_handle);
+        let cred = Credential::try_from_bytes(self, auth.app_id, auth.key_handle);
 
         let user_presence_byte = match auth.control_byte {
             ControlByte::CheckOnly => {
@@ -218,12 +218,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let mut commitment = Commitment::new();
 
-        commitment.extend_from_slice(&auth.app_id).unwrap();
+        commitment.extend_from_slice(auth.app_id).unwrap();
         commitment.push(user_presence_byte).unwrap();
         commitment
             .extend_from_slice(&sig_count.to_be_bytes())
             .unwrap();
-        commitment.extend_from_slice(&auth.challenge).unwrap();
+        commitment.extend_from_slice(auth.challenge).unwrap();
 
         let signature = syscall!(self.trussed.sign(
             Mechanism::P256,

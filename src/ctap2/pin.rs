@@ -1,5 +1,6 @@
 use crate::{cbor_serialize_message, TrussedRequirements};
-use ctap_types::{cose::EcdhEsHkdf256PublicKey, ctap2::client_pin::Permissions, Error, Result};
+use cosey::EcdhEsHkdf256PublicKey;
+use ctap_types::{ctap2::client_pin::Permissions, Error, Result};
 use trussed::{
     cbor_deserialize,
     client::{CryptoClient, HmacSha256, P256},
@@ -33,7 +34,7 @@ impl From<PinProtocolVersion> for u8 {
 pub enum RpScope<'a> {
     All,
     RpId(&'a str),
-    RpIdHash(&'a [u8]),
+    RpIdHash(&'a [u8; 32]),
 }
 
 #[derive(Debug)]
@@ -74,7 +75,7 @@ impl PinToken {
             match scope {
                 RpScope::All => false,
                 RpScope::RpId(rp_id) => rp.id == rp_id,
-                RpScope::RpIdHash(hash) => rp.hash == hash,
+                RpScope::RpIdHash(hash) => &rp.hash == hash,
             }
         } else {
             // if no RP ID is set, the token is valid for all scopes
@@ -113,7 +114,7 @@ impl<T: CryptoClient> PinTokenMut<'_, T> {
 #[derive(Debug)]
 struct Rp {
     id: String<256>,
-    hash: Bytes<32>,
+    hash: [u8; 32],
 }
 
 impl Rp {
@@ -121,7 +122,8 @@ impl Rp {
         let hash =
             syscall!(trussed.hash(Mechanism::Sha256, Message::from_slice(id.as_ref()).unwrap()))
                 .hash
-                .to_bytes()
+                .as_slice()
+                .try_into()
                 .unwrap();
         Self { id, hash }
     }
