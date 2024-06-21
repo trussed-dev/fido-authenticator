@@ -10,9 +10,9 @@ use hex_literal::hex;
 
 use virt::{Ctap2, Ctap2Error};
 use webauthn::{
-    ClientPin, CredentialManagement, CredentialManagementParams, GetAssertion, GetInfo,
-    KeyAgreementKey, MakeCredential, MakeCredentialOptions, PinToken, PubKeyCredDescriptor,
-    PubKeyCredParam, PublicKey, Rp, SharedSecret, User,
+    ClientPin, CredentialManagement, CredentialManagementParams, ExtensionsInput, GetAssertion,
+    GetInfo, KeyAgreementKey, MakeCredential, MakeCredentialOptions, PinToken,
+    PubKeyCredDescriptor, PubKeyCredParam, PublicKey, Rp, SharedSecret, User,
 };
 
 #[test]
@@ -215,38 +215,85 @@ fn test_make_credential() {
     }
 }
 
+#[derive(Debug)]
+struct TestGetAssertion {
+    mc_third_party_payment: Option<bool>,
+    ga_third_party_payment: Option<bool>,
+}
+
+impl TestGetAssertion {
+    fn run(&self) {
+        println!("{}", "=".repeat(80));
+        println!("Running test:");
+        println!("{self:#?}");
+        println!();
+
+        let rp_id = "example.com";
+        // TODO: client data
+        let client_data_hash = &[0; 32];
+
+        virt::run_ctap2(|device| {
+            let rp = Rp::new(rp_id);
+            let user = User::new(b"id123")
+                .name("john.doe")
+                .display_name("John Doe");
+            let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+            let mut request = MakeCredential::new(client_data_hash, rp, user, pub_key_cred_params);
+            if let Some(third_party_payment) = self.mc_third_party_payment {
+                request.extensions = Some(ExtensionsInput {
+                    third_party_payment: Some(third_party_payment),
+                });
+            }
+            let response = device.exec(request).unwrap();
+            let credential = response.auth_data.credential.unwrap();
+
+            let mut request = GetAssertion::new(rp_id, client_data_hash);
+            request.allow_list = Some(vec![PubKeyCredDescriptor::new(
+                "public-key",
+                credential.id.clone(),
+            )]);
+            if let Some(third_party_payment) = self.ga_third_party_payment {
+                request.extensions = Some(ExtensionsInput {
+                    third_party_payment: Some(third_party_payment),
+                });
+            }
+            let response = device.exec(request).unwrap();
+            assert_eq!(response.credential.ty, "public-key");
+            assert_eq!(response.credential.id, credential.id);
+            assert_eq!(response.auth_data.credential, None);
+            credential.verify_assertion(&response.auth_data, client_data_hash, &response.signature);
+            if self.ga_third_party_payment.unwrap_or_default() {
+                let extensions = response.auth_data.extensions.unwrap();
+                assert_eq!(
+                    extensions.get("thirdPartyPayment"),
+                    Some(&Value::from(
+                        self.mc_third_party_payment.unwrap_or_default()
+                    ))
+                );
+            } else {
+                assert!(response.auth_data.extensions.is_none());
+            }
+        });
+    }
+}
+
 #[test]
 fn test_get_assertion() {
-    let rp_id = "example.com";
-    // TODO: client data
-    let client_data_hash = &[0; 32];
-
-    virt::run_ctap2(|device| {
-        let rp = Rp::new(rp_id);
-        let user = User::new(b"id123")
-            .name("john.doe")
-            .display_name("John Doe");
-        let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
-        let request = MakeCredential::new(client_data_hash, rp, user, pub_key_cred_params);
-        let response = device.exec(request).unwrap();
-        let credential = response.auth_data.credential.unwrap();
-
-        let mut request = GetAssertion::new(rp_id, client_data_hash);
-        request.allow_list = Some(vec![PubKeyCredDescriptor::new(
-            "public-key",
-            credential.id.clone(),
-        )]);
-        let response = device.exec(request).unwrap();
-        assert_eq!(response.credential.ty, "public-key");
-        assert_eq!(response.credential.id, credential.id);
-        assert_eq!(response.auth_data.credential, None);
-        credential.verify_assertion(&response.auth_data, client_data_hash, &response.signature);
-    });
+    for mc_third_party_payment in [Some(false), Some(true), None] {
+        for ga_third_party_payment in [Some(false), Some(true), None] {
+            TestGetAssertion {
+                mc_third_party_payment,
+                ga_third_party_payment,
+            }
+            .run()
+        }
+    }
 }
 
 #[derive(Debug)]
 struct TestListCredentials {
     pin_token_rp_id: bool,
+    third_party_payment: Option<bool>,
 }
 
 impl TestListCredentials {
@@ -272,6 +319,11 @@ impl TestListCredentials {
             request.options = Some(MakeCredentialOptions::default().rk(true));
             request.pin_auth = Some(pin_auth);
             request.pin_protocol = Some(2);
+            if let Some(third_party_payment) = self.third_party_payment {
+                request.extensions = Some(ExtensionsInput {
+                    third_party_payment: Some(third_party_payment),
+                });
+            }
             let reply = device.exec(request).unwrap();
             assert_eq!(
                 reply.auth_data.flags & 0b1,
@@ -327,6 +379,10 @@ impl TestListCredentials {
             let user: BTreeMap<String, Value> = reply.user.unwrap().deserialized().unwrap();
             assert_eq!(reply.total_credentials, Some(1));
             assert_eq!(user.get("id").unwrap(), &Value::from(user_id.as_slice()));
+            assert_eq!(
+                reply.third_party_payment,
+                Some(self.third_party_payment.unwrap_or_default())
+            );
         });
     }
 }
@@ -334,11 +390,16 @@ impl TestListCredentials {
 #[test]
 fn test_list_credentials() {
     for pin_token_rp_id in [false, true] {
-        let test = TestListCredentials { pin_token_rp_id };
-        println!("{}", "=".repeat(80));
-        println!("Running test:");
-        println!("{test:#?}");
-        println!();
-        test.run();
+        for third_party_payment in [Some(false), Some(true), None] {
+            let test = TestListCredentials {
+                pin_token_rp_id,
+                third_party_payment,
+            };
+            println!("{}", "=".repeat(80));
+            println!("Running test:");
+            println!("{test:#?}");
+            println!();
+            test.run();
+        }
     }
 }

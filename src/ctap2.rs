@@ -56,6 +56,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         if self.config.supports_large_blobs() {
             extensions.push(Extension::LargeBlobKey).unwrap();
         }
+        extensions.push(Extension::ThirdPartyPayment).unwrap();
 
         let mut pin_protocols = Vec::new();
         for pin_protocol in self.pin_protocols() {
@@ -221,6 +222,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // let mut cred_protect_requested = CredentialProtectionPolicy::Optional;
         let mut cred_protect_requested = None;
         let mut large_blob_key_requested = false;
+        let mut third_party_payment_requested = false;
         if let Some(extensions) = &parameters.extensions {
             hmac_secret_requested = extensions.hmac_secret;
 
@@ -243,6 +245,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     }
                 }
             }
+
+            third_party_payment_requested = extensions.third_party_payment.unwrap_or_default();
         }
 
         // debug_now!("hmac-secret = {:?}, credProtect = {:?}", hmac_secret_requested, cred_protect_requested);
@@ -360,6 +364,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             hmac_secret_requested,
             cred_protect_requested,
             large_blob_key,
+            third_party_payment_requested.then_some(true),
             nonce,
         );
 
@@ -1502,9 +1507,11 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         &mut self,
         get_assertion_state: &state::ActiveGetAssertionData,
         extensions: &ctap2::get_assertion::ExtensionsInput,
-        _credential: &Credential,
+        credential: &Credential,
         credential_key: KeyId,
     ) -> Result<Option<ctap2::get_assertion::ExtensionsOutput>> {
+        let mut output = ctap2::get_assertion::ExtensionsOutput::default();
+
         if let Some(hmac_secret) = &extensions.hmac_secret {
             let pin_protocol = hmac_secret
                 .pin_protocol
@@ -1565,12 +1572,14 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
             shared_secret.delete(&mut self.trussed);
 
-            let mut extensions = ctap2::get_assertion::ExtensionsOutput::default();
-            extensions.hmac_secret = Some(Bytes::from_slice(&output_enc).unwrap());
-            Ok(Some(extensions))
-        } else {
-            Ok(None)
+            output.hmac_secret = Some(Bytes::from_slice(&output_enc).unwrap());
         }
+
+        if extensions.third_party_payment.unwrap_or_default() {
+            output.third_party_payment = Some(credential.third_party_payment().unwrap_or_default());
+        }
+
+        Ok(output.is_set().then_some(output))
     }
 
     #[inline(never)]

@@ -301,6 +301,7 @@ pub struct MakeCredential {
     rp: Rp,
     user: User,
     pub_key_cred_params: Vec<PubKeyCredParam>,
+    pub extensions: Option<ExtensionsInput>,
     pub options: Option<MakeCredentialOptions>,
     pub pin_auth: Option<[u8; 32]>,
     pub pin_protocol: Option<u8>,
@@ -318,6 +319,7 @@ impl MakeCredential {
             rp,
             user,
             pub_key_cred_params: pub_key_cred_params.into(),
+            extensions: None,
             options: None,
             pin_auth: None,
             pin_protocol: None,
@@ -339,6 +341,9 @@ impl From<MakeCredential> for Value {
                 .map(Value::from)
                 .collect::<Vec<_>>(),
         );
+        if let Some(extensions) = request.extensions {
+            map.push(6, extensions);
+        }
         if let Some(options) = request.options {
             map.push(7, options);
         }
@@ -347,6 +352,21 @@ impl From<MakeCredential> for Value {
         }
         if let Some(pin_protocol) = request.pin_protocol {
             map.push(9, pin_protocol);
+        }
+        map.into()
+    }
+}
+
+#[derive(Default)]
+pub struct ExtensionsInput {
+    pub third_party_payment: Option<bool>,
+}
+
+impl From<ExtensionsInput> for Value {
+    fn from(extensions: ExtensionsInput) -> Value {
+        let mut map = Map::default();
+        if let Some(third_party_payment) = extensions.third_party_payment {
+            map.push("thirdPartyPayment", third_party_payment);
         }
         map.into()
     }
@@ -476,6 +496,7 @@ pub struct GetAssertion {
     rp_id: String,
     client_data_hash: Vec<u8>,
     pub allow_list: Option<Vec<PubKeyCredDescriptor>>,
+    pub extensions: Option<ExtensionsInput>,
 }
 
 impl GetAssertion {
@@ -484,6 +505,7 @@ impl GetAssertion {
             rp_id: rp_id.into(),
             client_data_hash: client_data_hash.into(),
             allow_list: None,
+            extensions: None,
         }
     }
 }
@@ -496,6 +518,9 @@ impl From<GetAssertion> for Value {
         if let Some(allow_list) = request.allow_list {
             let values: Vec<_> = allow_list.into_iter().map(Value::from).collect();
             map.push(0x03, values);
+        }
+        if let Some(extensions) = request.extensions {
+            map.push(0x04, extensions);
         }
         map.into()
     }
@@ -708,6 +733,7 @@ pub struct CredentialManagementReply {
     pub total_rps: Option<usize>,
     pub user: Option<Value>,
     pub total_credentials: Option<usize>,
+    pub third_party_payment: Option<bool>,
 }
 
 impl From<Value> for CredentialManagementReply {
@@ -719,6 +745,7 @@ impl From<Value> for CredentialManagementReply {
             total_rps: map.remove(&5).map(|value| value.deserialized().unwrap()),
             user: map.remove(&6),
             total_credentials: map.remove(&9).map(|value| value.deserialized().unwrap()),
+            third_party_payment: map.remove(&0x0c).map(|value| value.deserialized().unwrap()),
         }
     }
 }

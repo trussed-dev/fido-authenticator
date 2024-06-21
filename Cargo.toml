@@ -15,7 +15,7 @@ name = "usbip"
 required-features = ["dispatch"]
 
 [dependencies]
-ctap-types = { version = "0.2.0", features = ["large-blobs"] }
+ctap-types = { version = "0.2.0", features = ["large-blobs", "third-party-payment"] }
 cosey = "0.3"
 delog = "0.1.0"
 heapless = "0.7"
@@ -49,6 +49,7 @@ log-error = []
 aes = "0.8.4"
 cbc = { version = "0.1.2", features = ["alloc"] }
 ciborium = { version = "0.2.2" }
+ciborium-io = "0.2.2"
 cipher = "0.4.4"
 ctaphid = { version = "0.3.1", default-features = false }
 delog = { version = "0.1.6", features = ["std-log"] }

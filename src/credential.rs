@@ -196,6 +196,13 @@ impl Credential {
             Self::Stripped(credential) => &credential.key,
         }
     }
+
+    pub fn third_party_payment(&self) -> Option<bool> {
+        match self {
+            Self::Full(credential) => credential.data.third_party_payment,
+            Self::Stripped(credential) => credential.third_party_payment,
+        }
+    }
 }
 
 /// The main content of a `FullCredential`.
@@ -239,6 +246,9 @@ pub struct CredentialData {
     // extensions (cont. -- we can only append new options due to index-based deserialization)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub large_blob_key: Option<ByteArray<32>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub third_party_payment: Option<bool>,
 }
 
 // TODO: figure out sizes
@@ -332,6 +342,7 @@ impl FullCredential {
         hmac_secret: Option<bool>,
         cred_protect: Option<CredentialProtectionPolicy>,
         large_blob_key: Option<ByteArray<32>>,
+        third_party_payment: Option<bool>,
         nonce: [u8; 12],
     ) -> Self {
         info!("credential for algorithm {}", algorithm);
@@ -347,6 +358,7 @@ impl FullCredential {
             hmac_secret,
             cred_protect,
             large_blob_key,
+            third_party_payment,
 
             use_short_id: Some(true),
         };
@@ -456,6 +468,8 @@ pub struct StrippedCredential {
     // TODO: HACK -- remove
     #[serde(skip_serializing_if = "Option::is_none")]
     pub large_blob_key: Option<ByteArray<32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub third_party_payment: Option<bool>,
 }
 
 impl StrippedCredential {
@@ -491,6 +505,7 @@ impl From<&FullCredential> for StrippedCredential {
             hmac_secret: credential.data.hmac_secret,
             cred_protect: credential.data.cred_protect,
             large_blob_key: credential.data.large_blob_key,
+            third_party_payment: credential.data.third_party_payment,
         }
     }
 }
@@ -525,6 +540,7 @@ mod test {
             cred_protect: None,
             use_short_id: Some(true),
             large_blob_key: Some(ByteArray::new([0xff; 32])),
+            third_party_payment: Some(true),
         }
     }
 
@@ -611,6 +627,7 @@ mod test {
             cred_protect: None,
             use_short_id: Some(true),
             large_blob_key: Some(random_byte_array()),
+            third_party_payment: Some(false),
         }
     }
 
@@ -693,6 +710,7 @@ mod test {
             hmac_secret: Some(true),
             cred_protect: Some(CredentialProtectionPolicy::Required),
             large_blob_key: Some(ByteArray::new([0xff; 32])),
+            third_party_payment: Some(true),
         };
         trussed::virt::with_ram_client("fido", |mut client| {
             let kek = syscall!(client.generate_chacha8poly1305_key(Location::Internal)).key;
@@ -702,7 +720,7 @@ mod test {
                 .try_into()
                 .unwrap();
             let id = credential.id(&mut client, kek, &rp_id_hash).unwrap();
-            assert_eq!(id.0.len(), 239);
+            assert_eq!(id.0.len(), 241);
         });
     }
 

@@ -453,6 +453,8 @@ where
         response.public_key = Some(cose_public_key);
         response.cred_protect = cred_protect;
         response.large_blob_key = credential.data.large_blob_key;
+        response.third_party_payment =
+            Some(credential.data.third_party_payment.unwrap_or_default());
         Ok(response)
     }
 
