@@ -23,7 +23,7 @@ doc = false
 bench = false
 
 [patch.crates-io]
-ctap-types = { git = "https://github.com/trussed-dev/ctap-types.git", rev = "ff20dfb5049fb5e25c18d1d27049d0bc98a5be8b" }
+ctap-types = { git = "https://github.com/trussed-dev/ctap-types.git", rev = "72eb68b61e3f14957c5ab89bd22f776ac860eb62" }
 littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "2b45a7559ff44260c6dd693e4cb61f54ae5efc53" }
 trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b548d379dcbd67d29453d94847b7bc33ae92e673" }
 trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "chunked-v0.1.0" }

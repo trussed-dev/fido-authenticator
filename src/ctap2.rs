@@ -1,7 +1,11 @@
 //! The `ctap_types::ctap2::Authenticator` implementation.
 
 use ctap_types::{
-    ctap2::{self, client_pin::Permissions, Authenticator, VendorOperation},
+    ctap2::{
+        self, client_pin::Permissions, AttestationFormatsPreference, AttestationStatement,
+        AttestationStatementFormat, Authenticator, NoneAttestationStatement,
+        PackedAttestationStatement, VendorOperation,
+    },
     heapless::{String, Vec},
     heapless_bytes::Bytes,
     sizes, ByteArray, Error,
@@ -473,102 +477,84 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let serialized_auth_data = authenticator_data.serialize()?;
 
-        // 13.b The Signature
+        let att_stmt_fmt =
+            SupportedAttestationFormat::select(parameters.attestation_formats_preference.as_ref());
+        let att_stmt = if let Some(format) = att_stmt_fmt {
+            match format {
+                SupportedAttestationFormat::None => {
+                    Some(AttestationStatement::None(NoneAttestationStatement {}))
+                }
+                SupportedAttestationFormat::Packed => {
+                    let mut commitment = Bytes::<1024>::new();
+                    commitment
+                        .extend_from_slice(&serialized_auth_data)
+                        .map_err(|_| Error::Other)?;
+                    commitment
+                        .extend_from_slice(parameters.client_data_hash)
+                        .map_err(|_| Error::Other)?;
 
-        // can we write Sum<M, N> somehow?
-        // debug_now!("seeking commitment, {} + {}", serialized_auth_data.len(), parameters.client_data_hash.len());
-        let mut commitment = Bytes::<1024>::new();
-        commitment
-            .extend_from_slice(&serialized_auth_data)
-            .map_err(|_| Error::Other)?;
-        // debug_now!("serialized_auth_data ={:?}", &serialized_auth_data);
-        commitment
-            .extend_from_slice(parameters.client_data_hash)
-            .map_err(|_| Error::Other)?;
-        // debug_now!("client_data_hash = {:?}", &parameters.client_data_hash);
-        // debug_now!("commitment = {:?}", &commitment);
+                    let (signature, attestation_algorithm) = {
+                        if let Some(attestation) = attestation_maybe.as_ref() {
+                            let signature = syscall!(self.trussed.sign_p256(
+                                attestation.0,
+                                &commitment,
+                                SignatureSerialization::Asn1Der,
+                            ))
+                            .signature;
+                            (signature.to_bytes().map_err(|_| Error::Other)?, -7)
+                        } else {
+                            match algorithm {
+                                SigningAlgorithm::Ed25519 => {
+                                    let signature =
+                                        syscall!(self.trussed.sign_ed255(private_key, &commitment))
+                                            .signature;
+                                    (signature.to_bytes().map_err(|_| Error::Other)?, -8)
+                                }
 
-        // NB: the other/normal one is called "basic" or "batch" attestation,
-        // because it attests the authenticator is part of a batch: the model
-        // specified by AAGUID.
-        // "self signed" is also called "surrogate basic".
-        //
-        // we should also directly support "none" format, it's a bit weird
-        // how browsers firefox this
-
-        let (signature, attestation_algorithm) = {
-            if let Some(attestation) = attestation_maybe.as_ref() {
-                let signature = syscall!(self.trussed.sign_p256(
-                    attestation.0,
-                    &commitment,
-                    SignatureSerialization::Asn1Der,
-                ))
-                .signature;
-                (signature.to_bytes().map_err(|_| Error::Other)?, -7)
-            } else {
-                match algorithm {
-                    SigningAlgorithm::Ed25519 => {
-                        let signature =
-                            syscall!(self.trussed.sign_ed255(private_key, &commitment)).signature;
-                        (signature.to_bytes().map_err(|_| Error::Other)?, -8)
-                    }
-
-                    SigningAlgorithm::P256 => {
-                        // DO NOT prehash here, `trussed` does that
-                        let der_signature = syscall!(self.trussed.sign_p256(
-                            private_key,
-                            &commitment,
-                            SignatureSerialization::Asn1Der
-                        ))
-                        .signature;
-                        (der_signature.to_bytes().map_err(|_| Error::Other)?, -7)
-                    } // SigningAlgorithm::Totp => {
-                      //     // maybe we can fake it here too, but seems kinda weird
-                      //     // return Err(Error::UnsupportedAlgorithm);
-                      //     // micro-ecc is borked. let's self-sign anyway
-                      //     let hash = syscall!(self.trussed.hash_sha256(&commitment.as_ref())).hash;
-                      //     let tmp_key = syscall!(self.trussed
-                      //         .generate_p256_private_key(Location::Volatile))
-                      //         .key;
-
-                      //     let signature = syscall!(self.trussed.sign_p256(
-                      //         tmp_key,
-                      //         &hash,
-                      //         SignatureSerialization::Asn1Der,
-                      //     )).signature;
-                      //     (signature.to_bytes().map_err(|_| Error::Other)?, -7)
-                      // }
+                                SigningAlgorithm::P256 => {
+                                    // DO NOT prehash here, `trussed` does that
+                                    let der_signature = syscall!(self.trussed.sign_p256(
+                                        private_key,
+                                        &commitment,
+                                        SignatureSerialization::Asn1Der
+                                    ))
+                                    .signature;
+                                    (der_signature.to_bytes().map_err(|_| Error::Other)?, -7)
+                                }
+                            }
+                        }
+                    };
+                    let packed = PackedAttestationStatement {
+                        alg: attestation_algorithm,
+                        sig: signature,
+                        x5c: attestation_maybe.as_ref().map(|attestation| {
+                            // See: https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation-cert-requirements
+                            let cert = attestation.1.clone();
+                            let mut x5c = Vec::new();
+                            x5c.push(cert).ok();
+                            x5c
+                        }),
+                    };
+                    Some(AttestationStatement::Packed(packed))
                 }
             }
+        } else {
+            None
         };
-        // debug_now!("SIG = {:?}", &signature);
 
         if !rk_requested {
             let _success = syscall!(self.trussed.delete(private_key)).success;
             info_now!("deleted private credential key: {}", _success);
         }
 
-        let packed_attn_stmt = ctap2::PackedAttestationStatement {
-            alg: attestation_algorithm,
-            sig: signature,
-            x5c: attestation_maybe.as_ref().map(|attestation| {
-                // See: https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation-cert-requirements
-                let cert = attestation.1.clone();
-                let mut x5c = Vec::new();
-                x5c.push(cert).ok();
-                x5c
-            }),
-        };
-
-        let fmt = ctap2::AttestationStatementFormat::Packed;
-        let att_stmt = ctap2::AttestationStatement::Packed(packed_attn_stmt);
-
         let mut attestation_object = ctap2::make_credential::ResponseBuilder {
-            fmt,
+            fmt: att_stmt_fmt
+                .map(From::from)
+                .unwrap_or(AttestationStatementFormat::None),
             auth_data: serialized_auth_data,
         }
         .build();
-        attestation_object.att_stmt = Some(att_stmt);
+        attestation_object.att_stmt = att_stmt;
         attestation_object.large_blob_key = large_blob_key;
         Ok(attestation_object)
     }
@@ -1983,6 +1969,57 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         )?;
 
         Ok(ctap2::large_blobs::Response::default())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SupportedAttestationFormat {
+    None,
+    Packed,
+}
+
+impl SupportedAttestationFormat {
+    fn select(preference: Option<&AttestationFormatsPreference>) -> Option<Self> {
+        let Some(preference) = preference else {
+            // no preference, default to packed format
+            return Some(Self::Packed);
+        };
+        if preference.known_formats() == [AttestationStatementFormat::None]
+            && !preference.includes_unknown_formats()
+        {
+            // platform requested only None --> omit attestation statement
+            return None;
+        }
+        // use first known and supported format, or default to packed format
+        let format = preference
+            .known_formats()
+            .iter()
+            .copied()
+            .flat_map(Self::try_from)
+            .next()
+            .unwrap_or(Self::Packed);
+        Some(format)
+    }
+}
+
+impl From<SupportedAttestationFormat> for AttestationStatementFormat {
+    fn from(format: SupportedAttestationFormat) -> Self {
+        match format {
+            SupportedAttestationFormat::None => Self::None,
+            SupportedAttestationFormat::Packed => Self::Packed,
+        }
+    }
+}
+
+impl TryFrom<AttestationStatementFormat> for SupportedAttestationFormat {
+    type Error = Error;
+
+    fn try_from(format: AttestationStatementFormat) -> core::result::Result<Self, Self::Error> {
+        match format {
+            AttestationStatementFormat::None => Ok(Self::None),
+            AttestationStatementFormat::Packed => Ok(Self::Packed),
+            _ => Err(Error::Other),
+        }
     }
 }
 
