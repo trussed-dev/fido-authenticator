@@ -3,6 +3,7 @@
 //! Needs cleanup.
 
 use ctap_types::{
+    ctap2::AttestationFormatsPreference,
     // 2022-02-27: 10 credentials
     sizes::MAX_CREDENTIAL_COUNT_IN_LIST, // U8 currently
     Error,
@@ -216,6 +217,7 @@ pub struct ActiveGetAssertionData {
     pub up_performed: bool,
     pub multiple_credentials: bool,
     pub extensions: Option<ctap_types::ctap2::get_assertion::ExtensionsInput>,
+    pub attestation_formats_preference: Option<AttestationFormatsPreference>,
 }
 
 #[derive(Debug, Default)]

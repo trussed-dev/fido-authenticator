@@ -1063,6 +1063,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             up_performed,
             multiple_credentials,
             extensions: parameters.extensions.clone(),
+            attestation_formats_preference: parameters.attestation_formats_preference.clone(),
         });
 
         let num_credentials = match num_credentials {
@@ -1677,6 +1678,46 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         .to_bytes()
         .unwrap();
 
+        let att_stmt_fmt =
+            SupportedAttestationFormat::select(data.attestation_formats_preference.as_ref());
+        let att_stmt = if let Some(format) = att_stmt_fmt {
+            match format {
+                SupportedAttestationFormat::None => {
+                    Some(AttestationStatement::None(NoneAttestationStatement {}))
+                }
+                SupportedAttestationFormat::Packed => {
+                    let (attestation_maybe, _) = self.state.identity.attestation(&mut self.trussed);
+                    let (signature, attestation_algorithm) = {
+                        if let Some(attestation) = attestation_maybe.as_ref() {
+                            let signature = syscall!(self.trussed.sign_p256(
+                                attestation.0,
+                                &commitment,
+                                SignatureSerialization::Asn1Der,
+                            ))
+                            .signature;
+                            (signature.to_bytes().map_err(|_| Error::Other)?, -7)
+                        } else {
+                            (signature.clone(), credential.algorithm())
+                        }
+                    };
+                    let packed = PackedAttestationStatement {
+                        alg: attestation_algorithm,
+                        sig: signature,
+                        x5c: attestation_maybe.as_ref().map(|attestation| {
+                            // See: https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation-cert-requirements
+                            let cert = attestation.1.clone();
+                            let mut x5c = Vec::new();
+                            x5c.push(cert).ok();
+                            x5c
+                        }),
+                    };
+                    Some(AttestationStatement::Packed(packed))
+                }
+            }
+        } else {
+            None
+        };
+
         if !is_rk {
             syscall!(self.trussed.delete(key));
         }
@@ -1688,6 +1729,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         }
         .build();
         response.number_of_credentials = num_credentials;
+        response.att_stmt = att_stmt;
 
         // User with empty IDs are ignored for compatibility
         if is_rk {
