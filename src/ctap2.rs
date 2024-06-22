@@ -85,6 +85,14 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         }
         transports.push(Transport::Usb).unwrap();
 
+        let mut attestation_formats = Vec::new();
+        attestation_formats
+            .push(AttestationStatementFormat::Packed)
+            .unwrap();
+        attestation_formats
+            .push(AttestationStatementFormat::None)
+            .unwrap();
+
         let (_, aaguid) = self.state.identity.attestation(&mut self.trussed);
 
         let mut response = ctap2::get_info::Response::default();
@@ -98,6 +106,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         response.pin_protocols = Some(pin_protocols);
         response.max_creds_in_list = Some(ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST);
         response.max_cred_id_length = Some(ctap_types::sizes::MAX_CREDENTIAL_ID_LENGTH);
+        response.attestation_formats = Some(attestation_formats);
         response
     }
 

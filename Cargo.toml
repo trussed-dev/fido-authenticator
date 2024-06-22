@@ -15,7 +15,7 @@ name = "usbip"
 required-features = ["dispatch"]
 
 [dependencies]
-ctap-types = { version = "0.2.0", features = ["large-blobs", "third-party-payment"] }
+ctap-types = { version = "0.2.0", features = ["get-info-full", "large-blobs", "third-party-payment"] }
 cosey = "0.3"
 delog = "0.1.0"
 heapless = "0.7"
