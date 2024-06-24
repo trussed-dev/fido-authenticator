@@ -29,7 +29,7 @@ trussed-chunked = { version = "0.1.0", optional = true }
 
 apdu-dispatch = { version = "0.1", optional = true }
 ctaphid-dispatch = { version = "0.1", optional = true }
-iso7816 = { version = "0.1", optional = true }
+iso7816 = { version = "0.1.2", optional = true }
 
 [features]
 dispatch = ["apdu-dispatch", "ctaphid-dispatch", "iso7816"]
@@ -65,6 +65,7 @@ trussed = { version = "0.1", features = ["virt"] }
 trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt"] }
 trussed-usbip = { version = "0.0.1", default-features = false, features = ["ctaphid"] }
 usbd-ctaphid = "0.1.0"
+x509-parser = "0.16.0"
 
 [package.metadata.docs.rs]
 features = ["dispatch"]
