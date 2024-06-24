@@ -23,11 +23,22 @@ use ctaphid_dispatch::{
     types::{Channel, Requester},
 };
 use fido_authenticator::{Authenticator, Config, Conforming};
-use trussed_staging::virt;
+use littlefs2::path;
+use trussed::{
+    backend::BackendId,
+    platform::Platform as _,
+    store::Store as _,
+    virt::{self, Ram},
+};
+use trussed_staging::virt::{BackendIds, Client, Dispatcher};
 
 use crate::webauthn::Request;
 
 use pipe::Pipe;
+
+// see: https://github.com/Nitrokey/nitrokey-3-firmware/tree/main/utils/test-certificates/fido
+const ATTESTATION_CERT: &[u8] = include_bytes!("../data/fido-cert.der");
+const ATTESTATION_KEY: &[u8] = include_bytes!("../data/fido-key.trussed");
 
 static INIT_LOGGER: Once = Once::new();
 
@@ -39,9 +50,7 @@ where
     INIT_LOGGER.call_once(|| {
         env_logger::init();
     });
-    virt::with_ram_client("fido", |client| {
-        // TODO: setup attestation cert
-
+    with_client(|client| {
         let mut authenticator = Authenticator::new(
             client,
             Conforming {},
@@ -198,4 +207,27 @@ impl HidDevice for Device<'_> {
             thread::sleep(Duration::from_millis(10));
         }
     }
+}
+
+fn with_client<F, T>(f: F) -> T
+where
+    F: FnOnce(Client<Ram>) -> T,
+{
+    virt::with_platform(Ram::default(), |platform| {
+        let ifs = platform.store().ifs();
+        ifs.create_dir_all(path!("fido/x5c")).unwrap();
+        ifs.create_dir_all(path!("fido/sec")).unwrap();
+        ifs.write(path!("fido/x5c/00"), ATTESTATION_CERT).unwrap();
+        ifs.write(path!("fido/sec/00"), ATTESTATION_KEY).unwrap();
+
+        platform.run_client_with_backends(
+            "fido",
+            Dispatcher::default(),
+            &[
+                BackendId::Custom(BackendIds::StagingBackend),
+                BackendId::Core,
+            ],
+            f,
+        )
+    })
 }

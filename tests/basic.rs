@@ -6,6 +6,7 @@ mod webauthn;
 use std::collections::BTreeMap;
 
 use ciborium::Value;
+use hex_literal::hex;
 
 use virt::{Ctap2, Ctap2Error};
 use webauthn::{
@@ -27,6 +28,10 @@ fn test_get_info() {
         let reply = device.exec(GetInfo).unwrap();
         assert!(reply.versions.contains(&"FIDO_2_0".to_owned()));
         assert!(reply.versions.contains(&"FIDO_2_1".to_owned()));
+        assert_eq!(
+            reply.aaguid.as_bytes().unwrap(),
+            &hex!("8BC5496807B14D5FB249607F5D527DA2")
+        );
         assert_eq!(reply.pin_protocols, Some(vec![2, 1]));
     });
 }

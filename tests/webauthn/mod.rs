@@ -430,6 +430,7 @@ impl Request for GetInfo {
 
 pub struct GetInfoReply {
     pub versions: Vec<String>,
+    pub aaguid: Value,
     pub pin_protocols: Option<Vec<u8>>,
 }
 
@@ -438,6 +439,7 @@ impl From<Value> for GetInfoReply {
         let mut map: BTreeMap<u8, Value> = value.deserialized().unwrap();
         Self {
             versions: map.remove(&1).unwrap().deserialized().unwrap(),
+            aaguid: map.remove(&3).unwrap().deserialized().unwrap(),
             pin_protocols: map.remove(&6).map(|value| value.deserialized().unwrap()),
         }
     }
