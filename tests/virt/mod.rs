@@ -23,7 +23,11 @@ use ctaphid_dispatch::{
     types::{Channel, Requester},
 };
 use fido_authenticator::{Authenticator, Config, Conforming};
-use littlefs2::path;
+use littlefs2::{path, path::Path};
+use rand::{
+    distributions::{Distribution, Uniform},
+    RngCore as _,
+};
 use trussed::{
     backend::BackendId,
     platform::Platform as _,
@@ -47,10 +51,20 @@ where
     F: FnOnce(ctaphid::Device<Device>) -> T + Send,
     T: Send,
 {
+    run_ctaphid_with_files(&[], f)
+}
+pub fn run_ctaphid_with_files<F, T>(files: &[(&Path, &[u8])], f: F) -> T
+where
+    F: FnOnce(ctaphid::Device<Device>) -> T + Send,
+    T: Send,
+{
     INIT_LOGGER.call_once(|| {
         env_logger::init();
     });
-    with_client(|client| {
+    let mut files = Vec::from(files);
+    files.push((path!("fido/x5c/00"), ATTESTATION_CERT));
+    files.push((path!("fido/sec/00"), ATTESTATION_KEY));
+    with_client(&files, |client| {
         let mut authenticator = Authenticator::new(
             client,
             Conforming {},
@@ -209,16 +223,27 @@ impl HidDevice for Device<'_> {
     }
 }
 
-fn with_client<F, T>(f: F) -> T
+fn with_client<F, T>(files: &[(&Path, &[u8])], f: F) -> T
 where
     F: FnOnce(Client<Ram>) -> T,
 {
-    virt::with_platform(Ram::default(), |platform| {
+    virt::with_platform(Ram::default(), |mut platform| {
+        // virt always uses the same seed -- request some random bytes to reach a somewhat random
+        // state
+        let uniform = Uniform::from(0..64);
+        let n = uniform.sample(&mut rand::thread_rng());
+        for _ in 0..n {
+            platform.rng().next_u32();
+        }
+
         let ifs = platform.store().ifs();
-        ifs.create_dir_all(path!("fido/x5c")).unwrap();
-        ifs.create_dir_all(path!("fido/sec")).unwrap();
-        ifs.write(path!("fido/x5c/00"), ATTESTATION_CERT).unwrap();
-        ifs.write(path!("fido/sec/00"), ATTESTATION_KEY).unwrap();
+
+        for (path, content) in files {
+            if let Some(dir) = path.parent() {
+                ifs.create_dir_all(&dir).unwrap();
+            }
+            ifs.write(path, content).unwrap();
+        }
 
         platform.run_client_with_backends(
             "fido",

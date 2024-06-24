@@ -11,6 +11,7 @@ use iso7816::{
     command::{class::Class, instruction::Instruction, CommandBuilder, ExpectedLen},
     response::Status,
 };
+use littlefs2::path;
 use p256::ecdsa::{signature::Verifier as _, DerSignature, VerifyingKey};
 use x509_parser::public_key::PublicKey;
 
@@ -83,6 +84,53 @@ fn test_authenticate_wrong_keyhandle() {
                 .unwrap();
             assert_eq!(err, Status::IncorrectDataParameter);
         }
+    });
+}
+
+#[test]
+fn test_authenticate_upgrade() {
+    // manually extracted after running register on commit 79b05b576863236fe54750b18e862ce0801f2040
+    let state: &[u8] = &hex!("A5726B65795F656E6372797074696F6E5F6B65795010926EC1ACF475A6ED273BD951BC4A6E706B65795F7772617070696E675F6B65795061743976EDACA263BD30DE70ADFBAF0B781A636F6E73656375746976655F70696E5F6D69736D617463686573006870696E5F68617368F66974696D657374616D7001");
+    let key_encryption_key: &[u8] = &hex!("00020003A0BAA6066B22616147F242DEC9C4B450F6189A10EE036C36E697E647B2C1D3E1000000000000000000000000");
+    let key_wrapping_key: &[u8] = &hex!("000200037719CE721FB206F9788BB7E550777C03795ECFE0B211AB7D50C5C2CE21B43E8E010000000000000000000000");
+    let files = &[
+        (path!("fido/dat/persistent-state.cbor"), state),
+        (
+            path!("fido/sec/10926ec1acf475a6ed273bd951bc4a6e"),
+            key_encryption_key,
+        ),
+        (
+            path!("fido/sec/61743976edaca263bd30de70adfbaf0b"),
+            key_wrapping_key,
+        ),
+    ];
+
+    virt::run_ctaphid_with_files(files, |device| {
+        let application = &hex!("f0e6a6a97042a4f1f1c87f5f7d44315b2d852c2df5c7991cc66241bf7072d1c4");
+        let keyhandle = hex!("A3005878B3F2499ACECB2C08F437DEF0F41929BD4DCFBCA7D43E893B18799BA61F6D84A36EAFCB87D9E833AEA1FE68BABD27A4B89C83C32EC25B092D915D9EA207ECA4BDE5A06E3CDCCFE0E93600AC28A6A8A61E4A1C6881C67E252F00425672427CFC59463B097364F45FD050F8E6BE1C6CD45C1F7D9B5732E334A8014C533D8BF37EEF0D8D7D16B6DF025055B1A6492F5607139EF420D47051A5F3");
+        let user_key = &hex!("04AE6B38AE33494A3A58A9FED8A1C5DA2683F510A69B9DE4D8849648485ECDCC21918E6124F6E0B71E7B3C5D92F08EC38D3161E236FF72743923141E97089AA2C4");
+        let register = Register {
+            user_key: VerifyingKey::from_sec1_bytes(user_key).unwrap(),
+            keyhandle: keyhandle.into(),
+        };
+
+        let challenge = &hex!("ccd6ee2e47baef244d49a222db496bad0ef5b6f93aa7cc4d30c4821b3b9dbc57");
+
+        // check-only
+        let err = authenticate(&device, 7, challenge, application, &register)
+            .err()
+            .unwrap();
+        assert_eq!(err, Status::ConditionsOfUseNotSatisfied);
+
+        // enforce user presence
+        let response = authenticate(&device, 3, challenge, application, &register).unwrap();
+        assert_eq!(response.user_presence & 1, 1);
+        assert_eq!(response.counter, 1);
+
+        // don’t enforce user presence
+        let response = authenticate(&device, 8, challenge, application, &register).unwrap();
+        assert_eq!(response.user_presence & 1, 0);
+        assert_eq!(response.counter, 2);
     });
 }
 
