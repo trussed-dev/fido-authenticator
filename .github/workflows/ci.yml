@@ -7,6 +7,20 @@ on:
     branches: [main]
 
 jobs:
+  check-fuzz:
+    name: Check fuzz targets
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@master
+    - uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: nightly
+        override: true
+    - name: Check fuzz targets
+      run: |
+        cargo check --manifest-path fuzz/Cargo.toml
+
   build:
     runs-on: ubuntu-latest
     strategy:

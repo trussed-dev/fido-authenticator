@@ -1,0 +1,31 @@
+[package]
+name = "fido-authenticator-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+ctap-types = { version = "0.2.0", features = ["arbitrary"] }
+libfuzzer-sys = "0.4"
+trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt"] }
+
+[dependencies.fido-authenticator]
+path = ".."
+
+[[bin]]
+name = "ctap"
+path = "fuzz_targets/ctap.rs"
+test = false
+doc = false
+bench = false
+
+[patch.crates-io]
+ctap-types = { git = "https://github.com/trussed-dev/ctap-types.git", rev = "ff20dfb5049fb5e25c18d1d27049d0bc98a5be8b" }
+littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "2b45a7559ff44260c6dd693e4cb61f54ae5efc53" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b548d379dcbd67d29453d94847b7bc33ae92e673" }
+trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "chunked-v0.1.0" }
+trussed-hkdf = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "hkdf-v0.2.0" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.3.0" }
