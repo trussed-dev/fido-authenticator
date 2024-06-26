@@ -10,8 +10,8 @@ use hex_literal::hex;
 
 use virt::{Ctap2, Ctap2Error};
 use webauthn::{
-    ClientPin, CredentialManagement, CredentialManagementParams, ExtensionsInput, GetAssertion,
-    GetInfo, KeyAgreementKey, MakeCredential, MakeCredentialOptions, PinToken,
+    AttStmtFormat, ClientPin, CredentialManagement, CredentialManagementParams, ExtensionsInput,
+    GetAssertion, GetInfo, KeyAgreementKey, MakeCredential, MakeCredentialOptions, PinToken,
     PubKeyCredDescriptor, PubKeyCredParam, PublicKey, Rp, SharedSecret, User,
 };
 
@@ -33,6 +33,10 @@ fn test_get_info() {
             &hex!("8BC5496807B14D5FB249607F5D527DA2")
         );
         assert_eq!(reply.pin_protocols, Some(vec![2, 1]));
+        assert_eq!(
+            reply.attestation_formats,
+            Some(vec!["packed".to_owned(), "none".to_owned()])
+        );
     });
 }
 
@@ -109,14 +113,87 @@ struct RequestPinToken {
     rp_id: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum AttestationFormatsPreference {
+    Empty,
+    None,
+    Packed,
+    NonePacked,
+    PackedNone,
+    OtherNonePacked,
+    MultiOtherNonePacked,
+}
+
+impl AttestationFormatsPreference {
+    const ALL: &'static [Self] = &[
+        Self::Empty,
+        Self::None,
+        Self::Packed,
+        Self::NonePacked,
+        Self::PackedNone,
+        Self::OtherNonePacked,
+        Self::MultiOtherNonePacked,
+    ];
+
+    fn format(&self) -> Option<AttStmtFormat> {
+        match self {
+            Self::Empty | Self::Packed | Self::PackedNone => Some(AttStmtFormat::Packed),
+            Self::NonePacked | Self::OtherNonePacked | Self::MultiOtherNonePacked => {
+                Some(AttStmtFormat::None)
+            }
+            Self::None => None,
+        }
+    }
+}
+
+impl From<AttestationFormatsPreference> for Vec<&'static str> {
+    fn from(preference: AttestationFormatsPreference) -> Self {
+        let mut vec = Vec::new();
+        match preference {
+            AttestationFormatsPreference::Empty => {}
+            AttestationFormatsPreference::None => {
+                vec.push("none");
+            }
+            AttestationFormatsPreference::Packed => {
+                vec.push("packed");
+            }
+            AttestationFormatsPreference::NonePacked => {
+                vec.push("none");
+                vec.push("packed");
+            }
+            AttestationFormatsPreference::PackedNone => {
+                vec.push("packed");
+                vec.push("none");
+            }
+            AttestationFormatsPreference::OtherNonePacked => {
+                vec.push("tpm");
+                vec.push("none");
+                vec.push("packed");
+            }
+            AttestationFormatsPreference::MultiOtherNonePacked => {
+                vec.resize(100, "tpm");
+                vec.push("none");
+                vec.push("packed");
+            }
+        }
+        vec
+    }
+}
+
 #[derive(Debug)]
 struct TestMakeCredential {
     pin_token: Option<RequestPinToken>,
     pub_key_alg: i32,
+    attestation_formats_preference: Option<AttestationFormatsPreference>,
 }
 
 impl TestMakeCredential {
     fn run(&self) {
+        println!("{}", "=".repeat(80));
+        println!("Running test:");
+        println!("{self:#?}");
+        println!();
+
         let key_agreement_key = KeyAgreementKey::generate();
         let pin = b"123456";
         let rp_id = "example.com";
@@ -148,6 +225,8 @@ impl TestMakeCredential {
                 request.pin_auth = Some(pin_auth);
                 request.pin_protocol = Some(2);
             }
+            request.attestation_formats_preference =
+                self.attestation_formats_preference.map(From::from);
 
             let result = device.exec(request);
             if let Some(error) = self.expected_error() {
@@ -155,8 +234,17 @@ impl TestMakeCredential {
             } else {
                 let reply = result.unwrap();
                 assert!(reply.auth_data.credential.is_some());
-                assert_eq!(reply.fmt, "packed");
-                reply.att_stmt.unwrap().validate(&reply.auth_data);
+                let format = self
+                    .attestation_formats_preference
+                    .unwrap_or(AttestationFormatsPreference::Packed)
+                    .format();
+                if let Some(format) = format {
+                    assert_eq!(reply.fmt, format.as_str());
+                    reply.att_stmt.unwrap().validate(format, &reply.auth_data);
+                } else {
+                    assert_eq!(reply.fmt, AttStmtFormat::None.as_str());
+                    assert!(reply.att_stmt.is_none());
+                }
             }
         });
     }
@@ -202,15 +290,20 @@ fn test_make_credential() {
     ];
     for pin_token in pin_tokens {
         for pub_key_alg in [-7, -11] {
-            let test = TestMakeCredential {
+            TestMakeCredential {
                 pin_token: pin_token.clone(),
                 pub_key_alg,
-            };
-            println!("{}", "=".repeat(80));
-            println!("Running test:");
-            println!("{test:#?}");
-            println!();
-            test.run();
+                attestation_formats_preference: None,
+            }
+            .run();
+            for attestation_formats_preference in AttestationFormatsPreference::ALL {
+                TestMakeCredential {
+                    pin_token: pin_token.clone(),
+                    pub_key_alg,
+                    attestation_formats_preference: Some(*attestation_formats_preference),
+                }
+                .run();
+            }
         }
     }
 }

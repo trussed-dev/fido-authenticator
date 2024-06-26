@@ -305,6 +305,7 @@ pub struct MakeCredential {
     pub options: Option<MakeCredentialOptions>,
     pub pin_auth: Option<[u8; 32]>,
     pub pin_protocol: Option<u8>,
+    pub attestation_formats_preference: Option<Vec<&'static str>>,
 }
 
 impl MakeCredential {
@@ -323,6 +324,7 @@ impl MakeCredential {
             options: None,
             pin_auth: None,
             pin_protocol: None,
+            attestation_formats_preference: None,
         }
     }
 }
@@ -352,6 +354,13 @@ impl From<MakeCredential> for Value {
         }
         if let Some(pin_protocol) = request.pin_protocol {
             map.push(9, pin_protocol);
+        }
+        if let Some(attestation_formats_preference) = request.attestation_formats_preference {
+            let preference: Vec<_> = attestation_formats_preference
+                .into_iter()
+                .map(Value::from)
+                .collect();
+            map.push(0x0b, preference);
         }
         map.into()
     }
@@ -418,26 +427,47 @@ impl Request for MakeCredential {
     type Reply = MakeCredentialReply;
 }
 
+pub enum AttStmtFormat {
+    None,
+    Packed,
+}
+
+impl AttStmtFormat {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Packed => "packed",
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Deserialize)]
 pub struct AttStmt(BTreeMap<String, Value>);
 
 impl AttStmt {
-    pub fn validate(&self, auth_data: &AuthData) {
-        let alg = self.0.get("alg").unwrap();
-        let x5c = self.0.get("x5c").unwrap().as_array().unwrap();
-        let cert = x5c.first().unwrap().as_bytes().unwrap();
-        let sig = self.0.get("sig").unwrap().as_bytes().unwrap();
-        assert_eq!(alg, &Value::from(-7));
+    pub fn validate(&self, format: AttStmtFormat, auth_data: &AuthData) {
+        match format {
+            AttStmtFormat::Packed => {
+                let alg = self.0.get("alg").unwrap();
+                let x5c = self.0.get("x5c").unwrap().as_array().unwrap();
+                let cert = x5c.first().unwrap().as_bytes().unwrap();
+                let sig = self.0.get("sig").unwrap().as_bytes().unwrap();
+                assert_eq!(alg, &Value::from(-7));
 
-        let (rest, cert) = x509_parser::parse_x509_certificate(cert).unwrap();
-        assert!(rest.is_empty());
-        let signature = DerSignature::from_bytes(sig).unwrap();
-        let public_key = cert.tbs_certificate.subject_pki.parsed().unwrap();
-        let x509_parser::public_key::PublicKey::EC(ec_point) = public_key else {
-            panic!("unexpected public key in attestation certificate");
-        };
-        let public_key = VerifyingKey::from_sec1_bytes(ec_point.data()).unwrap();
-        public_key.verify(&auth_data.bytes, &signature).unwrap();
+                let (rest, cert) = x509_parser::parse_x509_certificate(cert).unwrap();
+                assert!(rest.is_empty());
+                let signature = DerSignature::from_bytes(sig).unwrap();
+                let public_key = cert.tbs_certificate.subject_pki.parsed().unwrap();
+                let x509_parser::public_key::PublicKey::EC(ec_point) = public_key else {
+                    panic!("unexpected public key in attestation certificate");
+                };
+                let public_key = VerifyingKey::from_sec1_bytes(ec_point.data()).unwrap();
+                public_key.verify(&auth_data.bytes, &signature).unwrap();
+            }
+            AttStmtFormat::None => {
+                assert!(self.0.is_empty());
+            }
+        }
     }
 }
 
@@ -667,6 +697,7 @@ pub struct GetInfoReply {
     pub versions: Vec<String>,
     pub aaguid: Value,
     pub pin_protocols: Option<Vec<u8>>,
+    pub attestation_formats: Option<Vec<String>>,
 }
 
 impl From<Value> for GetInfoReply {
@@ -676,6 +707,7 @@ impl From<Value> for GetInfoReply {
             versions: map.remove(&1).unwrap().deserialized().unwrap(),
             aaguid: map.remove(&3).unwrap().deserialized().unwrap(),
             pin_protocols: map.remove(&6).map(|value| value.deserialized().unwrap()),
+            attestation_formats: map.remove(&0x16).map(|value| value.deserialized().unwrap()),
         }
     }
 }
