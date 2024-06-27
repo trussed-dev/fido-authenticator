@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use ciborium::Value;
 use cipher::{BlockDecryptMut as _, BlockEncryptMut as _, KeyIvInit};
 use hmac::Mac;
+use p256::ecdsa::{signature::Verifier as _, DerSignature, VerifyingKey};
 use rand::RngCore as _;
+use serde::Deserialize;
 
 pub struct KeyAgreementKey(p256::ecdh::EphemeralSecret);
 
@@ -396,11 +398,34 @@ impl Request for MakeCredential {
     type Reply = MakeCredentialReply;
 }
 
+#[derive(Debug, PartialEq, Deserialize)]
+pub struct AttStmt(BTreeMap<String, Value>);
+
+impl AttStmt {
+    pub fn validate(&self, auth_data: &AuthData) {
+        let alg = self.0.get("alg").unwrap();
+        let x5c = self.0.get("x5c").unwrap().as_array().unwrap();
+        let cert = x5c.first().unwrap().as_bytes().unwrap();
+        let sig = self.0.get("sig").unwrap().as_bytes().unwrap();
+        assert_eq!(alg, &Value::from(-7));
+
+        let (rest, cert) = x509_parser::parse_x509_certificate(cert).unwrap();
+        assert!(rest.is_empty());
+        let signature = DerSignature::from_bytes(sig).unwrap();
+        let public_key = cert.tbs_certificate.subject_pki.parsed().unwrap();
+        let x509_parser::public_key::PublicKey::EC(ec_point) = public_key else {
+            panic!("unexpected public key in attestation certificate");
+        };
+        let public_key = VerifyingKey::from_sec1_bytes(ec_point.data()).unwrap();
+        public_key.verify(&auth_data.bytes, &signature).unwrap();
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub struct MakeCredentialReply {
     pub fmt: String,
-    pub auth_data: Value,
-    pub att_stmt: Value,
+    pub auth_data: AuthData,
+    pub att_stmt: Option<AttStmt>,
 }
 
 impl From<Value> for MakeCredentialReply {
@@ -408,9 +433,194 @@ impl From<Value> for MakeCredentialReply {
         let mut map: BTreeMap<u8, Value> = value.deserialized().unwrap();
         Self {
             fmt: map.remove(&1).unwrap().deserialized().unwrap(),
-            auth_data: map.remove(&2).unwrap(),
-            att_stmt: map.remove(&3).unwrap(),
+            auth_data: map.remove(&2).unwrap().into(),
+            att_stmt: map.remove(&3).map(|value| value.deserialized().unwrap()),
         }
+    }
+}
+
+pub struct PubKeyCredDescriptor {
+    pub ty: String,
+    pub id: Vec<u8>,
+}
+
+impl PubKeyCredDescriptor {
+    pub fn new(ty: impl Into<String>, id: impl Into<Vec<u8>>) -> Self {
+        Self {
+            ty: ty.into(),
+            id: id.into(),
+        }
+    }
+}
+
+impl From<PubKeyCredDescriptor> for Value {
+    fn from(descriptor: PubKeyCredDescriptor) -> Value {
+        let mut map = Map::default();
+        map.push("type", descriptor.ty);
+        map.push("id", descriptor.id);
+        map.into()
+    }
+}
+
+impl From<Value> for PubKeyCredDescriptor {
+    fn from(value: Value) -> Self {
+        let mut map: BTreeMap<String, Value> = value.deserialized().unwrap();
+        Self {
+            ty: map.remove("type").unwrap().into_text().unwrap(),
+            id: map.remove("id").unwrap().into_bytes().unwrap(),
+        }
+    }
+}
+
+pub struct GetAssertion {
+    rp_id: String,
+    client_data_hash: Vec<u8>,
+    pub allow_list: Option<Vec<PubKeyCredDescriptor>>,
+}
+
+impl GetAssertion {
+    pub fn new(rp_id: impl Into<String>, client_data_hash: impl Into<Vec<u8>>) -> Self {
+        Self {
+            rp_id: rp_id.into(),
+            client_data_hash: client_data_hash.into(),
+            allow_list: None,
+        }
+    }
+}
+
+impl From<GetAssertion> for Value {
+    fn from(request: GetAssertion) -> Value {
+        let mut map = Map::default();
+        map.push(0x01, request.rp_id);
+        map.push(0x02, request.client_data_hash);
+        if let Some(allow_list) = request.allow_list {
+            let values: Vec<_> = allow_list.into_iter().map(Value::from).collect();
+            map.push(0x03, values);
+        }
+        map.into()
+    }
+}
+
+impl Request for GetAssertion {
+    const COMMAND: u8 = 0x02;
+
+    type Reply = GetAssertionReply;
+}
+
+pub struct GetAssertionReply {
+    pub credential: PubKeyCredDescriptor,
+    pub auth_data: AuthData,
+    pub signature: Vec<u8>,
+}
+
+impl From<Value> for GetAssertionReply {
+    fn from(value: Value) -> Self {
+        let mut map: BTreeMap<u8, Value> = value.deserialized().unwrap();
+        Self {
+            credential: map.remove(&0x01).unwrap().into(),
+            auth_data: map.remove(&0x02).unwrap().into(),
+            signature: map.remove(&0x03).unwrap().into_bytes().unwrap(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct AuthData {
+    pub bytes: Vec<u8>,
+    pub flags: u8,
+    pub credential: Option<CredentialData>,
+    pub extensions: Option<BTreeMap<String, Value>>,
+}
+
+impl From<Vec<u8>> for AuthData {
+    fn from(vec: Vec<u8>) -> Self {
+        let (_rp_id_hash, bytes) = vec.split_at(32);
+        let (&flags, bytes) = bytes.split_first().unwrap();
+        let (_sign_count, bytes) = bytes.split_at(4);
+        let (credential, bytes) = if flags & 0b0100_0000 == 0b0100_0000 {
+            let (credential, bytes) = CredentialData::parse(bytes);
+            (Some(credential), bytes)
+        } else {
+            (None, bytes)
+        };
+        let extensions = if flags & 0b1000_0000 == 0b1000_0000 {
+            Some(ciborium::from_reader(bytes).unwrap())
+        } else {
+            None
+        };
+        Self {
+            bytes: vec,
+            flags,
+            credential,
+            extensions,
+        }
+    }
+}
+
+impl From<Value> for AuthData {
+    fn from(value: Value) -> Self {
+        value.into_bytes().unwrap().into()
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct CredentialData {
+    pub id: Vec<u8>,
+    pub public_key: BTreeMap<i32, Value>,
+}
+
+impl CredentialData {
+    fn parse(bytes: &[u8]) -> (Self, &[u8]) {
+        let (_aaguid, bytes) = bytes.split_at(16);
+        let (id_length, bytes) = bytes.split_at(2);
+        let id_length = u16::from_be_bytes([id_length[0], id_length[1]]);
+        let (id, bytes) = bytes.split_at(id_length.into());
+        let mut cursor = std::io::Cursor::new(bytes);
+        let public_key = ciborium::from_reader(&mut cursor).unwrap();
+        let bytes = &bytes[cursor.position().try_into().unwrap()..];
+        (
+            Self {
+                id: id.into(),
+                public_key,
+            },
+            bytes,
+        )
+    }
+
+    pub fn verify_assertion(
+        &self,
+        auth_data: &AuthData,
+        client_data_hash: &[u8],
+        signature: &[u8],
+    ) {
+        let kty = self.public_key.get(&1).unwrap();
+        let alg = self.public_key.get(&3).unwrap();
+        let crv = self.public_key.get(&-1).unwrap();
+        let x = self
+            .public_key
+            .get(&-2)
+            .unwrap()
+            .as_bytes()
+            .unwrap()
+            .as_slice();
+        let y = self
+            .public_key
+            .get(&-3)
+            .unwrap()
+            .as_bytes()
+            .unwrap()
+            .as_slice();
+        assert_eq!(kty, &Value::from(2));
+        assert_eq!(alg, &Value::from(-7));
+        assert_eq!(crv, &Value::from(1));
+
+        let encoded = p256::EncodedPoint::from_affine_coordinates(x.into(), y.into(), false);
+        let public_key = VerifyingKey::from_encoded_point(&encoded).unwrap();
+        let signature = DerSignature::from_bytes(signature).unwrap();
+        let mut message = Vec::new();
+        message.extend_from_slice(&auth_data.bytes);
+        message.extend_from_slice(client_data_hash);
+        public_key.verify(&message, &signature).unwrap();
     }
 }
 

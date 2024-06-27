@@ -10,9 +10,9 @@ use hex_literal::hex;
 
 use virt::{Ctap2, Ctap2Error};
 use webauthn::{
-    ClientPin, CredentialManagement, CredentialManagementParams, GetInfo, KeyAgreementKey,
-    MakeCredential, MakeCredentialOptions, PinToken, PubKeyCredParam, PublicKey, Rp, SharedSecret,
-    User,
+    ClientPin, CredentialManagement, CredentialManagementParams, GetAssertion, GetInfo,
+    KeyAgreementKey, MakeCredential, MakeCredentialOptions, PinToken, PubKeyCredDescriptor,
+    PubKeyCredParam, PublicKey, Rp, SharedSecret, User,
 };
 
 #[test]
@@ -154,9 +154,9 @@ impl TestMakeCredential {
                 assert_eq!(result, Err(Ctap2Error(error)));
             } else {
                 let reply = result.unwrap();
+                assert!(reply.auth_data.credential.is_some());
                 assert_eq!(reply.fmt, "packed");
-                assert!(reply.auth_data.is_bytes());
-                assert!(reply.att_stmt.is_map());
+                reply.att_stmt.unwrap().validate(&reply.auth_data);
             }
         });
     }
@@ -215,6 +215,35 @@ fn test_make_credential() {
     }
 }
 
+#[test]
+fn test_get_assertion() {
+    let rp_id = "example.com";
+    // TODO: client data
+    let client_data_hash = &[0; 32];
+
+    virt::run_ctap2(|device| {
+        let rp = Rp::new(rp_id);
+        let user = User::new(b"id123")
+            .name("john.doe")
+            .display_name("John Doe");
+        let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+        let request = MakeCredential::new(client_data_hash, rp, user, pub_key_cred_params);
+        let response = device.exec(request).unwrap();
+        let credential = response.auth_data.credential.unwrap();
+
+        let mut request = GetAssertion::new(rp_id, client_data_hash);
+        request.allow_list = Some(vec![PubKeyCredDescriptor::new(
+            "public-key",
+            credential.id.clone(),
+        )]);
+        let response = device.exec(request).unwrap();
+        assert_eq!(response.credential.ty, "public-key");
+        assert_eq!(response.credential.id, credential.id);
+        assert_eq!(response.auth_data.credential, None);
+        credential.verify_assertion(&response.auth_data, client_data_hash, &response.signature);
+    });
+}
+
 #[derive(Debug)]
 struct TestListCredentials {
     pin_token_rp_id: bool,
@@ -244,19 +273,17 @@ impl TestListCredentials {
             request.pin_auth = Some(pin_auth);
             request.pin_protocol = Some(2);
             let reply = device.exec(request).unwrap();
-            let auth_data = reply.auth_data.as_bytes().unwrap();
-            assert!(auth_data.len() >= 37, "{}", auth_data.len());
             assert_eq!(
-                auth_data[32] & 0b1,
+                reply.auth_data.flags & 0b1,
                 0b1,
                 "up flag not set in auth_data: 0b{:b}",
-                auth_data[32]
+                reply.auth_data.flags
             );
             assert_eq!(
-                auth_data[32] & 0b100,
+                reply.auth_data.flags & 0b100,
                 0b100,
                 "uv flag not set in auth_data: 0b{:b}",
-                auth_data[32]
+                reply.auth_data.flags
             );
 
             let pin_token =
