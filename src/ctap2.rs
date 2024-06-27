@@ -41,32 +41,23 @@ use pin::{PinProtocol, PinProtocolVersion, RpScope, SharedSecret};
 impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenticator<UP, T> {
     #[inline(never)]
     fn get_info(&mut self) -> ctap2::get_info::Response {
+        use ctap2::get_info::{Extension, Transport, Version};
+
         debug_now!("remaining stack size: {} bytes", msp() - 0x2000_0000);
 
-        use core::str::FromStr;
-        let mut versions = Vec::<String<12>, 4>::new();
-        versions.push(String::from_str("U2F_V2").unwrap()).unwrap();
-        versions
-            .push(String::from_str("FIDO_2_0").unwrap())
-            .unwrap();
-        versions
-            .push(String::from_str("FIDO_2_1").unwrap())
-            .unwrap();
+        let mut versions = Vec::new();
+        versions.push(Version::U2fV2).unwrap();
+        versions.push(Version::Fido2_0).unwrap();
+        versions.push(Version::Fido2_1).unwrap();
 
-        let mut extensions = Vec::<String<13>, 4>::new();
-        extensions
-            .push(String::from_str("credProtect").unwrap())
-            .unwrap();
-        extensions
-            .push(String::from_str("hmac-secret").unwrap())
-            .unwrap();
+        let mut extensions = Vec::new();
+        extensions.push(Extension::CredProtect).unwrap();
+        extensions.push(Extension::HmacSecret).unwrap();
         if self.config.supports_large_blobs() {
-            extensions
-                .push(String::from_str("largeBlobKey").unwrap())
-                .unwrap();
+            extensions.push(Extension::LargeBlobKey).unwrap();
         }
 
-        let mut pin_protocols = Vec::<u8, 2>::new();
+        let mut pin_protocols = Vec::new();
         for pin_protocol in self.pin_protocols() {
             pin_protocols.push(u8::from(*pin_protocol)).unwrap();
         }
@@ -85,9 +76,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let mut transports = Vec::new();
         if self.config.nfc_transport {
-            transports.push(String::from("nfc")).unwrap();
+            transports.push(Transport::Nfc).unwrap();
         }
-        transports.push(String::from("usb")).unwrap();
+        transports.push(Transport::Usb).unwrap();
 
         let (_, aaguid) = self.state.identity.attestation(&mut self.trussed);
 
@@ -552,7 +543,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             info_now!("deleted private credential key: {}", _success);
         }
 
-        let packed_attn_stmt = ctap2::make_credential::PackedAttestationStatement {
+        let packed_attn_stmt = ctap2::PackedAttestationStatement {
             alg: attestation_algorithm,
             sig: signature,
             x5c: attestation_maybe.as_ref().map(|attestation| {
@@ -564,8 +555,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }),
         };
 
-        let fmt = String::<32>::from("packed");
-        let att_stmt = ctap2::make_credential::AttestationStatement::Packed(packed_attn_stmt);
+        let fmt = ctap2::AttestationStatementFormat::Packed;
+        let att_stmt = ctap2::AttestationStatement::Packed(packed_attn_stmt);
 
         let mut attestation_object = ctap2::make_credential::ResponseBuilder {
             fmt,
