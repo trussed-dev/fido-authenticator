@@ -24,6 +24,7 @@ serde_bytes = { version = "0.11.14", default-features = false }
 serde-indexed = "0.1.0"
 sha2 = { version = "0.10", default-features = false }
 trussed = "0.1"
+trussed-fs-info = "0.1.0"
 trussed-hkdf = { version = "0.2.0" }
 trussed-chunked = { version = "0.1.0", optional = true }
 
@@ -65,7 +66,7 @@ p256 = { version = "0.13.2", features = ["ecdh"] }
 rand = "0.8.4"
 sha2 = "0.10"
 trussed = { version = "0.1", features = ["virt"] }
-trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt"] }
+trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
 trussed-usbip = { version = "0.0.1", default-features = false, features = ["ctaphid"] }
 usbd-ctaphid = "0.1.0"
 x509-parser = "0.16.0"
@@ -78,10 +79,11 @@ cbor-smol = { git = "https://github.com/sosthene-nitrokey/cbor-smol.git", rev = 
 ctap-types = { git = "https://github.com/trussed-dev/ctap-types.git", rev = "72eb68b61e3f14957c5ab89bd22f776ac860eb62" }
 ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
 apdu-dispatch = { git = "https://github.com/trussed-dev/apdu-dispatch.git", rev = "915fc237103fcecc29d0f0b73391f19abf6576de" }
-littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "2b45a7559ff44260c6dd693e4cb61f54ae5efc53" }
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b548d379dcbd67d29453d94847b7bc33ae92e673" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "a055e4f79a10122c8c0c882161442e6e02f0c5c6" }
+littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "960e57d9fc0d209308c8e15dc26252bbe1ff6ba8" }
 trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "chunked-v0.1.0" }
+trussed-fs-info = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "170ab14f3bb6760399749d78e1b94e3b70106739" }
 trussed-hkdf = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "hkdf-v0.2.0" }
-trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.3.0" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "170ab14f3bb6760399749d78e1b94e3b70106739" }
 trussed-usbip = { git = "https://github.com/Nitrokey/pc-usbip-runner.git", tag = "v0.0.1-nitrokey.1" }
 usbd-ctaphid = { git = "https://github.com/trussed-dev/usbd-ctaphid.git", rev = "dcff9009c3cd1ef9e5b09f8f307aca998fc9a8c8" }

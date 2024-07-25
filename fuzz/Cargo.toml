@@ -10,7 +10,7 @@ cargo-fuzz = true
 [dependencies]
 ctap-types = { version = "0.2.0", features = ["arbitrary"] }
 libfuzzer-sys = "0.4"
-trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt"] }
+trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
 
 [dependencies.fido-authenticator]
 path = ".."
@@ -24,9 +24,11 @@ bench = false
 
 [patch.crates-io]
 ctap-types = { git = "https://github.com/trussed-dev/ctap-types.git", rev = "72eb68b61e3f14957c5ab89bd22f776ac860eb62" }
-littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "2b45a7559ff44260c6dd693e4cb61f54ae5efc53" }
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b548d379dcbd67d29453d94847b7bc33ae92e673" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "a055e4f79a10122c8c0c882161442e6e02f0c5c6" }
+littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "960e57d9fc0d209308c8e15dc26252bbe1ff6ba8" }
 trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "chunked-v0.1.0" }
 trussed-hkdf = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "hkdf-v0.2.0" }
 trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.3.0" }
 cbor-smol = { git = "https://github.com/sosthene-nitrokey/cbor-smol.git", rev = "9a77dc9b528b08f531d76b44af2f5336c4ef17e0"}
+trussed-fs-info = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "170ab14f3bb6760399749d78e1b94e3b70106739" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "170ab14f3bb6760399749d78e1b94e3b70106739" }

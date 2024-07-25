@@ -20,7 +20,12 @@ generate_macros!();
 
 use core::time::Duration;
 
-use trussed::{client, syscall, types::Message, Client as TrussedClient};
+use trussed::{
+    client, syscall,
+    types::{Location, Message},
+    Client as TrussedClient,
+};
+use trussed_fs_info::{FsInfoClient, FsInfoReply};
 use trussed_hkdf::HkdfClient;
 
 /// Re-export of `ctap-types` authenticator errors.
@@ -37,6 +42,8 @@ pub mod credential;
 pub mod state;
 
 pub use ctap2::large_blobs::Config as LargeBlobsConfig;
+
+use crate::constants::MAX_RESIDENT_CREDENTIALS_GUESSTIMATE;
 
 /// Results with our [`Error`].
 pub type Result<T> = core::result::Result<T, Error>;
@@ -57,6 +64,7 @@ pub trait TrussedRequirements:
     + client::Sha256
     + client::HmacSha256
     + client::Ed255 // + client::Totp
+    + FsInfoClient
     + HkdfClient
     + ExtensionRequirements
 {
@@ -70,6 +78,7 @@ impl<T> TrussedRequirements for T where
         + client::Sha256
         + client::HmacSha256
         + client::Ed255 // + client::Totp
+        + FsInfoClient
         + HkdfClient
         + ExtensionRequirements
 {
@@ -264,6 +273,43 @@ where
             up,
             config,
         }
+    }
+
+    fn estimate_remaining_inner(info: &FsInfoReply) -> usize {
+        let block_size = info.block_info.as_ref().map(|i| i.size).unwrap_or(255);
+        // 1 block for the directory, 1 for the private key, 400 bytes for a reasonnable key and metadata
+        let size_taken = 2 * block_size + 400;
+        // Remove 5 block kept as buffer
+        (info.available_space - 5 * block_size) / size_taken
+    }
+
+    fn estimate_remaining(&mut self) -> usize {
+        let info = syscall!(self.trussed.fs_info(Location::Internal));
+        debug!("Got filesystem info: {info:?}");
+        Self::estimate_remaining_inner(&info).min(
+            self.config
+                .max_resident_credential_count
+                .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE) as usize,
+        )
+    }
+
+    fn can_fit_inner(info: &FsInfoReply, size: usize) -> bool {
+        let block_size = info.block_info.as_ref().map(|i| i.size).unwrap_or(255);
+        // 1 block for the rp directory, 5 block of margin, 50 bytes for a reasonnable metadata
+        let size_taken = 6 * block_size + size + 50;
+        size_taken < info.available_space
+    }
+
+    /// Can a credential of size `size` be stored with safe margins
+    fn can_fit(&mut self, size: usize) -> bool {
+        debug!("Can fit for {size} bytes");
+        let info = syscall!(self.trussed.fs_info(Location::Internal));
+        debug!("Got filesystem info: {info:?}");
+        debug!(
+            "Available storage: {}",
+            Self::estimate_remaining_inner(&info)
+        );
+        Self::can_fit_inner(&info, size)
     }
 
     fn hash(&mut self, data: &[u8]) -> [u8; 32] {

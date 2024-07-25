@@ -15,7 +15,6 @@ use ctap_types::{
 };
 
 use crate::{
-    constants::MAX_RESIDENT_CREDENTIALS_GUESSTIMATE,
     credential::FullCredential,
     state::{CredentialManagementEnumerateCredentials, CredentialManagementEnumerateRps},
     Authenticator, Result, TrussedRequirements, UserPresence,
@@ -65,53 +64,12 @@ where
         info!("get metadata");
         let mut response: Response = Default::default();
 
-        let max_resident_credentials = self
-            .config
-            .max_resident_credential_count
-            .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE);
+        let max_resident_credentials = self.estimate_remaining();
         response.existing_resident_credentials_count = Some(0);
         response.max_possible_remaining_residential_credentials_count =
-            Some(max_resident_credentials);
+            Some(max_resident_credentials.try_into().unwrap_or(u32::MAX));
 
-        let dir = PathBuf::from(b"rk");
-        let maybe_first_rp =
-            syscall!(self
-                .trussed
-                .read_dir_first(Location::Internal, dir.clone(), None))
-            .entry;
-
-        let first_rp = match maybe_first_rp {
-            None => return response,
-            Some(rp) => rp,
-        };
-
-        let (mut num_rks, _) = self.count_rp_rks(PathBuf::from(first_rp.path()));
-        let mut last_rp = PathBuf::from(first_rp.file_name());
-
-        loop {
-            syscall!(self
-                .trussed
-                .read_dir_first(Location::Internal, dir.clone(), Some(last_rp),))
-            .entry
-            .unwrap();
-            let maybe_next_rp = syscall!(self.trussed.read_dir_next()).entry;
-
-            match maybe_next_rp {
-                None => {
-                    response.existing_resident_credentials_count = Some(num_rks);
-                    response.max_possible_remaining_residential_credentials_count =
-                        Some(max_resident_credentials.saturating_sub(num_rks));
-                    return response;
-                }
-                Some(rp) => {
-                    last_rp = PathBuf::from(rp.file_name());
-                    info!("counting..");
-                    let (this_rp_rk_count, _) = self.count_rp_rks(PathBuf::from(rp.path()));
-                    info!("{:?}", this_rp_rk_count);
-                    num_rks += this_rp_rk_count;
-                }
-            }
-        }
+        response
     }
 
     pub fn first_relying_party(&mut self) -> Result<Response> {
