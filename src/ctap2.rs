@@ -1,5 +1,6 @@
 //! The `ctap_types::ctap2::Authenticator` implementation.
 
+use credential_management::CredentialManagement;
 use ctap_types::{
     ctap2::{
         self, client_pin::Permissions, AttestationFormatsPreference, AttestationStatement,
@@ -21,15 +22,9 @@ use trussed::{
 };
 
 use crate::{
-    constants,
+    constants::{self, MAX_RESIDENT_CREDENTIALS_GUESSTIMATE},
     credential::{self, Credential, FullCredential, Key, StrippedCredential},
-    format_hex,
-    state::{
-        self,
-        // // (2022-02-27): 9288 bytes
-        // MinCredentialHeap,
-    },
-    Result, SigningAlgorithm, TrussedRequirements, UserPresence,
+    format_hex, state, Result, SigningAlgorithm, TrussedRequirements, UserPresence,
 };
 
 #[allow(unused_imports)]
@@ -393,7 +388,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             self.delete_resident_key_by_user_id(&rp_id_hash, &credential.user.id)
                 .ok();
 
-            let mut key_store_full = !self.can_fit(serialized_credential.len());
+            let mut key_store_full = !self.can_fit(serialized_credential.len())
+                || CredentialManagement::new(self).count_credentials()
+                    >= self
+                        .config
+                        .max_resident_credential_count
+                        .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE);
 
             if !key_store_full {
                 // then store key, making it resident
