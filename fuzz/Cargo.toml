@@ -29,3 +29,4 @@ trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b548d379d
 trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "chunked-v0.1.0" }
 trussed-hkdf = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "hkdf-v0.2.0" }
 trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.3.0" }
+cbor-smol = { git = "https://github.com/sosthene-nitrokey/cbor-smol.git", rev = "9a77dc9b528b08f531d76b44af2f5336c4ef17e0"}
