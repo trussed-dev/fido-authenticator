@@ -31,6 +31,8 @@ apdu-dispatch = { version = "0.1", optional = true }
 ctaphid-dispatch = { version = "0.1", optional = true }
 iso7816 = { version = "0.1.2", optional = true }
 
+cbor-smol = { version = "0.4.0", features = ["bytes-from-array"] }
+
 [features]
 dispatch = ["apdu-dispatch", "ctaphid-dispatch", "iso7816"]
 disable-reset-time-window = []
@@ -72,6 +74,7 @@ x509-parser = "0.16.0"
 features = ["dispatch"]
 
 [patch.crates-io]
+cbor-smol = { git = "https://github.com/sosthene-nitrokey/cbor-smol.git", rev = "9a77dc9b528b08f531d76b44af2f5336c4ef17e0"}
 ctap-types = { git = "https://github.com/trussed-dev/ctap-types.git", rev = "72eb68b61e3f14957c5ab89bd22f776ac860eb62" }
 ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
 apdu-dispatch = { git = "https://github.com/trussed-dev/apdu-dispatch.git", rev = "915fc237103fcecc29d0f0b73391f19abf6576de" }

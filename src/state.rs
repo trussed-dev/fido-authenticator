@@ -261,6 +261,7 @@ pub struct PersistentState {
     key_encryption_key: Option<KeyId>,
     key_wrapping_key: Option<KeyId>,
     consecutive_pin_mismatches: u8,
+    #[serde(with = "serde_bytes")]
     pin_hash: Option<[u8; 16]>,
     // Ideally, we'd dogfood a "Monotonic Counter" from trussed.
     // TODO: Add per-key counters for resident keys.
@@ -513,5 +514,25 @@ impl RuntimeState {
         }
         // to speed up future operations, we already generate the key agreement key
         self.pin_protocol = Some(PinProtocolState::new(trussed));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_literal::hex;
+
+    #[test]
+    fn deser() {
+        let _state: PersistentState = trussed::cbor_deserialize(&hex!(
+            "
+            a5726b65795f656e6372797074696f6e5f6b657950b19a5a2845e5ec71e3
+            2a1b890892376c706b65795f7772617070696e675f6b6579f6781a636f6e
+            73656375746976655f70696e5f6d69736d617463686573006870696e5f68
+            6173689018ef1879187c1881181818f0182d18fb186418960718dd185d18
+            3f188c18766974696d657374616d7009
+        "
+        ))
+        .unwrap();
     }
 }
