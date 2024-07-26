@@ -67,7 +67,7 @@ where
         let max_resident_credentials = self.estimate_remaining();
         response.existing_resident_credentials_count = Some(self.count_credentials());
         response.max_possible_remaining_residential_credentials_count =
-            Some(max_resident_credentials.try_into().unwrap_or(u32::MAX));
+            Some(max_resident_credentials);
 
         response
     }

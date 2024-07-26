@@ -275,21 +275,21 @@ where
         }
     }
 
-    fn estimate_remaining_inner(info: &FsInfoReply) -> usize {
+    fn estimate_remaining_inner(info: &FsInfoReply) -> u32 {
         let block_size = info.block_info.as_ref().map(|i| i.size).unwrap_or(255);
         // 1 block for the directory, 1 for the private key, 400 bytes for a reasonnable key and metadata
         let size_taken = 2 * block_size + 400;
         // Remove 5 block kept as buffer
-        (info.available_space - 5 * block_size) / size_taken
+        ((info.available_space - 5 * block_size) / size_taken) as u32
     }
 
-    fn estimate_remaining(&mut self) -> usize {
+    fn estimate_remaining(&mut self) -> u32 {
         let info = syscall!(self.trussed.fs_info(Location::Internal));
         debug!("Got filesystem info: {info:?}");
         Self::estimate_remaining_inner(&info).min(
             self.config
                 .max_resident_credential_count
-                .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE) as usize,
+                .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE),
         )
     }
 
