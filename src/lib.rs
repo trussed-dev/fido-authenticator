@@ -295,6 +295,8 @@ where
     }
 
     /// Can a credential of size `size` be stored with safe margins
+    ///
+    /// This assumes that the key has already been generated and is stored.
     fn can_fit(&mut self, size: usize) -> Option<bool> {
         debug!("Can fit for {size} bytes");
         let info = syscall!(self.trussed.fs_info(Location::Internal));
