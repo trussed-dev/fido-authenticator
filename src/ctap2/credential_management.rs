@@ -171,7 +171,7 @@ where
                     let rp = credential.data.rp;
 
                     response.rp_id_hash = Some(ByteArray::new(self.hash(rp.id.as_ref())));
-                    response.rp = Some(rp);
+                    response.rp = Some(rp.into());
                 }
             }
 
@@ -248,7 +248,7 @@ where
                     let rp = credential.data.rp;
 
                     response.rp_id_hash = Some(ByteArray::new(self.hash(rp.id.as_ref())));
-                    response.rp = Some(rp);
+                    response.rp = Some(rp.into());
 
                     // cache state for next call
                     if remaining > 1 {
@@ -452,7 +452,7 @@ where
         };
 
         let mut response = Response::default();
-        response.user = Some(credential.data.user);
+        response.user = Some(credential.data.user.into());
         response.credential_id = Some(credential_id.into());
         response.public_key = Some(cose_public_key);
         response.cred_protect = cred_protect;
