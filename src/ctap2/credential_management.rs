@@ -15,6 +15,7 @@ use ctap_types::{
 };
 
 use crate::{
+    constants::MAX_RESIDENT_CREDENTIALS_GUESSTIMATE,
     credential::FullCredential,
     state::{CredentialManagementEnumerateCredentials, CredentialManagementEnumerateRps},
     Authenticator, Result, TrussedRequirements, UserPresence,
@@ -65,9 +66,15 @@ where
         let mut response: Response = Default::default();
 
         let max_resident_credentials = self.estimate_remaining();
-        response.existing_resident_credentials_count = Some(self.count_credentials());
+        let credential_count = self.count_credentials();
+        response.existing_resident_credentials_count = Some(credential_count);
         response.max_possible_remaining_residential_credentials_count =
-            Some(max_resident_credentials);
+            Some(max_resident_credentials.unwrap_or_else(|| {
+                self.config
+                    .max_resident_credential_count
+                    .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE)
+                    .saturating_sub(credential_count)
+            }));
 
         response
     }

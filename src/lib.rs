@@ -43,8 +43,6 @@ pub mod state;
 
 pub use ctap2::large_blobs::Config as LargeBlobsConfig;
 
-use crate::constants::MAX_RESIDENT_CREDENTIALS_GUESSTIMATE;
-
 /// Results with our [`Error`].
 pub type Result<T> = core::result::Result<T, Error>;
 
@@ -275,33 +273,29 @@ where
         }
     }
 
-    fn estimate_remaining_inner(info: &FsInfoReply) -> u32 {
-        let block_size = info.block_info.as_ref().map(|i| i.size).unwrap_or(255);
+    fn estimate_remaining_inner(info: &FsInfoReply) -> Option<u32> {
+        let block_size = info.block_info.as_ref()?.size;
         // 1 block for the directory, 1 for the private key, 400 bytes for a reasonnable key and metadata
         let size_taken = 2 * block_size + 400;
         // Remove 5 block kept as buffer
-        ((info.available_space - 5 * block_size) / size_taken) as u32
+        Some((info.available_space.saturating_sub(5 * block_size) / size_taken) as u32)
     }
 
-    fn estimate_remaining(&mut self) -> u32 {
+    fn estimate_remaining(&mut self) -> Option<u32> {
         let info = syscall!(self.trussed.fs_info(Location::Internal));
         debug!("Got filesystem info: {info:?}");
-        Self::estimate_remaining_inner(&info).min(
-            self.config
-                .max_resident_credential_count
-                .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE),
-        )
+        Self::estimate_remaining_inner(&info)
     }
 
-    fn can_fit_inner(info: &FsInfoReply, size: usize) -> bool {
-        let block_size = info.block_info.as_ref().map(|i| i.size).unwrap_or(255);
+    fn can_fit_inner(info: &FsInfoReply, size: usize) -> Option<bool> {
+        let block_size = info.block_info.as_ref()?.size;
         // 1 block for the rp directory, 5 block of margin, 50 bytes for a reasonnable metadata
         let size_taken = 6 * block_size + size + 50;
-        size_taken < info.available_space
+        Some(size_taken < info.available_space)
     }
 
     /// Can a credential of size `size` be stored with safe margins
-    fn can_fit(&mut self, size: usize) -> bool {
+    fn can_fit(&mut self, size: usize) -> Option<bool> {
         debug!("Can fit for {size} bytes");
         let info = syscall!(self.trussed.fs_info(Location::Internal));
         debug!("Got filesystem info: {info:?}");

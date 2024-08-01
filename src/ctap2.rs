@@ -388,7 +388,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             self.delete_resident_key_by_user_id(&rp_id_hash, &credential.user.id)
                 .ok();
 
-            let mut key_store_full = !self.can_fit(serialized_credential.len())
+            let mut key_store_full = self.can_fit(serialized_credential.len()) == Some(false)
                 || CredentialManagement::new(self).count_credentials()
                     >= self
                         .config
