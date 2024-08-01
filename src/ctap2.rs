@@ -1,5 +1,6 @@
 //! The `ctap_types::ctap2::Authenticator` implementation.
 
+use credential_management::CredentialManagement;
 use ctap_types::{
     ctap2::{
         self, client_pin::Permissions, AttestationFormatsPreference, AttestationStatement,
@@ -21,15 +22,9 @@ use trussed::{
 };
 
 use crate::{
-    constants,
+    constants::{self, MAX_RESIDENT_CREDENTIALS_GUESSTIMATE},
     credential::{self, Credential, FullCredential, Key, StrippedCredential},
-    format_hex,
-    state::{
-        self,
-        // // (2022-02-27): 9288 bytes
-        // MinCredentialHeap,
-    },
-    Result, SigningAlgorithm, TrussedRequirements, UserPresence,
+    format_hex, state, Result, SigningAlgorithm, TrussedRequirements, UserPresence,
 };
 
 #[allow(unused_imports)]
@@ -393,21 +388,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             self.delete_resident_key_by_user_id(&rp_id_hash, &credential.user.id)
                 .ok();
 
-            let mut key_store_full = false;
-
-            // then check the maximum number of RK credentials
-            if let Some(max_count) = self.config.max_resident_credential_count {
-                let mut cm = credential_management::CredentialManagement::new(self);
-                let metadata = cm.get_creds_metadata();
-                let count = metadata
-                    .existing_resident_credentials_count
-                    .unwrap_or(max_count);
-                debug!("resident cred count: {} (max: {})", count, max_count);
-                if count >= max_count {
-                    error!("maximum resident credential count reached");
-                    key_store_full = true;
-                }
-            }
+            let mut key_store_full = self.can_fit(serialized_credential.len()) == Some(false)
+                || CredentialManagement::new(self).count_credentials()
+                    >= self
+                        .config
+                        .max_resident_credential_count
+                        .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE);
 
             if !key_store_full {
                 // then store key, making it resident
@@ -1870,7 +1856,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             );
         } else {
             info!("deleting parent {:?} as this was its last RK", &rp_path);
-            syscall!(self.trussed.remove_dir(Location::Internal, rp_path,));
+            try_syscall!(self.trussed.remove_dir(Location::Internal, rp_path,)).ok();
         }
     }
 

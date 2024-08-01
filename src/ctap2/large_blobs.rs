@@ -1,10 +1,12 @@
 use ctap_types::{sizes::LARGE_BLOB_MAX_FRAGMENT_LENGTH, Error};
 use trussed::{
-    client::Client,
     config::MAX_MESSAGE_LENGTH,
-    syscall, try_syscall,
-    types::{Bytes, Location, Mechanism, Message, PathBuf},
+    try_syscall,
+    types::{Bytes, Location, Message, PathBuf},
 };
+
+#[cfg(not(feature = "chunked"))]
+use trussed::{syscall, types::Mechanism};
 
 use crate::{Result, TrussedRequirements};
 
@@ -151,12 +153,14 @@ type SelectedStorage = ChunkedStorage;
 
 // Basic implementation using a file in the volatile storage as a buffer based on the core Trussed
 // API.  Maximum size for the entire large blob array: 1024 bytes.
+#[cfg(not(feature = "chunked"))]
 struct SimpleStorage {
     location: Location,
     buffer: Message,
 }
 
-impl<C: Client> Storage<C> for SimpleStorage {
+#[cfg(not(feature = "chunked"))]
+impl<C: TrussedRequirements> Storage<C> for SimpleStorage {
     fn read(client: &mut C, location: Location, offset: usize, length: usize) -> Result<Chunk> {
         let result = try_syscall!(client.read_file(location, PathBuf::from(FILENAME)));
         let data = if let Ok(reply) = &result {

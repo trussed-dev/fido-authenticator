@@ -20,7 +20,12 @@ generate_macros!();
 
 use core::time::Duration;
 
-use trussed::{client, syscall, types::Message, Client as TrussedClient};
+use trussed::{
+    client, syscall,
+    types::{Location, Message},
+    Client as TrussedClient,
+};
+use trussed_fs_info::{FsInfoClient, FsInfoReply};
 use trussed_hkdf::HkdfClient;
 
 /// Re-export of `ctap-types` authenticator errors.
@@ -57,6 +62,7 @@ pub trait TrussedRequirements:
     + client::Sha256
     + client::HmacSha256
     + client::Ed255 // + client::Totp
+    + FsInfoClient
     + HkdfClient
     + ExtensionRequirements
 {
@@ -70,6 +76,7 @@ impl<T> TrussedRequirements for T where
         + client::Sha256
         + client::HmacSha256
         + client::Ed255 // + client::Totp
+        + FsInfoClient
         + HkdfClient
         + ExtensionRequirements
 {
@@ -264,6 +271,41 @@ where
             up,
             config,
         }
+    }
+
+    fn estimate_remaining_inner(info: &FsInfoReply) -> Option<u32> {
+        let block_size = info.block_info.as_ref()?.size;
+        // 1 block for the directory, 1 for the private key, 400 bytes for a reasonnable key and metadata
+        let size_taken = 2 * block_size + 400;
+        // Remove 5 block kept as buffer
+        Some((info.available_space.saturating_sub(5 * block_size) / size_taken) as u32)
+    }
+
+    fn estimate_remaining(&mut self) -> Option<u32> {
+        let info = syscall!(self.trussed.fs_info(Location::Internal));
+        debug!("Got filesystem info: {info:?}");
+        Self::estimate_remaining_inner(&info)
+    }
+
+    fn can_fit_inner(info: &FsInfoReply, size: usize) -> Option<bool> {
+        let block_size = info.block_info.as_ref()?.size;
+        // 1 block for the rp directory, 5 block of margin, 50 bytes for a reasonnable metadata
+        let size_taken = 6 * block_size + size + 50;
+        Some(size_taken < info.available_space)
+    }
+
+    /// Can a credential of size `size` be stored with safe margins
+    ///
+    /// This assumes that the key has already been generated and is stored.
+    fn can_fit(&mut self, size: usize) -> Option<bool> {
+        debug!("Can fit for {size} bytes");
+        let info = syscall!(self.trussed.fs_info(Location::Internal));
+        debug!("Got filesystem info: {info:?}");
+        debug!(
+            "Available storage: {}",
+            Self::estimate_remaining_inner(&info)
+        );
+        Self::can_fit_inner(&info, size)
     }
 
     fn hash(&mut self, data: &[u8]) -> [u8; 32] {

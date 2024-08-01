@@ -65,14 +65,21 @@ where
         info!("get metadata");
         let mut response: Response = Default::default();
 
-        let max_resident_credentials = self
-            .config
-            .max_resident_credential_count
-            .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE);
-        response.existing_resident_credentials_count = Some(0);
+        let max_resident_credentials = self.estimate_remaining();
+        let credential_count = self.count_credentials();
+        response.existing_resident_credentials_count = Some(credential_count);
         response.max_possible_remaining_residential_credentials_count =
-            Some(max_resident_credentials);
+            Some(max_resident_credentials.unwrap_or_else(|| {
+                self.config
+                    .max_resident_credential_count
+                    .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE)
+                    .saturating_sub(credential_count)
+            }));
 
+        response
+    }
+
+    pub fn count_credentials(&mut self) -> u32 {
         let dir = PathBuf::from(b"rk");
         let maybe_first_rp =
             syscall!(self
@@ -81,7 +88,7 @@ where
             .entry;
 
         let first_rp = match maybe_first_rp {
-            None => return response,
+            None => return 0,
             Some(rp) => rp,
         };
 
@@ -98,10 +105,7 @@ where
 
             match maybe_next_rp {
                 None => {
-                    response.existing_resident_credentials_count = Some(num_rks);
-                    response.max_possible_remaining_residential_credentials_count =
-                        Some(max_resident_credentials.saturating_sub(num_rks));
-                    return response;
+                    return num_rks;
                 }
                 Some(rp) => {
                     last_rp = PathBuf::from(rp.file_name());
