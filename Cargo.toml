@@ -15,7 +15,7 @@ name = "usbip"
 required-features = ["dispatch"]
 
 [dependencies]
-ctap-types = { version = "0.2.0", features = ["get-info-full", "large-blobs", "third-party-payment"] }
+ctap-types = { version = "0.3.0", features = ["get-info-full", "large-blobs", "third-party-payment"] }
 cosey = "0.3"
 delog = "0.1.0"
 heapless = "0.7"
@@ -76,7 +76,6 @@ features = ["dispatch"]
 
 [patch.crates-io]
 cbor-smol = { git = "https://github.com/sosthene-nitrokey/cbor-smol.git", rev = "9a77dc9b528b08f531d76b44af2f5336c4ef17e0"}
-ctap-types = { git = "https://github.com/trussed-dev/ctap-types.git", rev = "72eb68b61e3f14957c5ab89bd22f776ac860eb62" }
 ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
 apdu-dispatch = { git = "https://github.com/trussed-dev/apdu-dispatch.git", rev = "915fc237103fcecc29d0f0b73391f19abf6576de" }
 trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "a055e4f79a10122c8c0c882161442e6e02f0c5c6" }

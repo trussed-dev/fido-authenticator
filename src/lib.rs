@@ -302,7 +302,7 @@ where
         let info = syscall!(self.trussed.fs_info(Location::Internal));
         debug!("Got filesystem info: {info:?}");
         debug!(
-            "Available storage: {}",
+            "Available storage: {:?}",
             Self::estimate_remaining_inner(&info)
         );
         Self::can_fit_inner(&info, size)
