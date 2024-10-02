@@ -472,8 +472,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let serialized_auth_data = authenticator_data.serialize()?;
 
-        let att_stmt_fmt =
-            SupportedAttestationFormat::select(parameters.attestation_formats_preference.as_ref());
+        // select attestation format or use packed attestation as default
+        let att_stmt_fmt = parameters
+            .attestation_formats_preference
+            .as_ref()
+            .map(SupportedAttestationFormat::select)
+            .unwrap_or(Some(SupportedAttestationFormat::Packed));
         let att_stmt = if let Some(format) = att_stmt_fmt {
             match format {
                 SupportedAttestationFormat::None => {
@@ -1673,8 +1677,11 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         .to_bytes()
         .unwrap();
 
-        let att_stmt_fmt =
-            SupportedAttestationFormat::select(data.attestation_formats_preference.as_ref());
+        // select preferred format or skip attestation statement
+        let att_stmt_fmt = data
+            .attestation_formats_preference
+            .as_ref()
+            .and_then(SupportedAttestationFormat::select);
         let att_stmt = if let Some(format) = att_stmt_fmt {
             match format {
                 SupportedAttestationFormat::None => {
@@ -2016,11 +2023,7 @@ enum SupportedAttestationFormat {
 }
 
 impl SupportedAttestationFormat {
-    fn select(preference: Option<&AttestationFormatsPreference>) -> Option<Self> {
-        let Some(preference) = preference else {
-            // no preference, default to packed format
-            return Some(Self::Packed);
-        };
+    fn select(preference: &AttestationFormatsPreference) -> Option<Self> {
         if preference.known_formats() == [AttestationStatementFormat::None]
             && !preference.includes_unknown_formats()
         {
