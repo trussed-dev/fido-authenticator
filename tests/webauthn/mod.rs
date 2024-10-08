@@ -204,8 +204,8 @@ impl From<Value> for ClientPinReply {
 }
 
 pub struct Rp {
-    id: String,
-    name: Option<String>,
+    pub id: String,
+    pub name: Option<String>,
 }
 
 impl Rp {
@@ -233,10 +233,22 @@ impl From<Rp> for Value {
     }
 }
 
+impl From<Value> for Rp {
+    fn from(value: Value) -> Self {
+        let mut map: BTreeMap<String, Value> = value.deserialized().unwrap();
+        Self {
+            id: map.remove("id").unwrap().deserialized().unwrap(),
+            name: map
+                .remove("name")
+                .map(|value| value.deserialized().unwrap()),
+        }
+    }
+}
+
 pub struct User {
-    id: Vec<u8>,
-    name: Option<String>,
-    display_name: Option<String>,
+    pub id: Vec<u8>,
+    pub name: Option<String>,
+    pub display_name: Option<String>,
 }
 
 impl User {
@@ -270,6 +282,21 @@ impl From<User> for Value {
             map.push("displayName", display_name);
         }
         map.into()
+    }
+}
+
+impl From<Value> for User {
+    fn from(value: Value) -> User {
+        let mut map: BTreeMap<String, Value> = value.deserialized().unwrap();
+        Self {
+            id: map.remove("id").unwrap().into_bytes().unwrap(),
+            name: map
+                .remove("name")
+                .map(|value| value.deserialized().unwrap()),
+            display_name: map
+                .remove("displayName")
+                .map(|value| value.deserialized().unwrap()),
+        }
     }
 }
 
@@ -715,8 +742,19 @@ impl From<Value> for GetInfoReply {
 pub struct CredentialManagement {
     pub subcommand: u8,
     pub subcommand_params: Option<CredentialManagementParams>,
-    pub pin_protocol: u8,
-    pub pin_auth: [u8; 32],
+    pub pin_protocol: Option<u8>,
+    pub pin_auth: Option<[u8; 32]>,
+}
+
+impl CredentialManagement {
+    pub fn new(subcommand: u8) -> Self {
+        Self {
+            subcommand,
+            subcommand_params: None,
+            pin_protocol: None,
+            pin_auth: None,
+        }
+    }
 }
 
 impl From<CredentialManagement> for Value {
@@ -726,8 +764,12 @@ impl From<CredentialManagement> for Value {
         if let Some(subcommand_params) = request.subcommand_params {
             map.push(2, subcommand_params);
         }
-        map.push(3, request.pin_protocol);
-        map.push(4, request.pin_auth.as_slice());
+        if let Some(pin_protocol) = request.pin_protocol {
+            map.push(3, pin_protocol);
+        }
+        if let Some(pin_auth) = request.pin_auth {
+            map.push(4, pin_auth.as_slice());
+        }
         map.into()
     }
 }
@@ -760,6 +802,8 @@ impl From<CredentialManagementParams> for Value {
 }
 
 pub struct CredentialManagementReply {
+    pub existing_resident_credentials_count: Option<usize>,
+    pub max_possible_remaining_resident_credentials_count: Option<usize>,
     pub rp: Option<Value>,
     pub rp_id_hash: Option<Value>,
     pub total_rps: Option<usize>,
@@ -772,6 +816,12 @@ impl From<Value> for CredentialManagementReply {
     fn from(value: Value) -> Self {
         let mut map: BTreeMap<u8, Value> = value.deserialized().unwrap();
         Self {
+            existing_resident_credentials_count: map
+                .remove(&1)
+                .map(|value| value.deserialized().unwrap()),
+            max_possible_remaining_resident_credentials_count: map
+                .remove(&2)
+                .map(|value| value.deserialized().unwrap()),
             rp: map.remove(&3),
             rp_id_hash: map.remove(&4),
             total_rps: map.remove(&5).map(|value| value.deserialized().unwrap()),

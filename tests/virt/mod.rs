@@ -23,7 +23,7 @@ use ctaphid_dispatch::{
     types::{Channel, Requester},
 };
 use fido_authenticator::{Authenticator, Config, Conforming};
-use littlefs2::{path, path::Path};
+use littlefs2::{path, path::PathBuf};
 use rand::{
     distributions::{Distribution, Uniform},
     RngCore as _,
@@ -51,9 +51,10 @@ where
     F: FnOnce(ctaphid::Device<Device>) -> T + Send,
     T: Send,
 {
-    run_ctaphid_with_files(&[], f)
+    run_ctaphid_with_options(Default::default(), f)
 }
-pub fn run_ctaphid_with_files<F, T>(files: &[(&Path, &[u8])], f: F) -> T
+
+pub fn run_ctaphid_with_options<F, T>(options: Options, f: F) -> T
 where
     F: FnOnce(ctaphid::Device<Device>) -> T + Send,
     T: Send,
@@ -61,9 +62,9 @@ where
     INIT_LOGGER.call_once(|| {
         env_logger::init();
     });
-    let mut files = Vec::from(files);
-    files.push((path!("fido/x5c/00"), ATTESTATION_CERT));
-    files.push((path!("fido/sec/00"), ATTESTATION_KEY));
+    let mut files = options.files;
+    files.push((path!("fido/x5c/00").into(), ATTESTATION_CERT.into()));
+    files.push((path!("fido/sec/00").into(), ATTESTATION_KEY.into()));
     with_client(&files, |client| {
         let mut authenticator = Authenticator::new(
             client,
@@ -71,7 +72,7 @@ where
             Config {
                 max_msg_size: 0,
                 skip_up_timeout: None,
-                max_resident_credential_count: None,
+                max_resident_credential_count: options.max_resident_credential_count,
                 large_blobs: None,
                 nfc_transport: false,
             },
@@ -111,6 +112,20 @@ where
     T: Send,
 {
     run_ctaphid(|device| f(Ctap2(device)))
+}
+
+pub fn run_ctap2_with_options<F, T>(options: Options, f: F) -> T
+where
+    F: FnOnce(Ctap2) -> T + Send,
+    T: Send,
+{
+    run_ctaphid_with_options(options, |device| f(Ctap2(device)))
+}
+
+#[derive(Debug, Default)]
+pub struct Options {
+    pub files: Vec<(PathBuf, Vec<u8>)>,
+    pub max_resident_credential_count: Option<u32>,
 }
 
 pub struct Ctap2<'a>(ctaphid::Device<Device<'a>>);
@@ -223,7 +238,7 @@ impl HidDevice for Device<'_> {
     }
 }
 
-fn with_client<F, T>(files: &[(&Path, &[u8])], f: F) -> T
+fn with_client<F, T>(files: &[(PathBuf, Vec<u8>)], f: F) -> T
 where
     F: FnOnce(Client<Ram>) -> T,
 {

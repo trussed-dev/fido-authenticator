@@ -1,7 +1,7 @@
 #![cfg(feature = "dispatch")]
 
-mod virt;
-mod webauthn;
+pub mod virt;
+pub mod webauthn;
 
 use std::collections::BTreeMap;
 
@@ -437,8 +437,8 @@ impl TestListCredentials {
             let request = CredentialManagement {
                 subcommand: 0x02,
                 subcommand_params: None,
-                pin_protocol: 2,
-                pin_auth,
+                pin_protocol: Some(2),
+                pin_auth: Some(pin_auth),
             };
             let reply = device.exec(request).unwrap();
             let rp: BTreeMap<String, Value> = reply.rp.unwrap().deserialized().unwrap();
@@ -465,8 +465,8 @@ impl TestListCredentials {
             let request = CredentialManagement {
                 subcommand: 0x04,
                 subcommand_params: Some(params),
-                pin_protocol: 2,
-                pin_auth,
+                pin_protocol: Some(2),
+                pin_auth: Some(pin_auth),
             };
             let reply = device.exec(request).unwrap();
             let user: BTreeMap<String, Value> = reply.user.unwrap().deserialized().unwrap();
