@@ -96,7 +96,7 @@ fn test_filesystem_full() {
         ..Default::default()
     };
     for i in 0..80 {
-        let path = PathBuf::from(format!("/test/{i}").as_str());
+        let path = PathBuf::try_from(format!("/test/{i}").as_str()).unwrap();
         options.files.push((path, vec![0; 512]));
     }
     // TODO: inspect filesystem after run and check remaining blocks

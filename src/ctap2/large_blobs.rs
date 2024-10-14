@@ -1,8 +1,9 @@
 use ctap_types::{sizes::LARGE_BLOB_MAX_FRAGMENT_LENGTH, Error};
+use littlefs2_core::path;
 use trussed::{
     config::MAX_MESSAGE_LENGTH,
     try_syscall,
-    types::{Bytes, Location, Message, PathBuf},
+    types::{Bytes, Location, Message, Path, PathBuf},
 };
 
 #[cfg(not(feature = "chunked"))]
@@ -17,8 +18,8 @@ const EMPTY_ARRAY: &[u8; MIN_SIZE] = &[
     0x80, 0x76, 0xbe, 0x8b, 0x52, 0x8d, 0x00, 0x75, 0xf7, 0xaa, 0xe9, 0x8d, 0x6f, 0xa5, 0x7a, 0x6d,
     0x3c,
 ];
-const FILENAME: &[u8] = b"large-blob-array";
-const FILENAME_TMP: &[u8] = b".large-blob-array";
+const FILENAME: &Path = path!("large-blob-array");
+const FILENAME_TMP: &Path = path!(".large-blob-array");
 
 pub type Chunk = Bytes<LARGE_BLOB_MAX_FRAGMENT_LENGTH>;
 

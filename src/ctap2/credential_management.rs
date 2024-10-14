@@ -14,6 +14,7 @@ use ctap_types::{
     ByteArray, Error,
 };
 
+use super::RK_DIR;
 use crate::{
     constants::MAX_RESIDENT_CREDENTIALS_GUESSTIMATE,
     credential::FullCredential,
@@ -83,7 +84,7 @@ where
     }
 
     pub fn count_credentials(&mut self) -> u32 {
-        let dir = PathBuf::from(b"rk");
+        let dir = PathBuf::from(RK_DIR);
         let maybe_first_rp =
             syscall!(self
                 .trussed
@@ -130,7 +131,7 @@ where
 
         let mut response: Response = Default::default();
 
-        let dir = PathBuf::from(b"rk");
+        let dir = PathBuf::from(RK_DIR);
 
         let maybe_first_rp =
             syscall!(self.trussed.read_dir_first(Location::Internal, dir, None)).entry;
@@ -206,11 +207,11 @@ where
             .clone()
             .ok_or(Error::NotAllowed)?;
 
-        let dir = PathBuf::from(b"rk");
+        let dir = PathBuf::from(RK_DIR);
 
         let mut hex = [b'0'; 16];
         super::format_hex(&last_rp_id_hash[..8], &mut hex);
-        let filename = PathBuf::from(&hex);
+        let filename = PathBuf::try_from(&hex).unwrap();
 
         let mut maybe_next_rp =
             syscall!(self
@@ -300,7 +301,7 @@ where
         let mut hex = [b'0'; 16];
         super::format_hex(&rp_id_hash[..8], &mut hex);
 
-        let rp_dir = PathBuf::from(b"rk").join(&PathBuf::from(&hex));
+        let rp_dir = PathBuf::from(RK_DIR).join(&PathBuf::try_from(&hex).unwrap());
         let (num_rks, first_rk) = self.count_rp_rks(rp_dir);
         let first_rk = first_rk.ok_or(Error::NoCredentials)?;
 
@@ -472,8 +473,8 @@ where
         let credential_id_hash = self.hash(credential.id);
         let mut hex = [b'0'; 16];
         super::format_hex(&credential_id_hash[..8], &mut hex);
-        let dir = PathBuf::from(b"rk");
-        let filename = PathBuf::from(&hex);
+        let dir = PathBuf::from(RK_DIR);
+        let filename = PathBuf::try_from(&hex).unwrap();
 
         syscall!(self
             .trussed

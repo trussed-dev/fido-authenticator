@@ -19,6 +19,7 @@ ctap-types = { version = "0.3.1", features = ["get-info-full", "large-blobs", "t
 cosey = "0.3"
 delog = "0.1.0"
 heapless = "0.7"
+littlefs2-core = "0.1"
 serde = { version = "1.0", default-features = false }
 serde_bytes = { version = "0.11.14", default-features = false }
 serde-indexed = "0.1.0"
@@ -63,7 +64,7 @@ env_logger = "0.11.0"
 hex-literal = "0.4.1"
 hmac = "0.12.1"
 interchange = "0.3.0"
-littlefs2 = "0.4.0"
+littlefs2 = "0.5.0"
 log = "0.4.21"
 p256 = { version = "0.13.2", features = ["ecdh"] }
 rand = "0.8.4"
@@ -80,11 +81,10 @@ features = ["dispatch"]
 
 [patch.crates-io]
 ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "a055e4f79a10122c8c0c882161442e6e02f0c5c6" }
-littlefs2 = { git = "https://github.com/trussed-dev/littlefs2.git", rev = "960e57d9fc0d209308c8e15dc26252bbe1ff6ba8" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "046478b7a4f6e2315acf9112d98308379c2e3eee" }
 trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "chunked-v0.1.0" }
-trussed-fs-info = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "170ab14f3bb6760399749d78e1b94e3b70106739" }
+trussed-fs-info = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "fs-info-v0.1.0" }
 trussed-hkdf = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "hkdf-v0.2.0" }
-trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "170ab14f3bb6760399749d78e1b94e3b70106739" }
-trussed-usbip = { git = "https://github.com/Nitrokey/pc-usbip-runner.git", tag = "v0.0.1-nitrokey.1" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "53eba84d2cd0bcacc3a7096d4b7a2490dcf6f069" }
+trussed-usbip = { git = "https://github.com/Nitrokey/pc-usbip-runner.git", tag = "v0.0.1-nitrokey.5" }
 usbd-ctaphid = { git = "https://github.com/trussed-dev/usbd-ctaphid.git", rev = "dcff9009c3cd1ef9e5b09f8f307aca998fc9a8c8" }

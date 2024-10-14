@@ -9,7 +9,7 @@ use iso7816::{
     command::{class::Class, instruction::Instruction, CommandBuilder, ExpectedLen},
     response::Status,
 };
-use littlefs2::path;
+use littlefs2_core::path;
 use p256::ecdsa::{signature::Verifier as _, DerSignature, VerifyingKey};
 use x509_parser::public_key::PublicKey;
 

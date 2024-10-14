@@ -11,6 +11,7 @@ use ctap_types::{
     heapless_bytes::Bytes,
     sizes, ByteArray, Error,
 };
+use littlefs2_core::path;
 use sha2::{Digest as _, Sha256};
 
 use trussed::{
@@ -35,6 +36,8 @@ pub mod large_blobs;
 pub mod pin;
 
 use pin::{PinProtocol, PinProtocolVersion, RpScope, SharedSecret};
+
+pub const RK_DIR: &Path = path!("rk");
 
 /// Implement `ctap2::Authenticator` for our Authenticator.
 impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenticator<UP, T> {
@@ -577,7 +580,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         syscall!(self.trussed.delete_all(Location::Internal));
         syscall!(self
             .trussed
-            .remove_dir_all(Location::Internal, PathBuf::from("rk"),));
+            .remove_dir_all(Location::Internal, RK_DIR.into()));
 
         // Delete large-blob array
         large_blobs::reset(&mut self.trussed);
@@ -2068,8 +2071,8 @@ fn rp_rk_dir(rp_id_hash: &[u8; 32]) -> PathBuf {
     let mut hex = [b'0'; 16];
     format_hex(&rp_id_hash[..8], &mut hex);
 
-    let mut dir = PathBuf::from(b"rk");
-    dir.push(&PathBuf::from(&hex));
+    let mut dir = PathBuf::from(RK_DIR);
+    dir.push(&PathBuf::try_from(&hex).unwrap());
 
     dir
 }
@@ -2079,7 +2082,7 @@ fn rk_path(rp_id_hash: &[u8; 32], credential_id_hash: &[u8; 32]) -> PathBuf {
 
     let mut hex = [0u8; 16];
     format_hex(&credential_id_hash[..8], &mut hex);
-    path.push(&PathBuf::from(&hex));
+    path.push(&PathBuf::try_from(&hex).unwrap());
 
     path
 }

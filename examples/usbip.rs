@@ -4,44 +4,48 @@
 //! USB/IP runner for opcard.
 //! Run with cargo run --example usbip --features dispatch
 
+use littlefs2_core::path;
 use trussed::{
     backend::BackendId,
+    client::ClientBuilder,
+    service::Service,
     types::Location,
-    virt::{self, Ram},
-    ClientImplementation,
+    virt::{Platform, Ram, StoreProvider},
 };
 use trussed_staging::virt::{BackendIds, Dispatcher};
-use trussed_usbip::ClientBuilder;
+use trussed_usbip::{Client, Syscall};
 
 const MANUFACTURER: &str = "Nitrokey";
 const PRODUCT: &str = "Nitrokey 3";
 const VID: u16 = 0x20a0;
 const PID: u16 = 0x42b2;
 
-type VirtClient = ClientImplementation<trussed_usbip::Service<Ram, Dispatcher>, Dispatcher>;
+type VirtClient = Client<Dispatcher>;
 
 struct FidoApp {
     fido: fido_authenticator::Authenticator<fido_authenticator::Conforming, VirtClient>,
 }
 
-impl trussed_usbip::Apps<'static, VirtClient, Dispatcher> for FidoApp {
+impl<S: StoreProvider> trussed_usbip::Apps<'static, S, Dispatcher> for FidoApp {
     type Data = ();
-    fn new<B: ClientBuilder<VirtClient, Dispatcher>>(builder: &B, _data: ()) -> Self {
+    fn new(service: &mut Service<Platform<S>, Dispatcher>, syscall: Syscall, _data: ()) -> Self {
         let large_blogs = Some(fido_authenticator::LargeBlobsConfig {
             location: Location::External,
             #[cfg(feature = "chunked")]
             max_size: 4096,
         });
 
+        let client = ClientBuilder::new(path!("fido"))
+            .backends(&[
+                BackendId::Core,
+                BackendId::Custom(BackendIds::StagingBackend),
+            ])
+            .prepare(service)
+            .expect("failed to create client")
+            .build(syscall);
         FidoApp {
             fido: fido_authenticator::Authenticator::new(
-                builder.build(
-                    "fido",
-                    &[
-                        BackendId::Core,
-                        BackendId::Custom(BackendIds::StagingBackend),
-                    ],
-                ),
+                client,
                 fido_authenticator::Conforming {},
                 fido_authenticator::Config {
                     max_msg_size: usbd_ctaphid::constants::MESSAGE_SIZE,
@@ -72,7 +76,7 @@ fn main() {
         vid: VID,
         pid: PID,
     };
-    trussed_usbip::Builder::new(virt::Ram::default(), options)
+    trussed_usbip::Builder::new(Ram::default(), options)
         .dispatch(Dispatcher::default())
         .build::<FidoApp>()
         .exec(|_platform| {});
