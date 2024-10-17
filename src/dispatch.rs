@@ -8,7 +8,7 @@ use crate::msp;
 use crate::{Authenticator, TrussedRequirements, UserPresence};
 
 use ctap_types::{ctap1, ctap2};
-use iso7816::Status;
+use iso7816::{command::CommandView, Data, Status};
 
 impl<UP, T> iso7816::App for Authenticator<UP, T>
 where
@@ -21,10 +21,10 @@ where
 
 #[inline(never)]
 /// Deserialize U2F, call authenticator, serialize response *Result*.
-fn handle_ctap1_from_hid<T, UP>(
+fn handle_ctap1_from_hid<T, UP, const R: usize>(
     authenticator: &mut Authenticator<UP, T>,
     data: &[u8],
-    response: &mut apdu_dispatch::response::Data,
+    response: &mut Data<R>,
 ) where
     T: TrussedRequirements,
     UP: UserPresence,
@@ -34,16 +34,18 @@ fn handle_ctap1_from_hid<T, UP>(
         msp() - 0x2000_0000
     );
     {
-        let command = apdu_dispatch::Command::try_from(data);
-        if let Err(_status) = command {
-            let code: [u8; 2] = (Status::IncorrectDataParameter).into();
-            debug!("CTAP1 parse error: {:?} ({})", _status, hex_str!(&code));
-            response.extend_from_slice(&code).ok();
-            return;
-        }
+        let command = match CommandView::try_from(data) {
+            Ok(command) => command,
+            Err(_status) => {
+                let code: [u8; 2] = (Status::IncorrectDataParameter).into();
+                debug!("CTAP1 parse error: {:?} ({})", _status, hex_str!(&code));
+                response.extend_from_slice(&code).ok();
+                return;
+            }
+        };
 
         // debug!("1A SP: {:X}", msp());
-        match try_handle_ctap1(authenticator, &command.unwrap(), response) {
+        match try_handle_ctap1(authenticator, command, response) {
             Ok(()) => {
                 debug!("U2F response {} bytes", response.len());
                 // Need to add x9000 success code (normally the apdu-dispatch does this, but
@@ -63,10 +65,10 @@ fn handle_ctap1_from_hid<T, UP>(
 
 #[inline(never)]
 /// Deserialize CBOR, call authenticator, serialize response *Result*.
-fn handle_ctap2<T, UP>(
+fn handle_ctap2<T, UP, const R: usize>(
     authenticator: &mut Authenticator<UP, T>,
     data: &[u8],
-    response: &mut apdu_dispatch::response::Data,
+    response: &mut Data<R>,
 ) where
     T: TrussedRequirements,
     UP: UserPresence,
@@ -87,10 +89,10 @@ fn handle_ctap2<T, UP>(
 }
 
 #[inline(never)]
-fn try_handle_ctap1<T, UP>(
+fn try_handle_ctap1<T, UP, const R: usize>(
     authenticator: &mut Authenticator<UP, T>,
-    command: &apdu_dispatch::Command,
-    response: &mut apdu_dispatch::response::Data,
+    command: CommandView<'_>,
+    response: &mut Data<R>,
 ) -> Result<(), Status>
 where
     T: TrussedRequirements,
@@ -122,10 +124,10 @@ where
 }
 
 #[inline(never)]
-fn try_handle_ctap2<T, UP>(
+fn try_handle_ctap2<T, UP, const R: usize>(
     authenticator: &mut Authenticator<UP, T>,
     data: &[u8],
-    response: &mut apdu_dispatch::response::Data,
+    response: &mut Data<R>,
 ) -> Result<(), u8>
 where
     T: TrussedRequirements,

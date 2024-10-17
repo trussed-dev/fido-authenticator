@@ -1,7 +1,7 @@
-use apdu_dispatch::{app as apdu, dispatch::Interface, response::Data, Command};
+use apdu_app::Interface;
 use ctap_types::{serde::error::Error as SerdeError, Error};
 use ctaphid_dispatch::app as ctaphid;
-use iso7816::Status;
+use iso7816::{command::CommandView, Data, Status};
 
 use crate::{Authenticator, TrussedRequirements, UserPresence};
 
@@ -22,16 +22,20 @@ impl From<CtapMappingError> for Error {
     }
 }
 
-impl<UP, T> apdu::App<{ apdu_dispatch::command::SIZE }, { apdu_dispatch::response::SIZE }>
-    for Authenticator<UP, T>
+impl<UP, T, const R: usize> apdu_app::App<R> for Authenticator<UP, T>
 where
     UP: UserPresence,
     T: TrussedRequirements,
 {
-    fn select(&mut self, interface: Interface, _: &Command, reply: &mut Data) -> apdu::Result {
+    fn select(
+        &mut self,
+        interface: Interface,
+        _: CommandView<'_>,
+        reply: &mut Data<R>,
+    ) -> apdu_app::Result {
         // FIDO-over-CCID does not seem to officially be a thing; we don't support it.
         // If we would, need to review the following cases catering to semi-documented U2F legacy.
-        if interface != apdu::Interface::Contactless {
+        if interface != Interface::Contactless {
             return Err(Status::ConditionsOfUseNotSatisfied);
         }
 
@@ -43,13 +47,13 @@ where
 
     fn call(
         &mut self,
-        interface: apdu::Interface,
-        apdu: &Command,
-        response: &mut Data,
-    ) -> apdu::Result {
+        interface: Interface,
+        apdu: CommandView<'_>,
+        response: &mut Data<R>,
+    ) -> apdu_app::Result {
         // FIDO-over-CCID does not seem to officially be a thing; we don't support it.
         // If we would, need to review the following cases catering to semi-documented U2F legacy.
-        if interface != apdu::Interface::Contactless {
+        if interface != Interface::Contactless {
             return Err(Status::ConditionsOfUseNotSatisfied);
         }
 
@@ -72,7 +76,7 @@ where
                     // 0x10
                     Ok(ctaphid::Command::Cbor) => super::handle_ctap2(self, apdu.data(), response),
                     Ok(ctaphid::Command::Msg) => super::try_handle_ctap1(self, apdu, response)?,
-                    Ok(ctaphid::Command::Deselect) => self.deselect(),
+                    Ok(ctaphid::Command::Deselect) => apdu_app::App::<R>::deselect(self),
                     _ => {
                         info!("Unsupported ins for fido app {:02x}", instruction);
                         return Err(iso7816::Status::InstructionNotSupportedOrInvalid);
