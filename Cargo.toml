@@ -32,7 +32,9 @@ apdu-app = { version = "0.1", optional = true }
 ctaphid-dispatch = { version = "0.1", optional = true }
 iso7816 = { version = "0.1.2", optional = true }
 
-cbor-smol = { version = "0.4.1" }
+# This dependency is used indirectly via Trussed.  We only want to make sure that we use at least
+# 0.4.1 so that the persistent state is deserialized correctly.
+cbor-smol = { version = ">= 0.4.1" }
 
 [features]
 dispatch = ["apdu-dispatch", "ctaphid-dispatch", "iso7816"]
