@@ -1,8 +1,8 @@
-use crate::{cbor_serialize_message, TrussedRequirements};
+use crate::TrussedRequirements;
 use cosey::EcdhEsHkdf256PublicKey;
 use ctap_types::{ctap2::client_pin::Permissions, Error, Result};
 use trussed::{
-    cbor_deserialize,
+    cbor_deserialize, cbor_serialize_bytes,
     client::{CryptoClient, HmacSha256, P256},
     syscall, try_syscall,
     types::{
@@ -312,7 +312,7 @@ impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
     }
 
     fn shared_secret_impl(&mut self, peer_key: &EcdhEsHkdf256PublicKey) -> Option<SharedSecret> {
-        let serialized_peer_key = cbor_serialize_message(peer_key).ok()?;
+        let serialized_peer_key: Message = cbor_serialize_bytes(peer_key).ok()?;
         let peer_key = try_syscall!(self.trussed.deserialize_p256_key(
             &serialized_peer_key,
             KeySerialization::EcdhEsHkdf256,

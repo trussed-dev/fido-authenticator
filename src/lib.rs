@@ -20,11 +20,7 @@ generate_macros!();
 
 use core::time::Duration;
 
-use trussed::{
-    client, syscall,
-    types::{Location, Message},
-    Client as TrussedClient,
-};
+use trussed::{client, syscall, types::Location, Client as TrussedClient};
 use trussed_fs_info::{FsInfoClient, FsInfoReply};
 use trussed_hkdf::HkdfClient;
 
@@ -250,12 +246,6 @@ impl UserPresence for Conforming {
             _ => Error::OperationDenied,
         })
     }
-}
-
-fn cbor_serialize_message<T: serde::Serialize>(
-    object: &T,
-) -> core::result::Result<Message, ctap_types::serde::Error> {
-    trussed::cbor_serialize_bytes(object)
 }
 
 impl<UP, T> Authenticator<UP, T>

@@ -11,7 +11,7 @@ use ctap_types::{
 };
 use littlefs2_core::path;
 use trussed::{
-    client, syscall, try_syscall,
+    cbor_serialize_bytes, client, syscall, try_syscall,
     types::{KeyId, Location, Mechanism, Path, PathBuf},
     Client as TrussedClient,
 };
@@ -299,7 +299,7 @@ impl PersistentState {
     }
 
     pub fn save<T: TrussedClient>(&self, trussed: &mut T) -> Result<()> {
-        let data = crate::cbor_serialize_message(self).unwrap();
+        let data = cbor_serialize_bytes(self).unwrap();
 
         syscall!(trussed.write_file(
             Location::Internal,
