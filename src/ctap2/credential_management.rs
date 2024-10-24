@@ -1,6 +1,6 @@
 //! TODO: T
 
-use core::convert::TryFrom;
+use core::{cmp, convert::TryFrom};
 
 use trussed::{
     syscall, try_syscall,
@@ -65,16 +65,19 @@ where
         info!("get metadata");
         let mut response: Response = Default::default();
 
-        let max_resident_credentials = self.estimate_remaining();
         let credential_count = self.count_credentials();
+        // We have a fixed limit determined by the configuration and an estimated limit determined
+        // by the available space on the filesystem.  The effective limit is the lower of the two.
+        let max_remaining = self
+            .config
+            .max_resident_credential_count
+            .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE)
+            .saturating_sub(credential_count);
+        let estimate_remaining = self.estimate_remaining().unwrap_or(u32::MAX);
+
         response.existing_resident_credentials_count = Some(credential_count);
         response.max_possible_remaining_residential_credentials_count =
-            Some(max_resident_credentials.unwrap_or_else(|| {
-                self.config
-                    .max_resident_credential_count
-                    .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE)
-                    .saturating_sub(credential_count)
-            }));
+            Some(cmp::min(max_remaining, estimate_remaining));
 
         response
     }

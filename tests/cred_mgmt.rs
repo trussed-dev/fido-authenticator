@@ -56,7 +56,7 @@ fn test_max_credential_count() {
         let mut authenticator = Authenticator::new(device).set_pin(b"123456");
         let metadata = authenticator.credentials_metadata();
         assert_eq!(metadata.existing, 0);
-        // TODO: check metadata.remaining -- currently not checking the config properly
+        assert_eq!(metadata.remaining, 10);
 
         for i in 0..10 {
             let rp = Rp::new(format!("rp{i}"));
@@ -65,7 +65,7 @@ fn test_max_credential_count() {
 
             let metadata = authenticator.credentials_metadata();
             assert_eq!(metadata.existing, i + 1);
-            // TODO: check metadata.remaining
+            assert_eq!(metadata.remaining, 9 - i);
         }
 
         let rps = authenticator.list_rps();
