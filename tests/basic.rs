@@ -457,7 +457,8 @@ impl TestListCredentials {
                 pin_token_rp_id,
             );
             let params = CredentialManagementParams {
-                rp_id_hash: reply.rp_id_hash.unwrap().as_bytes().unwrap().to_owned(),
+                rp_id_hash: Some(reply.rp_id_hash.unwrap().as_bytes().unwrap().to_owned()),
+                ..Default::default()
             };
             let mut pin_auth_param = vec![0x04];
             pin_auth_param.extend_from_slice(&params.serialized());

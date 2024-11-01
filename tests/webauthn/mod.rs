@@ -203,6 +203,7 @@ impl From<Value> for ClientPinReply {
     }
 }
 
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Rp {
     pub id: String,
     pub name: Option<String>,
@@ -245,6 +246,7 @@ impl From<Value> for Rp {
     }
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct User {
     pub id: Vec<u8>,
     pub name: Option<String>,
@@ -516,6 +518,7 @@ impl From<Value> for MakeCredentialReply {
     }
 }
 
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct PubKeyCredDescriptor {
     pub ty: String,
     pub id: Vec<u8>,
@@ -533,8 +536,8 @@ impl PubKeyCredDescriptor {
 impl From<PubKeyCredDescriptor> for Value {
     fn from(descriptor: PubKeyCredDescriptor) -> Value {
         let mut map = Map::default();
-        map.push("type", descriptor.ty);
         map.push("id", descriptor.id);
+        map.push("type", descriptor.ty);
         map.into()
     }
 }
@@ -645,7 +648,7 @@ impl From<Value> for AuthData {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CredentialData {
     pub id: Vec<u8>,
     pub public_key: BTreeMap<i32, Value>,
@@ -780,9 +783,11 @@ impl Request for CredentialManagement {
     type Reply = CredentialManagementReply;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CredentialManagementParams {
-    pub rp_id_hash: Vec<u8>,
+    pub rp_id_hash: Option<Vec<u8>>,
+    pub credential_id: Option<PubKeyCredDescriptor>,
+    pub user: Option<User>,
 }
 
 impl CredentialManagementParams {
@@ -796,7 +801,15 @@ impl CredentialManagementParams {
 impl From<CredentialManagementParams> for Value {
     fn from(params: CredentialManagementParams) -> Value {
         let mut map = Map::default();
-        map.push(1, params.rp_id_hash);
+        if let Some(rp_id_hash) = params.rp_id_hash {
+            map.push(1, rp_id_hash);
+        }
+        if let Some(credential_id) = params.credential_id {
+            map.push(2, credential_id);
+        }
+        if let Some(user) = params.user {
+            map.push(3, user);
+        }
         map.into()
     }
 }
@@ -808,6 +821,7 @@ pub struct CredentialManagementReply {
     pub rp_id_hash: Option<Value>,
     pub total_rps: Option<usize>,
     pub user: Option<Value>,
+    pub credential_id: Option<PubKeyCredDescriptor>,
     pub total_credentials: Option<usize>,
     pub third_party_payment: Option<bool>,
 }
@@ -826,6 +840,7 @@ impl From<Value> for CredentialManagementReply {
             rp_id_hash: map.remove(&4),
             total_rps: map.remove(&5).map(|value| value.deserialized().unwrap()),
             user: map.remove(&6),
+            credential_id: map.remove(&7).map(|value| value.into()),
             total_credentials: map.remove(&9).map(|value| value.deserialized().unwrap()),
             third_party_payment: map.remove(&0x0c).map(|value| value.deserialized().unwrap()),
         }

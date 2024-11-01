@@ -4,8 +4,8 @@ use super::{
     virt::{Ctap2, Ctap2Error},
     webauthn::{
         AttStmtFormat, ClientPin, CredentialData, CredentialManagement, CredentialManagementParams,
-        KeyAgreementKey, MakeCredential, MakeCredentialOptions, PinToken, PubKeyCredParam,
-        PublicKey, Rp, SharedSecret, User,
+        KeyAgreementKey, MakeCredential, MakeCredentialOptions, PinToken, PubKeyCredDescriptor,
+        PubKeyCredParam, PublicKey, Rp, SharedSecret, User,
     },
 };
 
@@ -142,11 +142,12 @@ impl Authenticator<'_, Pin> {
         rps
     }
 
-    pub fn list_credentials(&mut self, rp_id: &str) -> Vec<User> {
+    pub fn list_credentials(&mut self, rp_id: &str) -> Vec<(User, PubKeyCredDescriptor)> {
         let rp_id_hash = rp_id_hash(rp_id);
         let pin_token = self.get_pin_token(0x04, Some(rp_id.to_owned()));
         let params = CredentialManagementParams {
-            rp_id_hash: rp_id_hash.to_vec(),
+            rp_id_hash: Some(rp_id_hash.to_vec()),
+            ..Default::default()
         };
         let mut pin_auth_param = vec![0x04];
         pin_auth_param.extend_from_slice(&params.serialized());
@@ -161,16 +162,53 @@ impl Authenticator<'_, Pin> {
         // TODO: check other fields
         let total_credentials = reply.total_credentials.unwrap();
         let mut credentials = Vec::with_capacity(total_credentials);
-        credentials.push(reply.user.unwrap().into());
+        credentials.push((reply.user.unwrap().into(), reply.credential_id.unwrap()));
 
         for _ in 1..total_credentials {
             let request = CredentialManagement::new(0x05);
             let reply = self.ctap2.exec(request).unwrap();
             // TODO: check other fields
-            credentials.push(reply.user.unwrap().into());
+            credentials.push((reply.user.unwrap().into(), reply.credential_id.unwrap()));
         }
 
         credentials
+    }
+
+    pub fn delete_credential(&mut self, id: &[u8]) {
+        let pin_token = self.get_pin_token(0x04, None);
+        let params = CredentialManagementParams {
+            credential_id: Some(PubKeyCredDescriptor::new("public-key", id)),
+            ..Default::default()
+        };
+        let mut pin_auth_param = vec![0x06];
+        pin_auth_param.extend_from_slice(&params.serialized());
+        let pin_auth = pin_token.authenticate(&pin_auth_param);
+        let request = CredentialManagement {
+            subcommand: 0x06,
+            subcommand_params: Some(params),
+            pin_protocol: Some(2),
+            pin_auth: Some(pin_auth),
+        };
+        self.ctap2.exec(request).unwrap();
+    }
+
+    pub fn update_user(&mut self, id: &[u8], user: User) -> Result<(), Ctap2Error> {
+        let pin_token = self.get_pin_token(0x04, None);
+        let params = CredentialManagementParams {
+            credential_id: Some(PubKeyCredDescriptor::new("public-key", id)),
+            user: Some(user),
+            ..Default::default()
+        };
+        let mut pin_auth_param = vec![0x07];
+        pin_auth_param.extend_from_slice(&params.serialized());
+        let pin_auth = pin_token.authenticate(&pin_auth_param);
+        let request = CredentialManagement {
+            subcommand: 0x07,
+            subcommand_params: Some(params),
+            pin_protocol: Some(2),
+            pin_auth: Some(pin_auth),
+        };
+        self.ctap2.exec(request).map(|_| ())
     }
 }
 
