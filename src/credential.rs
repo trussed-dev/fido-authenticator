@@ -601,9 +601,17 @@ impl From<&FullCredential> for StrippedCredential {
 #[cfg(test)]
 mod test {
     use super::*;
+    use hex_literal::hex;
+    use littlefs2_core::path;
+    use rand::SeedableRng as _;
+    use rand_chacha::ChaCha8Rng;
     use trussed::{
         client::{Chacha8Poly1305, Sha256},
+        key::{Kind, Secrecy},
+        store::keystore::{ClientKeystore, Keystore as _},
         types::Location,
+        virt::{self, Ram},
+        Platform as _,
     };
 
     fn credential_data() -> CredentialData {
@@ -627,6 +635,30 @@ mod test {
             use_short_id: Some(true),
             large_blob_key: Some(ByteArray::new([0xff; 32])),
             third_party_payment: Some(true),
+        }
+    }
+
+    fn old_credential_data() -> CredentialData {
+        CredentialData {
+            rp: LocalPublicKeyCredentialRpEntity {
+                id: String::from("John Doe"),
+                name: None,
+            },
+            user: LocalPublicKeyCredentialUserEntity {
+                id: Bytes::from_slice(&[1, 2, 3]).unwrap(),
+                icon: None,
+                name: None,
+                display_name: None,
+            },
+            creation_time: 123,
+            use_counter: false,
+            algorithm: -7,
+            key: Key::WrappedKey(Bytes::from_slice(&[1, 2, 3]).unwrap()),
+            hmac_secret: Some(false),
+            cred_protect: None,
+            use_short_id: None,
+            large_blob_key: None,
+            third_party_payment: None,
         }
     }
 
@@ -731,6 +763,85 @@ mod test {
         let deserialized: CredentialData = deserialize(&serialization).unwrap();
 
         assert_eq!(credential_data, deserialized);
+    }
+
+    #[test]
+    fn old_credential_id() {
+        // generated with v0.1.1-nitrokey.4 (NK3 firmware version v1.4.0)
+        const OLD_ID: &[u8] = &hex!("A300583A71AEF80C4DA56033D66EB3266E9ACB8D84923D13F89BCBCE9FF30D8CD77ED968A436CA3D39C49999EC0F69A289CB2A65A08ABF251DEB21BB4B56014C00000000000000000000000002504DF499ABDAE80F5615C870985B74A799");
+        const SERIALIZED_DATA: &[u8] = &hex!(
+            "A700A1626964684A6F686E20446F6501A16269644301020302187B03F404260582014301020306F4"
+        );
+        const SERIALIZED_CREDENTIAL: &[u8] = &hex!("A3000201A700A1626964684A6F686E20446F6501A16269644301020302187B03F404260582014301020306F4024C000000000000000000000000");
+
+        virt::with_platform(Ram::default(), |mut platform| {
+            let kek = [0; 44];
+            let client_id = path!("fido");
+            let kek = {
+                let rng = ChaCha8Rng::from_rng(platform.rng()).unwrap();
+                let mut keystore = ClientKeystore::new(client_id.into(), rng, platform.store());
+                keystore
+                    .store_key(
+                        Location::Internal,
+                        Secrecy::Secret,
+                        Kind::Symmetric32Nonce(12),
+                        &kek,
+                    )
+                    .unwrap()
+            };
+            platform.run_client(client_id.as_str(), |mut client| {
+                let data = old_credential_data();
+                let rp_id_hash = syscall!(client.hash_sha256(data.rp.id.as_ref())).hash;
+                let credential_id = CredentialId(Bytes::from_slice(OLD_ID).unwrap());
+                let encrypted_serialized =
+                    EncryptedSerializedCredential::try_from(credential_id).unwrap();
+                let serialized = syscall!(client.decrypt_chacha8poly1305(
+                    kek,
+                    &encrypted_serialized.0.ciphertext,
+                    &rp_id_hash,
+                    &encrypted_serialized.0.nonce,
+                    &encrypted_serialized.0.tag,
+                ))
+                .plaintext
+                .unwrap();
+
+                let full = FullCredential::deserialize(&serialized).unwrap();
+                assert_eq!(
+                    full,
+                    FullCredential {
+                        ctap: CtapVersion::Fido21Pre,
+                        data,
+                        nonce: [0; 12].into(),
+                    }
+                );
+
+                let stripped_credential = full.strip();
+
+                let serialized_data: Bytes<1024> =
+                    trussed::cbor_serialize_bytes(&stripped_credential.data).unwrap();
+                assert_eq!(
+                    delog::hexstr!(&serialized_data).to_string(),
+                    delog::hexstr!(SERIALIZED_DATA).to_string()
+                );
+
+                let serialized_credential: Bytes<1024> =
+                    trussed::cbor_serialize_bytes(&stripped_credential).unwrap();
+                assert_eq!(
+                    delog::hexstr!(&serialized_credential).to_string(),
+                    delog::hexstr!(SERIALIZED_CREDENTIAL).to_string()
+                );
+
+                let credential = Credential::Full(full);
+                let id = credential
+                    .id(&mut client, kek, rp_id_hash.as_ref().try_into().unwrap())
+                    .unwrap()
+                    .0;
+                assert_eq!(
+                    delog::hexstr!(&id).to_string(),
+                    delog::hexstr!(OLD_ID).to_string()
+                );
+            });
+        });
     }
 
     #[test]
