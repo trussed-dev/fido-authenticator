@@ -9,7 +9,9 @@ use ctap_types::{
     },
     heapless::{String, Vec},
     heapless_bytes::Bytes,
-    sizes, ByteArray, Error,
+    sizes,
+    webauthn::PublicKeyCredentialUserEntity,
+    ByteArray, Error,
 };
 use littlefs2_core::path;
 use sha2::{Digest as _, Sha256};
@@ -388,7 +390,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             let serialized_credential = credential.serialize()?;
 
             // first delete any other RK cred with same RP + UserId if there is one.
-            self.delete_resident_key_by_user_id(&rp_id_hash, &credential.user.id)
+            self.delete_resident_key_by_user_id(&rp_id_hash, credential.user.id())
                 .ok();
 
             let mut key_store_full = self.can_fit(serialized_credential.len()) == Some(false)
@@ -1739,8 +1741,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         // User with empty IDs are ignored for compatibility
         if is_rk {
             if let Credential::Full(credential) = &credential {
-                if !credential.user.id.is_empty() {
-                    let mut user = credential.user.clone();
+                if !credential.user.id().is_empty() {
+                    let mut user: PublicKeyCredentialUserEntity = credential.user.clone().into();
                     // User identifiable information (name, DisplayName, icon) MUST not
                     // be returned if user verification is not done by the authenticator.
                     // For single account per RP case, authenticator returns "id" field.
@@ -1749,7 +1751,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                         user.name = None;
                         user.display_name = None;
                     }
-                    response.user = Some(user.into());
+                    response.user = Some(user);
                 }
             }
 
@@ -1793,7 +1795,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             let credential_maybe = FullCredential::deserialize(&credential_data);
 
             if let Ok(old_credential) = credential_maybe {
-                if old_credential.user.id == user_id {
+                if old_credential.user.id() == user_id {
                     match old_credential.key {
                         credential::Key::ResidentKey(key) => {
                             info_now!(":: deleting resident key");

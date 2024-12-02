@@ -174,7 +174,7 @@ where
 
                     let rp = credential.data.rp;
 
-                    response.rp_id_hash = Some(ByteArray::new(self.hash(rp.id.as_ref())));
+                    response.rp_id_hash = Some(ByteArray::new(self.hash(rp.id().as_ref())));
                     response.rp = Some(rp.into());
                 }
             }
@@ -251,7 +251,7 @@ where
 
                     let rp = credential.data.rp;
 
-                    response.rp_id_hash = Some(ByteArray::new(self.hash(rp.id.as_ref())));
+                    response.rp_id_hash = Some(ByteArray::new(self.hash(rp.id().as_ref())));
                     response.rp = Some(rp.into());
 
                     // cache state for next call
@@ -524,18 +524,22 @@ where
         // TODO: check remaining space, return KeyStoreFull
 
         // the updated user ID must match the stored user ID
-        if credential.user.id != user.id {
+        if credential.user.id() != &user.id {
             error!("updated user ID does not match original user ID");
             return Err(Error::InvalidParameter);
         }
 
         // update user name and display name unless the values are not set or empty
-        credential.data.user.name = user.name.as_ref().filter(|s| !s.is_empty()).cloned();
-        credential.data.user.display_name = user
-            .display_name
-            .as_ref()
-            .filter(|s| !s.is_empty())
-            .cloned();
+        credential
+            .data
+            .user
+            .set_name(user.name.as_ref().filter(|s| !s.is_empty()).cloned());
+        credential.data.user.set_display_name(
+            user.display_name
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .cloned(),
+        );
 
         // write updated credential
         let serialized = credential.serialize()?;
