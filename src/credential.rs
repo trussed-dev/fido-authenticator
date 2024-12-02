@@ -220,27 +220,55 @@ fn deserialize_str<E: serde::de::Error, const N: usize>(
     Ok(s.into())
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
-#[serde(untagged)]
-pub enum Rp {
-    Long(PublicKeyCredentialRpEntity),
-    Short(LocalPublicKeyCredentialRpEntity),
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SerializationFormat {
+    Short,
+    Long,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rp {
+    format: SerializationFormat,
+    inner: PublicKeyCredentialRpEntity,
 }
 
 impl Rp {
-    pub fn id(&self) -> &str {
-        match self {
-            Self::Long(rp) => &rp.id,
-            Self::Short(rp) => &rp.id,
+    fn new(inner: PublicKeyCredentialRpEntity) -> Self {
+        Self {
+            format: SerializationFormat::Short,
+            inner,
         }
     }
 
-    pub fn strip(&mut self) {
-        let name = match self {
-            Self::Long(rp) => &mut rp.name,
-            Self::Short(rp) => &mut rp.name,
-        };
-        *name = None;
+    fn raw(&self) -> RawRp<'_> {
+        let mut raw = RawRp::default();
+        match self.format {
+            SerializationFormat::Short => {
+                raw.i = Some(&self.inner.id);
+                raw.n = self.inner.name.as_deref();
+            }
+            SerializationFormat::Long => {
+                raw.id = Some(&self.inner.id);
+                raw.name = self.inner.name.as_deref();
+            }
+        }
+        raw
+    }
+
+    pub fn id(&self) -> &str {
+        &self.inner.id
+    }
+}
+
+impl AsRef<PublicKeyCredentialRpEntity> for Rp {
+    fn as_ref(&self) -> &PublicKeyCredentialRpEntity {
+        &self.inner
+    }
+}
+
+impl AsMut<PublicKeyCredentialRpEntity> for Rp {
+    fn as_mut(&mut self) -> &mut PublicKeyCredentialRpEntity {
+        &mut self.inner
     }
 }
 
@@ -251,108 +279,109 @@ impl<'de> serde::Deserialize<'de> for Rp {
     {
         use serde::de::Error as _;
 
-        #[derive(serde::Deserialize)]
-        struct R<'a> {
-            i: Option<&'a str>,
-            id: Option<&'a str>,
-            n: Option<&'a str>,
-            name: Option<&'a str>,
-        }
-
-        let r = R::deserialize(deserializer)?;
+        let r = RawRp::deserialize(deserializer)?;
 
         if r.i.is_some() && r.id.is_some() {
             return Err(D::Error::duplicate_field("i"));
         }
 
-        if let Some(i) = r.i {
-            // short format
+        let (format, id, name) = if let Some(i) = r.i {
             if r.name.is_some() {
                 return Err(D::Error::unknown_field("name", &["i", "n"]));
             }
-
-            Ok(Self::Short(LocalPublicKeyCredentialRpEntity {
-                id: deserialize_str(i)?,
-                name: r.n.map(deserialize_str).transpose()?,
-            }))
+            (SerializationFormat::Short, i, r.n)
         } else if let Some(id) = r.id {
-            // long format
             if r.n.is_some() {
                 return Err(D::Error::unknown_field("n", &["id", "name"]));
             }
-
-            Ok(Self::Long(PublicKeyCredentialRpEntity {
-                id: deserialize_str(id)?,
-                name: r.name.map(deserialize_str).transpose()?,
-                icon: None,
-            }))
+            (SerializationFormat::Long, id, r.name)
         } else {
-            // ID is missing
-            Err(D::Error::missing_field("i"))
-        }
+            return Err(D::Error::missing_field("i"));
+        };
+
+        let inner = PublicKeyCredentialRpEntity {
+            id: deserialize_str(id)?,
+            name: name.map(deserialize_str).transpose()?,
+            icon: None,
+        };
+        Ok(Self { format, inner })
+    }
+}
+
+impl serde::Serialize for Rp {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> core::result::Result<S::Ok, S::Error> {
+        self.raw().serialize(serializer)
     }
 }
 
 impl From<Rp> for PublicKeyCredentialRpEntity {
     fn from(rp: Rp) -> PublicKeyCredentialRpEntity {
-        match rp {
-            Rp::Short(rp) => rp.into(),
-            Rp::Long(rp) => rp,
-        }
+        rp.inner
     }
 }
 
-/// Copy of [`ctap_types::webauthn::PublicKeyCredentialRpEntity`] but with shorter field names serialization
-#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
-pub struct LocalPublicKeyCredentialRpEntity {
-    #[serde(rename = "i")]
-    pub id: String<256>,
-    // Compared to the ctap_types type, we can skip the truncate,
-    // since we know we only even deal with the correct length
-    #[serde(skip_serializing_if = "Option::is_none", rename = "n")]
-    pub name: Option<String<64>>,
-    // Icon is ignored
+#[derive(Default, serde::Deserialize, serde::Serialize)]
+struct RawRp<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    i: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    n: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
-#[serde(untagged)]
-pub enum User {
-    Long(PublicKeyCredentialUserEntity),
-    Short(LocalPublicKeyCredentialUserEntity),
+#[derive(Clone, Debug, PartialEq)]
+pub struct User {
+    format: SerializationFormat,
+    inner: PublicKeyCredentialUserEntity,
 }
 
 impl User {
-    pub fn id(&self) -> &Bytes<64> {
-        match self {
-            Self::Long(user) => &user.id,
-            Self::Short(user) => &user.id,
+    fn new(inner: PublicKeyCredentialUserEntity) -> Self {
+        Self {
+            format: SerializationFormat::Short,
+            inner,
         }
     }
 
-    pub fn strip(&mut self) {
-        let (icon, name, display_name) = match self {
-            Self::Long(rp) => (&mut rp.icon, &mut rp.name, &mut rp.display_name),
-            Self::Short(rp) => (&mut rp.icon, &mut rp.name, &mut rp.display_name),
-        };
-        *icon = None;
-        *name = None;
-        *display_name = None;
+    fn raw(&self) -> RawUser<'_> {
+        let mut raw = RawUser::default();
+        match self.format {
+            SerializationFormat::Short => {
+                raw.i = Some(self.inner.id.as_slice().into());
+                raw.ii = self.inner.icon.as_deref();
+                raw.n = self.inner.name.as_deref();
+                raw.d = self.inner.display_name.as_deref();
+            }
+            SerializationFormat::Long => {
+                raw.id = Some(self.inner.id.as_slice().into());
+                raw.icon = self.inner.icon.as_deref();
+                raw.name = self.inner.name.as_deref();
+                raw.display_name = self.inner.display_name.as_deref();
+            }
+        }
+        raw
     }
 
-    pub fn set_name(&mut self, name: Option<String<64>>) {
-        let field = match self {
-            Self::Long(rp) => &mut rp.name,
-            Self::Short(rp) => &mut rp.name,
-        };
-        *field = name;
+    pub fn id(&self) -> &Bytes<64> {
+        &self.inner.id
     }
+}
 
-    pub fn set_display_name(&mut self, display_name: Option<String<64>>) {
-        let field = match self {
-            Self::Long(rp) => &mut rp.display_name,
-            Self::Short(rp) => &mut rp.display_name,
-        };
-        *field = display_name;
+impl AsRef<PublicKeyCredentialUserEntity> for User {
+    fn as_ref(&self) -> &PublicKeyCredentialUserEntity {
+        &self.inner
+    }
+}
+
+impl AsMut<PublicKeyCredentialUserEntity> for User {
+    fn as_mut(&mut self) -> &mut PublicKeyCredentialUserEntity {
+        &mut self.inner
     }
 }
 
@@ -363,27 +392,13 @@ impl<'de> serde::Deserialize<'de> for User {
     {
         use serde::de::Error as _;
 
-        #[derive(serde::Deserialize)]
-        struct U<'a> {
-            i: Option<&'a [u8]>,
-            id: Option<&'a [u8]>,
-            #[serde(rename = "I")]
-            ii: Option<&'a str>,
-            icon: Option<&'a str>,
-            n: Option<&'a str>,
-            name: Option<&'a str>,
-            d: Option<&'a str>,
-            #[serde(rename = "displayName")]
-            display_name: Option<&'a str>,
-        }
-
-        let u = U::deserialize(deserializer)?;
+        let u = RawUser::deserialize(deserializer)?;
 
         if u.i.is_some() && u.id.is_some() {
             return Err(D::Error::duplicate_field("i"));
         }
 
-        if let Some(i) = u.i {
+        let (format, id, icon, name, display_name) = if let Some(i) = u.i {
             // short format
             let fields = &["i", "I", "n", "d"];
             if u.icon.is_some() {
@@ -396,12 +411,7 @@ impl<'de> serde::Deserialize<'de> for User {
                 return Err(D::Error::unknown_field("display_name", fields));
             }
 
-            Ok(Self::Short(LocalPublicKeyCredentialUserEntity {
-                id: deserialize_bytes(i)?,
-                icon: u.ii.map(deserialize_str).transpose()?,
-                name: u.n.map(deserialize_str).transpose()?,
-                display_name: u.d.map(deserialize_str).transpose()?,
-            }))
+            (SerializationFormat::Short, i, u.ii, u.n, u.d)
         } else if let Some(id) = u.id {
             // long format
             let fields = &["id", "icon", "name", "display_name"];
@@ -415,100 +425,61 @@ impl<'de> serde::Deserialize<'de> for User {
                 return Err(D::Error::unknown_field("d", fields));
             }
 
-            Ok(Self::Long(PublicKeyCredentialUserEntity {
-                id: deserialize_bytes(id)?,
-                icon: u.icon.map(deserialize_str).transpose()?,
-                name: u.name.map(deserialize_str).transpose()?,
-                display_name: u.display_name.map(deserialize_str).transpose()?,
-            }))
+            (
+                SerializationFormat::Long,
+                id,
+                u.icon,
+                u.name,
+                u.display_name,
+            )
         } else {
             // ID is missing
-            Err(D::Error::missing_field("i"))
-        }
+            return Err(D::Error::missing_field("i"));
+        };
+
+        let inner = PublicKeyCredentialUserEntity {
+            id: deserialize_bytes(id)?,
+            icon: icon.map(deserialize_str).transpose()?,
+            name: name.map(deserialize_str).transpose()?,
+            display_name: display_name.map(deserialize_str).transpose()?,
+        };
+        Ok(Self { format, inner })
+    }
+}
+
+impl serde::Serialize for User {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> core::result::Result<S::Ok, S::Error> {
+        self.raw().serialize(serializer)
     }
 }
 
 impl From<User> for PublicKeyCredentialUserEntity {
     fn from(user: User) -> PublicKeyCredentialUserEntity {
-        match user {
-            User::Short(user) => user.into(),
-            User::Long(user) => user,
-        }
+        user.inner
     }
 }
 
-/// Copy of [`ctap_types::webauthn::PublicKeyCredentialUserEntity`] but with with shorter field names serialization
-#[derive(serde::Serialize, Debug, Clone, PartialEq, Eq)]
-pub struct LocalPublicKeyCredentialUserEntity {
-    #[serde(rename = "i")]
-    pub id: Bytes<64>,
+#[derive(Default, serde::Deserialize, serde::Serialize)]
+struct RawUser<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    i: Option<&'a serde_bytes::Bytes>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<&'a serde_bytes::Bytes>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "I")]
-    pub icon: Option<String<128>>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "n")]
-    pub name: Option<String<64>>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "d")]
-    pub display_name: Option<String<64>>,
-}
-
-impl From<ctap_types::webauthn::PublicKeyCredentialRpEntity> for LocalPublicKeyCredentialRpEntity {
-    fn from(value: ctap_types::webauthn::PublicKeyCredentialRpEntity) -> Self {
-        let ctap_types::webauthn::PublicKeyCredentialRpEntity { id, name, icon } = value;
-        let _icon = icon;
-
-        Self { id, name }
-    }
-}
-
-impl From<LocalPublicKeyCredentialRpEntity> for ctap_types::webauthn::PublicKeyCredentialRpEntity {
-    fn from(value: LocalPublicKeyCredentialRpEntity) -> Self {
-        let LocalPublicKeyCredentialRpEntity { id, name } = value;
-
-        Self {
-            id,
-            name,
-            icon: None,
-        }
-    }
-}
-
-impl From<ctap_types::webauthn::PublicKeyCredentialUserEntity>
-    for LocalPublicKeyCredentialUserEntity
-{
-    fn from(value: ctap_types::webauthn::PublicKeyCredentialUserEntity) -> Self {
-        let ctap_types::webauthn::PublicKeyCredentialUserEntity {
-            id,
-            icon,
-            name,
-            display_name,
-        } = value;
-
-        Self {
-            id,
-            icon,
-            name,
-            display_name,
-        }
-    }
-}
-
-impl From<LocalPublicKeyCredentialUserEntity>
-    for ctap_types::webauthn::PublicKeyCredentialUserEntity
-{
-    fn from(value: LocalPublicKeyCredentialUserEntity) -> Self {
-        let LocalPublicKeyCredentialUserEntity {
-            id,
-            icon,
-            name,
-            display_name,
-        } = value;
-
-        Self {
-            id,
-            icon,
-            name,
-            display_name,
-        }
-    }
+    ii: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    icon: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    n: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    d: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "displayName")]
+    display_name: Option<&'a str>,
 }
 
 /// The main content of a `FullCredential`.
@@ -653,8 +624,8 @@ impl FullCredential {
     ) -> Self {
         info!("credential for algorithm {}", algorithm);
         let data = CredentialData {
-            rp: Rp::Short(rp.clone().into()),
-            user: User::Short(user.clone().into()),
+            rp: Rp::new(rp.clone()),
+            user: User::new(user.clone()),
 
             creation_time: timestamp,
             use_counter: true,
@@ -738,8 +709,12 @@ impl FullCredential {
     fn strip(&self) -> Self {
         info_now!(":: stripping ID");
         let mut stripped = self.clone();
-        stripped.data.rp.strip();
-        stripped.data.user.strip();
+        let rp = stripped.data.rp.as_mut();
+        rp.name = None;
+        let user = stripped.data.user.as_mut();
+        user.icon = None;
+        user.name = None;
+        user.display_name = None;
         stripped
     }
 }
@@ -813,7 +788,7 @@ mod test {
     use littlefs2_core::path;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha8Rng;
-    use serde_test::{assert_de_tokens, assert_ser_tokens, Token};
+    use serde_test::{assert_de_tokens, assert_tokens, Token};
     use trussed::{
         client::{Chacha8Poly1305, Sha256},
         key::{Kind, Secrecy},
@@ -825,11 +800,12 @@ mod test {
 
     fn credential_data() -> CredentialData {
         CredentialData {
-            rp: Rp::Short(LocalPublicKeyCredentialRpEntity {
+            rp: Rp::new(PublicKeyCredentialRpEntity {
                 id: String::from("John Doe"),
                 name: None,
+                icon: None,
             }),
-            user: User::Short(LocalPublicKeyCredentialUserEntity {
+            user: User::new(PublicKeyCredentialUserEntity {
                 id: Bytes::from_slice(&[1, 2, 3]).unwrap(),
                 icon: None,
                 name: None,
@@ -849,17 +825,23 @@ mod test {
 
     fn old_credential_data() -> CredentialData {
         CredentialData {
-            rp: Rp::Long(PublicKeyCredentialRpEntity {
-                id: String::from("John Doe"),
-                name: None,
-                icon: None,
-            }),
-            user: User::Short(LocalPublicKeyCredentialUserEntity {
-                id: Bytes::from_slice(&[1, 2, 3]).unwrap(),
-                icon: None,
-                name: None,
-                display_name: None,
-            }),
+            rp: Rp {
+                format: SerializationFormat::Long,
+                inner: PublicKeyCredentialRpEntity {
+                    id: String::from("John Doe"),
+                    name: None,
+                    icon: None,
+                },
+            },
+            user: User {
+                format: SerializationFormat::Long,
+                inner: PublicKeyCredentialUserEntity {
+                    id: Bytes::from_slice(&[1, 2, 3]).unwrap(),
+                    icon: None,
+                    name: None,
+                    display_name: None,
+                },
+            },
             creation_time: 123,
             use_counter: false,
             algorithm: -7,
@@ -936,11 +918,12 @@ mod test {
 
     fn random_credential_data() -> CredentialData {
         CredentialData {
-            rp: Rp::Short(LocalPublicKeyCredentialRpEntity {
+            rp: Rp::new(PublicKeyCredentialRpEntity {
                 id: random_string(),
                 name: maybe_random_string(),
+                icon: None,
             }),
-            user: User::Short(LocalPublicKeyCredentialUserEntity {
+            user: User::new(PublicKeyCredentialUserEntity {
                 id: random_bytes(), //Bytes::from_slice(&[1,2,3]).unwrap(),
                 icon: maybe_random_string(),
                 name: maybe_random_string(),
@@ -1130,6 +1113,30 @@ mod test {
         });
     }
 
+    fn test_serde<T>(item: &T, name: &'static str, fields: &[(&'static str, Token)])
+    where
+        for<'a> T: core::fmt::Debug + PartialEq + serde::Deserialize<'a> + serde::Serialize,
+    {
+        let len = fields.len();
+
+        let mut struct_tokens = vec![Token::Struct { name, len }];
+        let mut map_tokens = vec![Token::Map { len: Some(len) }];
+        for (key, value) in fields {
+            struct_tokens.push(Token::Str(key));
+            struct_tokens.push(Token::Some);
+            struct_tokens.push(*value);
+
+            map_tokens.push(Token::Str(key));
+            map_tokens.push(Token::Some);
+            map_tokens.push(*value);
+        }
+        struct_tokens.push(Token::StructEnd);
+        map_tokens.push(Token::MapEnd);
+
+        assert_tokens(item, &struct_tokens);
+        assert_de_tokens(item, &map_tokens);
+    }
+
     struct RpValues {
         id: &'static str,
         name: Option<&'static str>,
@@ -1137,73 +1144,35 @@ mod test {
 
     impl RpValues {
         fn test(&self) {
-            RpType::SHORT.test(&self.short(), self);
-            RpType::LONG.test(&self.long(), self);
+            for format in [SerializationFormat::Short, SerializationFormat::Long] {
+                self.test_format(format);
+            }
         }
 
-        fn short(&self) -> Rp {
-            Rp::Short(LocalPublicKeyCredentialRpEntity {
-                id: self.id.into(),
-                name: self.name.map(From::from),
-            })
+        fn test_format(&self, format: SerializationFormat) {
+            let (id_field, name_field) = match format {
+                SerializationFormat::Short => ("i", "n"),
+                SerializationFormat::Long => ("id", "name"),
+            };
+            let rp = Rp {
+                format,
+                inner: self.inner(),
+            };
+
+            let mut fields = vec![(id_field, Token::BorrowedStr(self.id))];
+            if let Some(name) = self.name {
+                fields.push((name_field, Token::BorrowedStr(name)));
+            }
+
+            test_serde(&rp, "RawRp", &fields);
         }
 
-        fn long(&self) -> Rp {
-            Rp::Long(PublicKeyCredentialRpEntity {
+        fn inner(&self) -> PublicKeyCredentialRpEntity {
+            PublicKeyCredentialRpEntity {
                 id: self.id.into(),
                 name: self.name.map(From::from),
                 icon: None,
-            })
-        }
-    }
-
-    struct RpType {
-        s: &'static str,
-        id: &'static str,
-        name: &'static str,
-    }
-
-    impl RpType {
-        const SHORT: Self = Self {
-            s: "LocalPublicKeyCredentialRpEntity",
-            id: "i",
-            name: "n",
-        };
-
-        const LONG: Self = Self {
-            s: "PublicKeyCredentialRpEntity",
-            id: "id",
-            name: "name",
-        };
-
-        fn test(&self, item: &Rp, values: &RpValues) {
-            let mut len = 1;
-            if values.name.is_some() {
-                len += 1;
             }
-
-            let mut ser_tokens = vec![Token::Struct { name: self.s, len }];
-            ser_tokens.push(Token::Str(self.id));
-            ser_tokens.push(Token::Str(values.id));
-            if let Some(name) = values.name {
-                ser_tokens.push(Token::Str(self.name));
-                ser_tokens.push(Token::Some);
-                ser_tokens.push(Token::Str(name));
-            }
-            ser_tokens.push(Token::StructEnd);
-            assert_ser_tokens(item, &ser_tokens);
-
-            let mut de_tokens = vec![Token::Map { len: Some(len) }];
-            de_tokens.push(Token::Str(self.id));
-            de_tokens.push(Token::Some);
-            de_tokens.push(Token::BorrowedStr(values.id));
-            if let Some(name) = values.name {
-                de_tokens.push(Token::Str(self.name));
-                de_tokens.push(Token::Some);
-                de_tokens.push(Token::BorrowedStr(name));
-            }
-            de_tokens.push(Token::MapEnd);
-            assert_de_tokens(item, &de_tokens);
         }
     }
 
@@ -1234,108 +1203,42 @@ mod test {
 
     impl UserValues {
         fn test(&self) {
-            UserType::SHORT.test(&self.short(), self);
-            UserType::LONG.test(&self.long(), self);
+            for format in [SerializationFormat::Short, SerializationFormat::Long] {
+                self.test_format(format);
+            }
         }
 
-        fn short(&self) -> User {
-            User::Short(LocalPublicKeyCredentialUserEntity {
+        fn test_format(&self, format: SerializationFormat) {
+            let (id_field, icon_field, name_field, display_name_field) = match format {
+                SerializationFormat::Short => ("i", "I", "n", "d"),
+                SerializationFormat::Long => ("id", "icon", "name", "displayName"),
+            };
+            let user = User {
+                format,
+                inner: self.inner(),
+            };
+
+            let mut fields = vec![(id_field, Token::BorrowedBytes(self.id))];
+            if let Some(icon) = self.icon {
+                fields.push((icon_field, Token::BorrowedStr(icon)));
+            }
+            if let Some(name) = self.name {
+                fields.push((name_field, Token::BorrowedStr(name)));
+            }
+            if let Some(display_name) = self.display_name {
+                fields.push((display_name_field, Token::BorrowedStr(display_name)));
+            }
+
+            test_serde(&user, "RawUser", &fields);
+        }
+
+        fn inner(&self) -> PublicKeyCredentialUserEntity {
+            PublicKeyCredentialUserEntity {
                 id: Bytes::from_slice(self.id).unwrap(),
                 icon: self.icon.map(From::from),
                 name: self.name.map(From::from),
                 display_name: self.display_name.map(From::from),
-            })
-        }
-
-        fn long(&self) -> User {
-            User::Long(PublicKeyCredentialUserEntity {
-                id: Bytes::from_slice(self.id).unwrap(),
-                icon: self.icon.map(From::from),
-                name: self.name.map(From::from),
-                display_name: self.display_name.map(From::from),
-            })
-        }
-    }
-
-    struct UserType {
-        s: &'static str,
-        id: &'static str,
-        icon: &'static str,
-        name: &'static str,
-        display_name: &'static str,
-    }
-
-    impl UserType {
-        const SHORT: Self = Self {
-            s: "LocalPublicKeyCredentialUserEntity",
-            id: "i",
-            icon: "I",
-            name: "n",
-            display_name: "d",
-        };
-
-        const LONG: Self = Self {
-            s: "PublicKeyCredentialUserEntity",
-            id: "id",
-            icon: "icon",
-            name: "name",
-            display_name: "displayName",
-        };
-
-        fn test(&self, user: &User, values: &UserValues) {
-            let mut len = 1;
-            if values.icon.is_some() {
-                len += 1;
             }
-            if values.name.is_some() {
-                len += 1;
-            }
-            if values.display_name.is_some() {
-                len += 1;
-            }
-
-            let mut ser_tokens = vec![Token::Struct { name: self.s, len }];
-            ser_tokens.push(Token::Str(self.id));
-            ser_tokens.push(Token::Bytes(values.id));
-            if let Some(icon) = values.icon {
-                ser_tokens.push(Token::Str(self.icon));
-                ser_tokens.push(Token::Some);
-                ser_tokens.push(Token::Str(icon));
-            }
-            if let Some(name) = values.name {
-                ser_tokens.push(Token::Str(self.name));
-                ser_tokens.push(Token::Some);
-                ser_tokens.push(Token::Str(name));
-            }
-            if let Some(display_name) = values.display_name {
-                ser_tokens.push(Token::Str(self.display_name));
-                ser_tokens.push(Token::Some);
-                ser_tokens.push(Token::Str(display_name));
-            }
-            ser_tokens.push(Token::StructEnd);
-            assert_ser_tokens(user, &ser_tokens);
-
-            let mut de_tokens = vec![Token::Map { len: Some(len) }];
-            de_tokens.push(Token::Str(self.id));
-            de_tokens.push(Token::Some);
-            de_tokens.push(Token::BorrowedBytes(values.id));
-            if let Some(icon) = values.icon {
-                de_tokens.push(Token::Str(self.icon));
-                de_tokens.push(Token::Some);
-                de_tokens.push(Token::BorrowedStr(icon));
-            }
-            if let Some(name) = values.name {
-                de_tokens.push(Token::Str(self.name));
-                de_tokens.push(Token::Some);
-                de_tokens.push(Token::BorrowedStr(name));
-            }
-            if let Some(display_name) = values.display_name {
-                de_tokens.push(Token::Str(self.display_name));
-                de_tokens.push(Token::Some);
-                de_tokens.push(Token::BorrowedStr(display_name));
-            }
-            de_tokens.push(Token::MapEnd);
-            assert_de_tokens(user, &de_tokens);
         }
     }
 
@@ -1412,17 +1315,23 @@ mod test {
         assert_eq!(
             credential.data,
             CredentialData {
-                rp: Rp::Long(PublicKeyCredentialRpEntity {
-                    id: "webauthn.io".into(),
-                    name: None,
-                    icon: None,
-                }),
-                user: User::Long(PublicKeyCredentialUserEntity {
-                    id: Bytes::from_slice(&hex!("6447567A644445")).unwrap(),
-                    icon: None,
-                    name: Some("test1".into()),
-                    display_name: None,
-                }),
+                rp: Rp {
+                    format: SerializationFormat::Long,
+                    inner: PublicKeyCredentialRpEntity {
+                        id: "webauthn.io".into(),
+                        name: None,
+                        icon: None,
+                    },
+                },
+                user: User {
+                    format: SerializationFormat::Long,
+                    inner: PublicKeyCredentialUserEntity {
+                        id: Bytes::from_slice(&hex!("6447567A644445")).unwrap(),
+                        icon: None,
+                        name: Some("test1".into()),
+                        display_name: None,
+                    },
+                },
                 creation_time: 0,
                 use_counter: true,
                 algorithm: -7,
