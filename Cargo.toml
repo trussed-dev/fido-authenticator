@@ -25,6 +25,7 @@ serde_bytes = { version = "0.11.14", default-features = false }
 serde-indexed = "0.1.0"
 sha2 = { version = "0.10", default-features = false }
 trussed = "0.1"
+trussed-core = "0.1"
 trussed-fs-info = "0.1.0"
 trussed-hkdf = { version = "0.2.0" }
 trussed-chunked = { version = "0.1.0", optional = true }
@@ -82,7 +83,8 @@ features = ["dispatch"]
 
 [patch.crates-io]
 ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "046478b7a4f6e2315acf9112d98308379c2e3eee" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "eadd27cda0f457caae609e7fa972277e46695bd3" }
+trussed-core = { git = "https://github.com/trussed-dev/trussed.git", rev = "eadd27cda0f457caae609e7fa972277e46695bd3" }
 trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "chunked-v0.1.0" }
 trussed-fs-info = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "fs-info-v0.1.0" }
 trussed-hkdf = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "hkdf-v0.2.0" }

@@ -5,6 +5,7 @@ use core::cmp::Ordering;
 use serde::Serialize;
 use serde_bytes::ByteArray;
 use trussed::{client, syscall, try_syscall, types::KeyId};
+use trussed_core::types::EncryptedData;
 
 pub(crate) use ctap_types::{
     // authenticator::{ctap1, ctap2, Error, Request, Response},
@@ -53,9 +54,17 @@ impl CredentialId {
             associated_data,
             Some(nonce)
         ));
-        EncryptedSerializedCredential(encrypted_serialized_credential)
-            .try_into()
+        trussed::cbor_serialize_bytes(&EncryptedData::from(encrypted_serialized_credential))
+            .map(Self)
             .map_err(|_| Error::RequestTooLarge)
+    }
+}
+
+struct CredentialIdRef<'a>(&'a [u8]);
+
+impl CredentialIdRef<'_> {
+    fn deserialize(&self) -> Result<EncryptedData> {
+        ctap_types::serde::cbor_deserialize(self.0).map_err(|_| Error::InvalidCredential)
     }
 }
 
@@ -63,32 +72,6 @@ impl CredentialId {
 // pub type SerializedCredential = Bytes<512>;
 // pub type SerializedCredential = Bytes<256>;
 pub(crate) type SerializedCredential = trussed::types::Message;
-
-#[derive(Clone, Debug)]
-struct EncryptedSerializedCredential(pub trussed::api::reply::Encrypt);
-
-impl TryFrom<EncryptedSerializedCredential> for CredentialId {
-    type Error = Error;
-
-    fn try_from(esc: EncryptedSerializedCredential) -> Result<CredentialId> {
-        Ok(CredentialId(
-            trussed::cbor_serialize_bytes(&esc.0).map_err(|_| Error::Other)?,
-        ))
-    }
-}
-
-impl TryFrom<CredentialId> for EncryptedSerializedCredential {
-    // tag = 16B
-    // nonce = 12B
-    type Error = Error;
-
-    fn try_from(cid: CredentialId) -> Result<EncryptedSerializedCredential> {
-        let encrypted_serialized_credential = EncryptedSerializedCredential(
-            ctap_types::serde::cbor_deserialize(&cid.0).map_err(|_| Error::InvalidCredential)?,
-        );
-        Ok(encrypted_serialized_credential)
-    }
-}
 
 /// Credential keys can either be "discoverable" or not.
 ///
@@ -131,11 +114,7 @@ impl Credential {
         rp_id_hash: &[u8; 32],
         id: &[u8],
     ) -> Result<Self> {
-        let mut cred: Bytes<MAX_CREDENTIAL_ID_LENGTH> = Bytes::new();
-        cred.extend_from_slice(id)
-            .map_err(|_| Error::InvalidCredential)?;
-
-        let encrypted_serialized = EncryptedSerializedCredential::try_from(CredentialId(cred))?;
+        let encrypted_serialized = CredentialIdRef(id).deserialize()?;
 
         let kek = authnr
             .state
@@ -144,10 +123,10 @@ impl Credential {
 
         let serialized = try_syscall!(authnr.trussed.decrypt_chacha8poly1305(
             kek,
-            &encrypted_serialized.0.ciphertext,
+            &encrypted_serialized.ciphertext,
             &rp_id_hash[..],
-            &encrypted_serialized.0.nonce,
-            &encrypted_serialized.0.tag,
+            &encrypted_serialized.nonce,
+            &encrypted_serialized.tag,
         ))
         .map_err(|_| Error::InvalidCredential)?
         .plaintext
@@ -985,15 +964,13 @@ mod test {
             platform.run_client(client_id.as_str(), |mut client| {
                 let data = old_credential_data();
                 let rp_id_hash = syscall!(client.hash_sha256(data.rp.id().as_ref())).hash;
-                let credential_id = CredentialId(Bytes::from_slice(OLD_ID).unwrap());
-                let encrypted_serialized =
-                    EncryptedSerializedCredential::try_from(credential_id).unwrap();
+                let encrypted_serialized = CredentialIdRef(OLD_ID).deserialize().unwrap();
                 let serialized = syscall!(client.decrypt_chacha8poly1305(
                     kek,
-                    &encrypted_serialized.0.ciphertext,
+                    &encrypted_serialized.ciphertext,
                     &rp_id_hash,
-                    &encrypted_serialized.0.nonce,
-                    &encrypted_serialized.0.tag,
+                    &encrypted_serialized.nonce,
+                    &encrypted_serialized.tag,
                 ))
                 .plaintext
                 .unwrap();

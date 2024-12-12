@@ -23,7 +23,8 @@ doc = false
 bench = false
 
 [patch.crates-io]
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "046478b7a4f6e2315acf9112d98308379c2e3eee" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "eadd27cda0f457caae609e7fa972277e46695bd3" }
+trussed-core = { git = "https://github.com/trussed-dev/trussed.git", rev = "eadd27cda0f457caae609e7fa972277e46695bd3" }
 trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "chunked-v0.1.0" }
 trussed-hkdf = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "hkdf-v0.2.0" }
 trussed-fs-info = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "fs-info-v0.1.0" }
