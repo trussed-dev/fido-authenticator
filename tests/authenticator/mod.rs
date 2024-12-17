@@ -46,7 +46,7 @@ impl<'a> Authenticator<'a, NoPin> {
     }
 }
 
-impl<'a, P: PinState> Authenticator<'a, P> {
+impl<P: PinState> Authenticator<'_, P> {
     fn shared_secret(&mut self) -> &SharedSecret {
         self.shared_secret.get_or_insert_with(|| {
             let reply = self.ctap2.exec(ClientPin::new(2, 2)).unwrap();
@@ -57,7 +57,7 @@ impl<'a, P: PinState> Authenticator<'a, P> {
     }
 }
 
-impl<'a> Authenticator<'a, Pin> {
+impl Authenticator<'_, Pin> {
     fn get_pin_token(&mut self, permissions: u8, rp_id: Option<String>) -> PinToken {
         let mut hasher = Sha256::new();
         hasher.update(&self.pin.0);
