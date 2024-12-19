@@ -1,13 +1,16 @@
 use ctap_types::{sizes::LARGE_BLOB_MAX_FRAGMENT_LENGTH, Error};
-use littlefs2_core::path;
-use trussed::{
+use littlefs2_core::{path, Path, PathBuf};
+use trussed_core::{
     config::MAX_MESSAGE_LENGTH,
     try_syscall,
-    types::{Bytes, Location, Message, Path, PathBuf},
+    types::{Bytes, Location, Message},
+    FilesystemClient,
 };
 
+#[cfg(feature = "chunked")]
+use trussed_chunked::ChunkedClient;
 #[cfg(not(feature = "chunked"))]
-use trussed::{syscall, types::Mechanism};
+use trussed_core::{mechanisms::Sha256, syscall, types::Mechanism, CryptoClient};
 
 use crate::{Result, TrussedRequirements};
 
@@ -51,7 +54,7 @@ impl Config {
     }
 }
 
-pub fn size<C: TrussedRequirements>(client: &mut C, location: Location) -> Result<usize> {
+pub fn size<C: FilesystemClient>(client: &mut C, location: Location) -> Result<usize> {
     Ok(
         try_syscall!(client.entry_metadata(location, PathBuf::from(FILENAME)))
             .map_err(|_| Error::Other)?
@@ -82,7 +85,7 @@ pub fn write_chunk<C: TrussedRequirements>(
     write_impl::<_, SelectedStorage>(client, state, location, data)
 }
 
-pub fn reset<C: TrussedRequirements>(client: &mut C) {
+pub fn reset<C: FilesystemClient>(client: &mut C) {
     for location in [Location::Internal, Location::External, Location::Volatile] {
         try_syscall!(client.remove_file(location, PathBuf::from(FILENAME))).ok();
     }
@@ -161,7 +164,7 @@ struct SimpleStorage {
 }
 
 #[cfg(not(feature = "chunked"))]
-impl<C: TrussedRequirements> Storage<C> for SimpleStorage {
+impl<C: CryptoClient + FilesystemClient + Sha256> Storage<C> for SimpleStorage {
     fn read(client: &mut C, location: Location, offset: usize, length: usize) -> Result<Chunk> {
         let result = try_syscall!(client.read_file(location, PathBuf::from(FILENAME)));
         let data = if let Ok(reply) = &result {
@@ -248,7 +251,7 @@ struct ChunkedStorage {
 }
 
 #[cfg(feature = "chunked")]
-impl<C: TrussedRequirements> Storage<C> for ChunkedStorage {
+impl<C: ChunkedClient + FilesystemClient> Storage<C> for ChunkedStorage {
     fn read(client: &mut C, location: Location, offset: usize, length: usize) -> Result<Chunk> {
         debug!("ChunkedStorage::read: offset = {offset}, length = {length}");
         let mut chunk = Chunk::new();
@@ -307,7 +310,7 @@ impl<C: TrussedRequirements> Storage<C> for ChunkedStorage {
     fn extend_buffer(&mut self, client: &mut C, data: &[u8]) -> Result<usize> {
         debug!("ChunkedStorage::extend_buffer: |data| = {}", data.len());
         let mut n = 0;
-        for chunk in data.chunks(trussed::config::MAX_MESSAGE_LENGTH) {
+        for chunk in data.chunks(trussed_core::config::MAX_MESSAGE_LENGTH) {
             trace!("Writing {} bytes", chunk.len());
             let path = PathBuf::from(FILENAME_TMP);
             let mut message = Message::new();

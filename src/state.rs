@@ -9,11 +9,12 @@ use ctap_types::{
     Error,
     String,
 };
-use littlefs2_core::path;
-use trussed::{
-    cbor_serialize_bytes, client, syscall, try_syscall,
-    types::{KeyId, Location, Mechanism, Path, PathBuf},
-    Client as TrussedClient,
+use littlefs2_core::{path, Path};
+use trussed_core::{
+    mechanisms::{Chacha8Poly1305, P256},
+    syscall, try_syscall,
+    types::{KeyId, Location, Mechanism, Message, PathBuf},
+    CertificateClient, CryptoClient, FilesystemClient,
 };
 
 use heapless::binary_heap::{BinaryHeap, Max};
@@ -21,7 +22,7 @@ use heapless::binary_heap::{BinaryHeap, Max};
 use crate::{
     credential::FullCredential,
     ctap2::{self, pin::PinProtocolState},
-    Result, TrussedRequirements,
+    Result,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -104,13 +105,13 @@ impl State {
         }
     }
 
-    pub fn decrement_retries<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
+    pub fn decrement_retries<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<()> {
         self.persistent.decrement_retries(trussed)?;
         self.runtime.decrement_retries();
         Ok(())
     }
 
-    pub fn reset_retries<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
+    pub fn reset_retries<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<()> {
         self.persistent.reset_retries(trussed)?;
         self.runtime.reset_retries();
         Ok(())
@@ -137,7 +138,7 @@ pub struct Identity {
 }
 
 pub type Aaguid = [u8; 16];
-pub type Certificate = trussed::types::Message;
+pub type Certificate = trussed_core::types::Message;
 
 impl Identity {
     // Attempt to yank out the aaguid of a certificate.
@@ -171,7 +172,7 @@ impl Identity {
     }
 
     /// Lookup batch key and certificate, together with AAUGID.
-    pub fn attestation<T: TrussedClient>(
+    pub fn attestation<T: CryptoClient + CertificateClient>(
         &mut self,
         trussed: &mut T,
     ) -> (Option<(KeyId, Certificate)>, Aaguid) {
@@ -274,7 +275,7 @@ impl PersistentState {
     const RESET_RETRIES: u8 = 8;
     const FILENAME: &'static Path = path!("persistent-state.cbor");
 
-    pub fn load<T: client::Client + client::Chacha8Poly1305>(trussed: &mut T) -> Result<Self> {
+    pub fn load<T: FilesystemClient>(trussed: &mut T) -> Result<Self> {
         // TODO: add "exists_file" method instead?
         let result =
             try_syscall!(trussed.read_file(Location::Internal, PathBuf::from(Self::FILENAME),))
@@ -287,7 +288,7 @@ impl PersistentState {
 
         let data = result.unwrap().data;
 
-        let result = trussed::cbor_deserialize(&data);
+        let result = cbor_smol::cbor_deserialize(&data);
 
         if result.is_err() {
             info!("err deser'ing: {:?}", result.err().unwrap());
@@ -298,8 +299,9 @@ impl PersistentState {
         result.map_err(|_| Error::Other)
     }
 
-    pub fn save<T: TrussedClient>(&self, trussed: &mut T) -> Result<()> {
-        let data = cbor_serialize_bytes(self).unwrap();
+    pub fn save<T: FilesystemClient>(&self, trussed: &mut T) -> Result<()> {
+        let mut data = Message::new();
+        cbor_smol::cbor_serialize_to(self, &mut data).unwrap();
 
         syscall!(trussed.write_file(
             Location::Internal,
@@ -310,7 +312,7 @@ impl PersistentState {
         Ok(())
     }
 
-    pub fn reset<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
+    pub fn reset<T: CryptoClient + FilesystemClient>(&mut self, trussed: &mut T) -> Result<()> {
         if let Some(key) = self.key_encryption_key {
             syscall!(trussed.delete(key));
         }
@@ -325,10 +327,7 @@ impl PersistentState {
         self.save(trussed)
     }
 
-    pub fn load_if_not_initialised<T: client::Client + client::Chacha8Poly1305>(
-        &mut self,
-        trussed: &mut T,
-    ) {
+    pub fn load_if_not_initialised<T: FilesystemClient>(&mut self, trussed: &mut T) {
         if !self.initialised {
             match Self::load(trussed) {
                 Ok(previous_self) => {
@@ -343,14 +342,14 @@ impl PersistentState {
         }
     }
 
-    pub fn timestamp<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<u32> {
+    pub fn timestamp<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<u32> {
         let now = self.timestamp;
         self.timestamp += 1;
         self.save(trussed)?;
         Ok(now)
     }
 
-    pub fn key_encryption_key<T: client::Client + client::Chacha8Poly1305>(
+    pub fn key_encryption_key<T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
         &mut self,
         trussed: &mut T,
     ) -> Result<KeyId> {
@@ -360,7 +359,7 @@ impl PersistentState {
         }
     }
 
-    pub fn rotate_key_encryption_key<T: client::Client + client::Chacha8Poly1305>(
+    pub fn rotate_key_encryption_key<T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
         &mut self,
         trussed: &mut T,
     ) -> Result<KeyId> {
@@ -373,7 +372,7 @@ impl PersistentState {
         Ok(key)
     }
 
-    pub fn key_wrapping_key<T: client::Client + client::Chacha8Poly1305>(
+    pub fn key_wrapping_key<T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
         &mut self,
         trussed: &mut T,
     ) -> Result<KeyId> {
@@ -383,7 +382,7 @@ impl PersistentState {
         }
     }
 
-    pub fn rotate_key_wrapping_key<T: client::Client + client::Chacha8Poly1305>(
+    pub fn rotate_key_wrapping_key<T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
         &mut self,
         trussed: &mut T,
     ) -> Result<KeyId> {
@@ -409,7 +408,7 @@ impl PersistentState {
         self.consecutive_pin_mismatches >= Self::RESET_RETRIES
     }
 
-    fn reset_retries<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
+    fn reset_retries<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<()> {
         if self.consecutive_pin_mismatches > 0 {
             self.consecutive_pin_mismatches = 0;
             self.save(trussed)?;
@@ -417,7 +416,7 @@ impl PersistentState {
         Ok(())
     }
 
-    fn decrement_retries<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
+    fn decrement_retries<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<()> {
         // error to call before initialization
         if self.consecutive_pin_mismatches < Self::RESET_RETRIES {
             self.consecutive_pin_mismatches += 1;
@@ -433,7 +432,7 @@ impl PersistentState {
         self.pin_hash
     }
 
-    pub fn set_pin_hash<T: TrussedClient>(
+    pub fn set_pin_hash<T: FilesystemClient>(
         &mut self,
         trussed: &mut T,
         pin_hash: [u8; 16],
@@ -477,7 +476,7 @@ impl RuntimeState {
         self.cached_credentials.push(credential);
     }
 
-    pub fn pop_credential<T: client::FilesystemClient>(
+    pub fn pop_credential<T: FilesystemClient>(
         &mut self,
         trussed: &mut T,
     ) -> Option<FullCredential> {
@@ -496,15 +495,12 @@ impl RuntimeState {
         self.cached_credentials.len() as _
     }
 
-    pub fn pin_protocol<T: TrussedRequirements>(
-        &mut self,
-        trussed: &mut T,
-    ) -> &mut PinProtocolState {
+    pub fn pin_protocol<T: P256>(&mut self, trussed: &mut T) -> &mut PinProtocolState {
         self.pin_protocol
             .get_or_insert_with(|| PinProtocolState::new(trussed))
     }
 
-    pub fn reset<T: TrussedRequirements>(&mut self, trussed: &mut T) {
+    pub fn reset<T: CryptoClient + P256>(&mut self, trussed: &mut T) {
         // Could use `free_credential_heap`, but since we're deleting everything here, this is quicker.
         syscall!(trussed.delete_all(Location::Volatile));
         self.clear_credential_cache();

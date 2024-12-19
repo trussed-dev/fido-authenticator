@@ -15,32 +15,30 @@ name = "usbip"
 required-features = ["dispatch"]
 
 [dependencies]
+cbor-smol = { version = "0.5" }
 ctap-types = { version = "0.3.1", features = ["get-info-full", "large-blobs", "third-party-payment"] }
 cosey = "0.3"
 delog = "0.1.0"
 heapless = "0.7"
+heapless-bytes = "0.3"
 littlefs2-core = "0.1"
 serde = { version = "1.0", default-features = false }
 serde_bytes = { version = "0.11.14", default-features = false }
 serde-indexed = "0.1.0"
 sha2 = { version = "0.10", default-features = false }
-trussed = "0.1"
-trussed-core = "0.1"
+trussed-core = { version = "0.1.0-rc.1", features = ["aes256-cbc", "certificate-client", "chacha8-poly1305", "crypto-client", "ed255", "filesystem-client", "hmac-sha256", "management-client", "p256", "sha256", "ui-client"] }
 trussed-fs-info = "0.1.0"
 trussed-hkdf = { version = "0.2.0" }
 trussed-chunked = { version = "0.1.0", optional = true }
 
 apdu-app = { version = "0.1", optional = true }
-ctaphid-dispatch = { version = "0.1", optional = true }
+ctaphid-app = { version = "0.1.0-rc.1", optional = true }
 iso7816 = { version = "0.1.2", optional = true }
-
-# This dependency is used indirectly via Trussed.  We only want to make sure that we use at least
-# 0.4.1 so that the persistent state is deserialized correctly.
-cbor-smol = { version = ">= 0.4.1" }
 
 [features]
 dispatch = ["apdu-dispatch", "ctaphid-dispatch", "iso7816"]
 apdu-dispatch = ["dep:apdu-app"]
+ctaphid-dispatch = ["dep:ctaphid-app"]
 disable-reset-time-window = []
 
 # enables support for a large-blob array longer than 1024 bytes
@@ -60,6 +58,7 @@ ciborium = { version = "0.2.2" }
 ciborium-io = "0.2.2"
 cipher = "0.4.4"
 ctaphid = { version = "0.3.1", default-features = false }
+ctaphid-dispatch = "0.1"
 delog = { version = "0.1.6", features = ["std-log"] }
 env_logger = "0.11.0"
 hex-literal = "0.4.1"
@@ -82,12 +81,11 @@ x509-parser = "0.16.0"
 features = ["dispatch"]
 
 [patch.crates-io]
-ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "57cb3317878a8593847595319aa03ef17c29ec5b" }
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "eadd27cda0f457caae609e7fa972277e46695bd3" }
-trussed-core = { git = "https://github.com/trussed-dev/trussed.git", rev = "eadd27cda0f457caae609e7fa972277e46695bd3" }
-trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "chunked-v0.1.0" }
-trussed-fs-info = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "fs-info-v0.1.0" }
-trussed-hkdf = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "hkdf-v0.2.0" }
-trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "53eba84d2cd0bcacc3a7096d4b7a2490dcf6f069" }
-trussed-usbip = { git = "https://github.com/Nitrokey/pc-usbip-runner.git", tag = "v0.0.1-nitrokey.5" }
-usbd-ctaphid = { git = "https://github.com/trussed-dev/usbd-ctaphid.git", rev = "dcff9009c3cd1ef9e5b09f8f307aca998fc9a8c8" }
+ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "5a2864c76fea6785d9ffe4c7b6596237d8378755" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "6bba8fde36d05c0227769eb63345744e87d84b2b" }
+trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
+trussed-fs-info = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
+trussed-hkdf = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
+trussed-usbip = { git = "https://github.com/trussed-dev/pc-usbip-runner.git", rev = "60c58eb80685f72d80850b850800fc6a660fe50a" }
+usbd-ctaphid = { git = "https://github.com/trussed-dev/usbd-ctaphid.git", rev = "96bf04e97cfc8077b4d9b6b97b3e34ec3ca3e2fc" }

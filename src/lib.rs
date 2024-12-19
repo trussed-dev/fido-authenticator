@@ -20,7 +20,10 @@ generate_macros!();
 
 use core::time::Duration;
 
-use trussed::{client, syscall, types::Location, Client as TrussedClient};
+use trussed_core::{
+    mechanisms, syscall, types::Location, CertificateClient, CryptoClient, FilesystemClient,
+    ManagementClient, UiClient,
+};
 use trussed_fs_info::{FsInfoClient, FsInfoReply};
 use trussed_hkdf::HkdfClient;
 
@@ -51,13 +54,17 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// - Some Trussed extensions might be required depending on the activated features, see
 ///   [`ExtensionRequirements`][].
 pub trait TrussedRequirements:
-    client::Client
-    + client::P256
-    + client::Chacha8Poly1305
-    + client::Aes256Cbc
-    + client::Sha256
-    + client::HmacSha256
-    + client::Ed255 // + client::Totp
+    CertificateClient
+    + CryptoClient
+    + FilesystemClient
+    + ManagementClient
+    + UiClient
+    + mechanisms::P256
+    + mechanisms::Chacha8Poly1305
+    + mechanisms::Aes256Cbc
+    + mechanisms::Sha256
+    + mechanisms::HmacSha256
+    + mechanisms::Ed255
     + FsInfoClient
     + HkdfClient
     + ExtensionRequirements
@@ -65,13 +72,17 @@ pub trait TrussedRequirements:
 }
 
 impl<T> TrussedRequirements for T where
-    T: client::Client
-        + client::P256
-        + client::Chacha8Poly1305
-        + client::Aes256Cbc
-        + client::Sha256
-        + client::HmacSha256
-        + client::Ed255 // + client::Totp
+    T: CertificateClient
+        + CryptoClient
+        + FilesystemClient
+        + ManagementClient
+        + UiClient
+        + mechanisms::P256
+        + mechanisms::Chacha8Poly1305
+        + mechanisms::Aes256Cbc
+        + mechanisms::Sha256
+        + mechanisms::HmacSha256
+        + mechanisms::Ed255
         + FsInfoClient
         + HkdfClient
         + ExtensionRequirements
@@ -204,7 +215,7 @@ impl core::convert::TryFrom<i32> for SigningAlgorithm {
 
 /// Method to check for user presence.
 pub trait UserPresence: Copy {
-    fn user_present<T: TrussedClient>(
+    fn user_present<T: TrussedRequirements>(
         self,
         trussed: &mut T,
         timeout_milliseconds: u32,
@@ -220,7 +231,7 @@ pub type SilentAuthenticator = Silent;
 pub struct Silent {}
 
 impl UserPresence for Silent {
-    fn user_present<T: TrussedClient>(self, _: &mut T, _: u32) -> Result<()> {
+    fn user_present<T: TrussedRequirements>(self, _: &mut T, _: u32) -> Result<()> {
         Ok(())
     }
 }
@@ -234,15 +245,15 @@ pub type NonSilentAuthenticator = Conforming;
 pub struct Conforming {}
 
 impl UserPresence for Conforming {
-    fn user_present<T: TrussedClient>(
+    fn user_present<T: TrussedRequirements>(
         self,
         trussed: &mut T,
         timeout_milliseconds: u32,
     ) -> Result<()> {
         let result = syscall!(trussed.confirm_user_present(timeout_milliseconds)).result;
         result.map_err(|err| match err {
-            trussed::types::consent::Error::TimedOut => Error::UserActionTimeout,
-            trussed::types::consent::Error::Interrupted => Error::KeepaliveCancel,
+            trussed_core::types::consent::Error::TimedOut => Error::UserActionTimeout,
+            trussed_core::types::consent::Error::Interrupted => Error::KeepaliveCancel,
             _ => Error::OperationDenied,
         })
     }

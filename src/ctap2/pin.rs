@@ -1,16 +1,15 @@
-use crate::TrussedRequirements;
 use cosey::EcdhEsHkdf256PublicKey;
 use ctap_types::{ctap2::client_pin::Permissions, Error, Result};
-use trussed::{
-    cbor_deserialize, cbor_serialize_bytes,
-    client::{CryptoClient, HmacSha256, P256},
+use heapless::String;
+use trussed_core::{
+    mechanisms::{HmacSha256, P256},
     syscall, try_syscall,
     types::{
         Bytes, KeyId, KeySerialization, Location, Mechanism, Message, ShortData, StorageAttributes,
-        String,
     },
+    CryptoClient,
 };
-use trussed_hkdf::{KeyOrData, OkmId};
+use trussed_hkdf::{HkdfClient, KeyOrData, OkmId};
 
 // PIN protocol 1 supports 16 or 32 bytes, PIN protocol 2 requires 32 bytes.
 const PIN_TOKEN_LENGTH: usize = 32;
@@ -153,7 +152,7 @@ pub struct PinProtocolState {
 
 impl PinProtocolState {
     // in spec: initialize(...)
-    pub fn new<T: TrussedRequirements>(trussed: &mut T) -> Self {
+    pub fn new<T: P256>(trussed: &mut T) -> Self {
         Self {
             key_agreement_key: generate_key_agreement_key(trussed),
             shared_secret: None,
@@ -162,7 +161,7 @@ impl PinProtocolState {
         }
     }
 
-    pub fn reset<T: TrussedRequirements>(self, trussed: &mut T) {
+    pub fn reset<T: CryptoClient>(self, trussed: &mut T) {
         if let Some(token) = self.pin_token_v1 {
             token.delete(trussed);
         }
@@ -177,13 +176,13 @@ impl PinProtocolState {
 }
 
 #[derive(Debug)]
-pub struct PinProtocol<'a, T: TrussedRequirements> {
+pub struct PinProtocol<'a, T> {
     trussed: &'a mut T,
     state: &'a mut PinProtocolState,
     version: PinProtocolVersion,
 }
 
-impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
+impl<'a, T: CryptoClient + HkdfClient + HmacSha256 + P256> PinProtocol<'a, T> {
     pub fn new(
         trussed: &'a mut T,
         state: &'a mut PinProtocolState,
@@ -259,7 +258,7 @@ impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
             KeySerialization::EcdhEsHkdf256
         ))
         .serialized_key;
-        let cose_key = cbor_deserialize(&serialized_cose_key).unwrap();
+        let cose_key = cbor_smol::cbor_deserialize(&serialized_cose_key).unwrap();
         syscall!(self.trussed.delete(public_key));
         cose_key
     }
@@ -312,7 +311,8 @@ impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
     }
 
     fn shared_secret_impl(&mut self, peer_key: &EcdhEsHkdf256PublicKey) -> Option<SharedSecret> {
-        let serialized_peer_key: Message = cbor_serialize_bytes(peer_key).ok()?;
+        let mut serialized_peer_key = Message::new();
+        cbor_smol::cbor_serialize_to(peer_key, &mut serialized_peer_key).ok()?;
         let peer_key = try_syscall!(self.trussed.deserialize_p256_key(
             &serialized_peer_key,
             KeySerialization::EcdhEsHkdf256,
@@ -365,7 +365,7 @@ impl<'a, T: TrussedRequirements> PinProtocol<'a, T> {
     // In the spec, the keys are concatenated and the relevant part is selected during the key
     // operations.  For simplicity, we store two separate keys instead.
     fn kdf_v2(&mut self, input: KeyId) -> Option<SharedSecret> {
-        fn hkdf<T: TrussedRequirements>(trussed: &mut T, okm: OkmId, info: &[u8]) -> Option<KeyId> {
+        fn hkdf<T: HkdfClient>(trussed: &mut T, okm: OkmId, info: &[u8]) -> Option<KeyId> {
             let info = Message::from_slice(info).ok()?;
             try_syscall!(trussed.hkdf_expand(okm, info, 32, Location::Volatile))
                 .ok()

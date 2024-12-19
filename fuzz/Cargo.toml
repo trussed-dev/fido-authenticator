@@ -10,6 +10,7 @@ cargo-fuzz = true
 [dependencies]
 ctap-types = { version = "0.3.0", features = ["arbitrary"] }
 libfuzzer-sys = "0.4"
+trussed = { version = "0.1", features = ["clients-1", "certificate-client", "crypto-client", "filesystem-client", "management-client", "aes256-cbc", "ed255", "p256", "sha256"] }
 trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
 
 [dependencies.fido-authenticator]
@@ -23,9 +24,8 @@ doc = false
 bench = false
 
 [patch.crates-io]
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "eadd27cda0f457caae609e7fa972277e46695bd3" }
-trussed-core = { git = "https://github.com/trussed-dev/trussed.git", rev = "eadd27cda0f457caae609e7fa972277e46695bd3" }
-trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "chunked-v0.1.0" }
-trussed-hkdf = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "hkdf-v0.2.0" }
-trussed-fs-info = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "fs-info-v0.1.0" }
-trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "53eba84d2cd0bcacc3a7096d4b7a2490dcf6f069" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "6bba8fde36d05c0227769eb63345744e87d84b2b" }
+trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
+trussed-fs-info = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
+trussed-hkdf = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }

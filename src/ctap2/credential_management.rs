@@ -2,9 +2,10 @@
 
 use core::{cmp, convert::TryFrom};
 
-use trussed::{
+use littlefs2_core::{Path, PathBuf};
+use trussed_core::{
     syscall, try_syscall,
-    types::{DirEntry, Location, Path, PathBuf},
+    types::{DirEntry, Location},
 };
 
 use cosey::PublicKey;
@@ -414,7 +415,7 @@ where
         };
 
         use crate::SigningAlgorithm;
-        use trussed::types::{KeySerialization, Mechanism};
+        use trussed_core::types::{KeySerialization, Mechanism};
 
         let algorithm = SigningAlgorithm::try_from(credential.algorithm)?;
         let cose_public_key = match algorithm {

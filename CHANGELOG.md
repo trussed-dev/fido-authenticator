@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Support CTAP 2.1
 - Serialize PIN hash with `serde-bytes` ([#52][])
 - Reduce the space taken by credential serializaiton ([#59][])
+- Update dependencies:
+  - Replace `trussed` dependency with `trussed-core`
+  - Replace `ctaphid-dispatch` dependeny with `ctaphid-app`
 
 [#26]: https://github.com/solokeys/fido-authenticator/issues/26
 [#28]: https://github.com/solokeys/fido-authenticator/issues/28

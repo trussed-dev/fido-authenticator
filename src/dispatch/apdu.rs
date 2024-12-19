@@ -1,6 +1,5 @@
 use apdu_app::Interface;
 use ctap_types::{serde::error::Error as SerdeError, Error};
-use ctaphid_dispatch::app as ctaphid;
 use iso7816::{command::CommandView, Data, Status};
 
 use crate::{Authenticator, TrussedRequirements, UserPresence};
@@ -72,11 +71,13 @@ where
             0x00..=0x02 => super::try_handle_ctap1(self, apdu, response)?, //self.call_authenticator_u2f(apdu, response),
 
             _ => {
-                match ctaphid::Command::try_from(instruction) {
+                match ctaphid_app::Command::try_from(instruction) {
                     // 0x10
-                    Ok(ctaphid::Command::Cbor) => super::handle_ctap2(self, apdu.data(), response),
-                    Ok(ctaphid::Command::Msg) => super::try_handle_ctap1(self, apdu, response)?,
-                    Ok(ctaphid::Command::Deselect) => apdu_app::App::<R>::deselect(self),
+                    Ok(ctaphid_app::Command::Cbor) => {
+                        super::handle_ctap2(self, apdu.data(), response)
+                    }
+                    Ok(ctaphid_app::Command::Msg) => super::try_handle_ctap1(self, apdu, response)?,
+                    Ok(ctaphid_app::Command::Deselect) => apdu_app::App::<R>::deselect(self),
                     _ => {
                         info!("Unsupported ins for fido app {:02x}", instruction);
                         return Err(iso7816::Status::InstructionNotSupportedOrInvalid);

@@ -6,7 +6,7 @@ use ctap_types::{
 };
 use serde_bytes::ByteArray;
 
-use trussed::{
+use trussed_core::{
     syscall,
     types::{KeySerialization, Location, Mechanism, SignatureSerialization},
 };
@@ -52,7 +52,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         .serialized_key;
         syscall!(self.trussed.delete(public_key));
         let cose_key: cosey::EcdhEsHkdf256PublicKey =
-            trussed::cbor_deserialize(&serialized_cose_public_key).unwrap();
+            cbor_smol::cbor_deserialize(&serialized_cose_public_key).unwrap();
 
         let wrapping_key = self
             .state

@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 
 use ctap_types::Error;
 use ctaphid_dispatch::{command::Command, types::Requester};
-use heapless::Vec;
+use heapless_bytes::Bytes;
 
 const MESSAGE_SIZE: usize = 3072;
 const PACKET_SIZE: usize = 64;
@@ -369,7 +369,7 @@ impl<'a> Pipe<'a> {
                 }
                 match self.interchange.request((
                     request.command,
-                    Vec::from_slice(&self.buffer[..request.length as usize]).unwrap(),
+                    Bytes::from_slice(&self.buffer[..request.length as usize]).unwrap(),
                 )) {
                     Ok(_) => {
                         self.state = State::WaitingOnAuthenticator(request);

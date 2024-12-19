@@ -13,14 +13,14 @@ use ctap_types::{
     webauthn::PublicKeyCredentialUserEntity,
     ByteArray, Error,
 };
-use littlefs2_core::path;
+use littlefs2_core::{path, Path, PathBuf};
 use sha2::{Digest as _, Sha256};
 
-use trussed::{
+use trussed_core::{
     syscall, try_syscall,
     types::{
-        KeyId, KeySerialization, Location, Mechanism, MediumData, Message, Path, PathBuf,
-        SignatureSerialization,
+        KeyId, KeySerialization, Location, Mechanism, MediumData, Message, SignatureSerialization,
+        StorageAttributes,
     },
 };
 
@@ -1517,7 +1517,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 Mechanism::HmacSha256,
                 credential_key,
                 Some(Bytes::from_slice(&[get_assertion_state.uv_performed as u8]).unwrap()),
-                trussed::types::StorageAttributes::new().set_persistence(Location::Volatile)
+                StorageAttributes::new().set_persistence(Location::Volatile)
             ))
             .key;
 

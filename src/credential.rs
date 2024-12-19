@@ -4,8 +4,12 @@ use core::cmp::Ordering;
 
 use serde::Serialize;
 use serde_bytes::ByteArray;
-use trussed::{client, syscall, try_syscall, types::KeyId};
-use trussed_core::types::EncryptedData;
+use trussed_core::{
+    mechanisms::{Chacha8Poly1305, Sha256},
+    syscall, try_syscall,
+    types::{EncryptedData, KeyId},
+    CryptoClient, FilesystemClient,
+};
 
 pub(crate) use ctap_types::{
     // authenticator::{ctap1, ctap2, Error, Request, Response},
@@ -36,15 +40,16 @@ pub enum CtapVersion {
 pub struct CredentialId(pub Bytes<MAX_CREDENTIAL_ID_LENGTH>);
 
 impl CredentialId {
-    fn new<T: client::Chacha8Poly1305 + client::Sha256, C: Serialize>(
+    fn new<T: Chacha8Poly1305, C: Serialize>(
         trussed: &mut T,
         credential: &C,
         key_encryption_key: KeyId,
         rp_id_hash: &[u8; 32],
         nonce: &[u8; 12],
     ) -> Result<Self> {
-        let serialized_credential: SerializedCredential =
-            trussed::cbor_serialize_bytes(credential).map_err(|_| Error::Other)?;
+        let mut serialized_credential = SerializedCredential::new();
+        cbor_smol::cbor_serialize_to(credential, &mut serialized_credential)
+            .map_err(|_| Error::Other)?;
         let message = &serialized_credential;
         // info!("serialized cred = {:?}", message).ok();
         let associated_data = &rp_id_hash[..];
@@ -54,9 +59,13 @@ impl CredentialId {
             associated_data,
             Some(nonce)
         ));
-        trussed::cbor_serialize_bytes(&EncryptedData::from(encrypted_serialized_credential))
-            .map(Self)
-            .map_err(|_| Error::RequestTooLarge)
+        let mut credential_id = Bytes::new();
+        cbor_smol::cbor_serialize_to(
+            &EncryptedData::from(encrypted_serialized_credential),
+            &mut credential_id,
+        )
+        .map_err(|_| Error::RequestTooLarge)?;
+        Ok(Self(credential_id))
     }
 }
 
@@ -64,14 +73,14 @@ struct CredentialIdRef<'a>(&'a [u8]);
 
 impl CredentialIdRef<'_> {
     fn deserialize(&self) -> Result<EncryptedData> {
-        ctap_types::serde::cbor_deserialize(self.0).map_err(|_| Error::InvalidCredential)
+        cbor_smol::cbor_deserialize(self.0).map_err(|_| Error::InvalidCredential)
     }
 }
 
 // TODO: how to determine necessary size?
 // pub type SerializedCredential = Bytes<512>;
 // pub type SerializedCredential = Bytes<256>;
-pub(crate) type SerializedCredential = trussed::types::Message;
+pub(crate) type SerializedCredential = trussed_core::types::Message;
 
 /// Credential keys can either be "discoverable" or not.
 ///
@@ -101,7 +110,7 @@ pub enum Credential {
 }
 
 impl Credential {
-    pub fn try_from<UP: UserPresence, T: client::Client + client::Chacha8Poly1305>(
+    pub fn try_from<UP: UserPresence, T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
         authnr: &mut Authenticator<UP, T>,
         rp_id_hash: &[u8; 32],
         descriptor: &PublicKeyCredentialDescriptorRef,
@@ -109,7 +118,10 @@ impl Credential {
         Self::try_from_bytes(authnr, rp_id_hash, descriptor.id)
     }
 
-    pub fn try_from_bytes<UP: UserPresence, T: client::Client + client::Chacha8Poly1305>(
+    pub fn try_from_bytes<
+        UP: UserPresence,
+        T: CryptoClient + Chacha8Poly1305 + FilesystemClient,
+    >(
         authnr: &mut Authenticator<UP, T>,
         rp_id_hash: &[u8; 32],
         id: &[u8],
@@ -140,7 +152,7 @@ impl Credential {
             .map_err(|_| Error::InvalidCredential)
     }
 
-    pub fn id<T: client::Chacha8Poly1305 + client::Sha256>(
+    pub fn id<T: Chacha8Poly1305 + Sha256>(
         &self,
         trussed: &mut T,
         key_encryption_key: KeyId,
@@ -639,7 +651,7 @@ impl FullCredential {
     // the ID will stay below 255 bytes.
     //
     // Existing keyhandles can still be decoded
-    pub fn id<T: client::Chacha8Poly1305 + client::Sha256>(
+    pub fn id<T: Chacha8Poly1305 + Sha256>(
         &self,
         trussed: &mut T,
         key_encryption_key: KeyId,
@@ -669,11 +681,13 @@ impl FullCredential {
     }
 
     pub fn serialize(&self) -> Result<SerializedCredential> {
-        trussed::cbor_serialize_bytes(self).map_err(|_| Error::Other)
+        let mut serialized_credential = SerializedCredential::new();
+        cbor_smol::cbor_serialize_to(self, &mut serialized_credential).map_err(|_| Error::Other)?;
+        Ok(serialized_credential)
     }
 
     pub fn deserialize(bytes: &SerializedCredential) -> Result<Self> {
-        match ctap_types::serde::cbor_deserialize(bytes) {
+        match cbor_smol::cbor_deserialize(bytes) {
             Ok(s) => Ok(s),
             Err(_) => {
                 info_now!("could not deserialize {:?}", bytes);
@@ -724,7 +738,7 @@ pub struct StrippedCredential {
 
 impl StrippedCredential {
     fn deserialize(bytes: &SerializedCredential) -> Result<Self> {
-        match ctap_types::serde::cbor_deserialize(bytes) {
+        match cbor_smol::cbor_deserialize(bytes) {
             Ok(s) => Ok(s),
             Err(_) => {
                 info_now!("could not deserialize {:?}", bytes);
@@ -733,7 +747,7 @@ impl StrippedCredential {
         }
     }
 
-    pub fn id<T: client::Chacha8Poly1305 + client::Sha256>(
+    pub fn id<T: Chacha8Poly1305>(
         &self,
         trussed: &mut T,
         key_encryption_key: KeyId,
