@@ -26,10 +26,10 @@ serde = { version = "1.0", default-features = false }
 serde_bytes = { version = "0.11.14", default-features = false }
 serde-indexed = "0.1.0"
 sha2 = { version = "0.10", default-features = false }
-trussed-core = { version = "0.1.0-rc.1", features = ["aes256-cbc", "certificate-client", "chacha8-poly1305", "crypto-client", "ed255", "filesystem-client", "hmac-sha256", "management-client", "p256", "sha256", "ui-client"] }
-trussed-fs-info = "0.1.0"
-trussed-hkdf = { version = "0.2.0" }
-trussed-chunked = { version = "0.1.0", optional = true }
+trussed-core = { version = "0.1.0", features = ["aes256-cbc", "certificate-client", "chacha8-poly1305", "crypto-client", "ed255", "filesystem-client", "hmac-sha256", "management-client", "p256", "sha256", "ui-client"] }
+trussed-fs-info = "0.2.0"
+trussed-hkdf = { version = "0.3.0" }
+trussed-chunked = { version = "0.2.0", optional = true }
 
 apdu-app = { version = "0.1", optional = true }
 ctaphid-app = { version = "0.1.0-rc.1", optional = true }
@@ -58,7 +58,7 @@ ciborium = { version = "0.2.2" }
 ciborium-io = "0.2.2"
 cipher = "0.4.4"
 ctaphid = { version = "0.3.1", default-features = false }
-ctaphid-dispatch = "0.1"
+ctaphid-dispatch = "0.2"
 delog = { version = "0.1.6", features = ["std-log"] }
 env_logger = "0.11.0"
 hex-literal = "0.4.1"
@@ -74,18 +74,13 @@ serde_test = "1.0.176"
 trussed = { version = "0.1", features = ["virt"] }
 trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
 trussed-usbip = { version = "0.0.1", default-features = false, features = ["ctaphid"] }
-usbd-ctaphid = "0.1.0"
+usbd-ctaphid = "0.2.0"
 x509-parser = "0.16.0"
 
 [package.metadata.docs.rs]
 features = ["dispatch"]
 
 [patch.crates-io]
-ctaphid-dispatch = { git = "https://github.com/trussed-dev/ctaphid-dispatch.git", rev = "5a2864c76fea6785d9ffe4c7b6596237d8378755" }
 trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "6bba8fde36d05c0227769eb63345744e87d84b2b" }
-trussed-chunked = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
-trussed-fs-info = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
-trussed-hkdf = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
-trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "9355f700831c1a278c334f76382fbf98d82aedcd" }
-trussed-usbip = { git = "https://github.com/trussed-dev/pc-usbip-runner.git", rev = "60c58eb80685f72d80850b850800fc6a660fe50a" }
-usbd-ctaphid = { git = "https://github.com/trussed-dev/usbd-ctaphid.git", rev = "96bf04e97cfc8077b4d9b6b97b3e34ec3ca3e2fc" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "1e1ca03a3a62ea9b802f4070ea4bce002eeb4bec" }
+trussed-usbip = { git = "https://github.com/trussed-dev/pc-usbip-runner.git", rev = "4fe4e4e287dac1d92fcd4f97e8926497bfa9d7a9" }

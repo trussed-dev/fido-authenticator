@@ -12,7 +12,7 @@
 use std::collections::VecDeque;
 
 use ctap_types::Error;
-use ctaphid_dispatch::{command::Command, types::Requester};
+use ctaphid_dispatch::{app::Command, Requester};
 use heapless_bytes::Bytes;
 
 const MESSAGE_SIZE: usize = 3072;

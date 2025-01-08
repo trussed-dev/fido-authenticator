@@ -63,7 +63,7 @@ impl<S: StoreProvider> trussed_usbip::Apps<'static, S, Dispatcher> for FidoApp {
         f: impl FnOnce(
             &mut [&mut dyn ctaphid_dispatch::app::App<
                 'static,
-                { ctaphid_dispatch::types::MESSAGE_SIZE },
+                { ctaphid_dispatch::MESSAGE_SIZE },
             >],
         ) -> T,
     ) -> T {

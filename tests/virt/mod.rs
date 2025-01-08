@@ -18,10 +18,7 @@ use ctaphid::{
     error::{RequestError, ResponseError},
     HidDevice, HidDeviceInfo,
 };
-use ctaphid_dispatch::{
-    dispatch::Dispatch,
-    types::{Channel, Requester},
-};
+use ctaphid_dispatch::{Channel, Dispatch, Requester};
 use fido_authenticator::{Authenticator, Config, Conforming};
 use littlefs2::{path, path::PathBuf};
 use rand::{
