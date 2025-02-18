@@ -120,6 +120,104 @@ fn get_pin_token(
     Ok(shared_secret.decrypt_pin_token(encrypted_pin_token))
 }
 
+fn get_pin_retries(device: &Ctap2) -> u8 {
+    let reply = device.exec(ClientPin::new(2, 1)).unwrap();
+    reply.pin_retries.unwrap()
+}
+
+#[test]
+fn test_get_pin_retries() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        assert_eq!(get_pin_retries(&device), 8);
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin);
+        assert_eq!(get_pin_retries(&device), 8);
+
+        get_pin_token(&device, &key_agreement_key, &shared_secret, pin, 0x01, None).unwrap();
+        assert_eq!(get_pin_retries(&device), 8);
+
+        let result = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            b"654321",
+            0x01,
+            None,
+        );
+        assert_eq!(result, Err(Ctap2Error(0x31)));
+        assert_eq!(get_pin_retries(&device), 7);
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let result = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            b"654321",
+            0x01,
+            None,
+        );
+        assert_eq!(result, Err(Ctap2Error(0x31)));
+        assert_eq!(get_pin_retries(&device), 6);
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let result = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            b"654321",
+            0x01,
+            None,
+        );
+        assert_eq!(result, Err(Ctap2Error(0x34)));
+        assert_eq!(get_pin_retries(&device), 5);
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let result = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            b"654321",
+            0x01,
+            None,
+        );
+        assert_eq!(result, Err(Ctap2Error(0x34)));
+        assert_eq!(get_pin_retries(&device), 5);
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let result = get_pin_token(&device, &key_agreement_key, &shared_secret, pin, 0x01, None);
+        assert_eq!(result, Err(Ctap2Error(0x34)));
+        assert_eq!(get_pin_retries(&device), 5);
+    })
+}
+
+#[test]
+fn test_get_pin_retries_reset() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin);
+
+        let result = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            b"654321",
+            0x01,
+            None,
+        );
+        assert_eq!(result, Err(Ctap2Error(0x31)));
+        assert_eq!(get_pin_retries(&device), 7);
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        get_pin_token(&device, &key_agreement_key, &shared_secret, pin, 0x01, None).unwrap();
+        assert_eq!(get_pin_retries(&device), 8);
+    })
+}
+
 #[test]
 fn test_get_pin_token() {
     let key_agreement_key = KeyAgreementKey::generate();

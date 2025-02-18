@@ -193,6 +193,7 @@ impl Request for ClientPin {
 pub struct ClientPinReply {
     pub key_agreement: Option<Value>,
     pub pin_token: Option<Value>,
+    pub pin_retries: Option<u8>,
 }
 
 impl From<Value> for ClientPinReply {
@@ -201,6 +202,7 @@ impl From<Value> for ClientPinReply {
         Self {
             key_agreement: map.remove(&1),
             pin_token: map.remove(&2),
+            pin_retries: map.remove(&3).map(|value| value.deserialized().unwrap()),
         }
     }
 }
