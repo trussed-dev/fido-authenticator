@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use ciborium::Value;
 use cipher::{BlockDecryptMut as _, BlockEncryptMut as _, KeyIvInit};
+use exhaustive::Exhaustive;
 use hmac::Mac;
 use p256::ecdsa::{signature::Verifier as _, DerSignature, VerifyingKey};
 use rand::RngCore as _;
@@ -395,14 +396,18 @@ impl From<MakeCredential> for Value {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ExtensionsInput {
+    pub hmac_secret: Option<bool>,
     pub third_party_payment: Option<bool>,
 }
 
 impl From<ExtensionsInput> for Value {
     fn from(extensions: ExtensionsInput) -> Value {
         let mut map = Map::default();
+        if let Some(hmac_secret) = extensions.hmac_secret {
+            map.push("hmac-secret", hmac_secret);
+        }
         if let Some(third_party_payment) = extensions.third_party_payment {
             map.push("thirdPartyPayment", third_party_payment);
         }
@@ -410,11 +415,11 @@ impl From<ExtensionsInput> for Value {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default, Exhaustive)]
 pub struct MakeCredentialOptions {
-    rk: Option<bool>,
-    up: Option<bool>,
-    uv: Option<bool>,
+    pub rk: Option<bool>,
+    pub up: Option<bool>,
+    pub uv: Option<bool>,
 }
 
 impl MakeCredentialOptions {
@@ -615,6 +620,24 @@ pub struct AuthData {
     pub flags: u8,
     pub credential: Option<CredentialData>,
     pub extensions: Option<BTreeMap<String, Value>>,
+}
+
+impl AuthData {
+    pub fn up_flag(&self) -> bool {
+        self.flags & 0b1 != 0
+    }
+
+    pub fn uv_flag(&self) -> bool {
+        self.flags & 0b100 != 0
+    }
+
+    pub fn at_flag(&self) -> bool {
+        self.flags & 0b1000000 != 0
+    }
+
+    pub fn ed_flag(&self) -> bool {
+        self.flags & 0b10000000 != 0
+    }
 }
 
 impl From<Vec<u8>> for AuthData {

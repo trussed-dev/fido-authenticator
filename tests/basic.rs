@@ -215,20 +215,44 @@ impl From<AttestationFormatsPreference> for Vec<&'static str> {
 }
 
 #[derive(Debug, Exhaustive)]
+enum PinAuth {
+    NoPin,
+    PinNoToken,
+    PinToken(RequestPinToken),
+}
+
+#[derive(Debug, Exhaustive)]
 struct TestMakeCredential {
-    pin_token: Option<RequestPinToken>,
+    pin_auth: PinAuth,
+    options: Option<MakeCredentialOptions>,
     valid_pub_key_alg: bool,
     attestation_formats_preference: Option<AttestationFormatsPreference>,
+    hmac_secret: bool,
 }
 
 impl TestMakeCredential {
     fn expected_error(&self) -> Option<u8> {
-        if let Some(pin_token) = &self.pin_token {
-            if matches!(
-                pin_token,
-                RequestPinToken::InvalidPermissions | RequestPinToken::InvalidRpId
-            ) {
+        if let Some(options) = self.options {
+            // TODO: this is the current implementation, but the spec allows Some(true)
+            if options.up.is_some() {
+                return Some(0x2c);
+            }
+        }
+        match &self.pin_auth {
+            PinAuth::PinToken(
+                RequestPinToken::InvalidPermissions | RequestPinToken::InvalidRpId,
+            ) => {
                 return Some(0x33);
+            }
+            PinAuth::PinNoToken => {
+                return Some(0x36);
+            }
+            _ => {}
+        }
+        if let Some(options) = self.options {
+            // TODO: review if uv should be always rejected due to the lack of built-in uv
+            if !matches!(self.pin_auth, PinAuth::PinToken(_)) && options.uv == Some(true) {
+                return Some(0x2c);
             }
         }
         if !self.valid_pub_key_alg {
@@ -240,7 +264,6 @@ impl TestMakeCredential {
 
 impl Test for TestMakeCredential {
     fn test(&self) {
-        let key_agreement_key = KeyAgreementKey::generate();
         let pin = b"123456";
         let rp_id = "example.com";
         let invalid_rp_id = "test.com";
@@ -248,19 +271,29 @@ impl Test for TestMakeCredential {
         let client_data_hash = b"";
 
         virt::run_ctap2(|device| {
-            let pin_auth = self.pin_token.as_ref().map(|pin_token| {
-                let shared_secret = get_shared_secret(&device, &key_agreement_key);
-                set_pin(&device, &key_agreement_key, &shared_secret, pin);
-                let pin_token = get_pin_token(
-                    &device,
-                    &key_agreement_key,
-                    &shared_secret,
-                    pin,
-                    pin_token.permissions(0x01, 0x04),
-                    pin_token.rp_id(rp_id, invalid_rp_id),
-                );
-                pin_token.authenticate(client_data_hash)
-            });
+            let mut pin_auth = None;
+            match &self.pin_auth {
+                PinAuth::NoPin => {}
+                PinAuth::PinNoToken => {
+                    let key_agreement_key = KeyAgreementKey::generate();
+                    let shared_secret = get_shared_secret(&device, &key_agreement_key);
+                    set_pin(&device, &key_agreement_key, &shared_secret, pin);
+                }
+                PinAuth::PinToken(pin_token) => {
+                    let key_agreement_key = KeyAgreementKey::generate();
+                    let shared_secret = get_shared_secret(&device, &key_agreement_key);
+                    set_pin(&device, &key_agreement_key, &shared_secret, pin);
+                    let pin_token = get_pin_token(
+                        &device,
+                        &key_agreement_key,
+                        &shared_secret,
+                        pin,
+                        pin_token.permissions(0x01, 0x04),
+                        pin_token.rp_id(rp_id, invalid_rp_id),
+                    );
+                    pin_auth = Some(pin_token.authenticate(client_data_hash));
+                }
+            }
 
             let rp = Rp::new(rp_id);
             let user = User::new(b"id123")
@@ -269,12 +302,20 @@ impl Test for TestMakeCredential {
             let pub_key_alg = if self.valid_pub_key_alg { -7 } else { -11 };
             let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", pub_key_alg)];
             let mut request = MakeCredential::new(client_data_hash, rp, user, pub_key_cred_params);
+            request.options = self.options;
             if let Some(pin_auth) = pin_auth {
                 request.pin_auth = Some(pin_auth);
                 request.pin_protocol = Some(2);
             }
             request.attestation_formats_preference =
                 self.attestation_formats_preference.map(From::from);
+            // TODO: test other extensions and permutations
+            if self.hmac_secret {
+                request.extensions = Some(ExtensionsInput {
+                    hmac_secret: Some(true),
+                    ..Default::default()
+                });
+            }
 
             let result = device.exec(request);
             if let Some(error) = self.expected_error() {
@@ -282,6 +323,15 @@ impl Test for TestMakeCredential {
             } else {
                 let reply = result.unwrap();
                 assert!(reply.auth_data.credential.is_some());
+                assert!(reply.auth_data.up_flag());
+                // TODO: review conditions
+                assert_eq!(
+                    reply.auth_data.uv_flag(),
+                    self.options.and_then(|options| options.uv).unwrap_or(false)
+                        || matches!(self.pin_auth, PinAuth::PinToken(_))
+                );
+                assert!(reply.auth_data.at_flag());
+                assert_eq!(reply.auth_data.ed_flag(), self.hmac_secret);
                 let format = self
                     .attestation_formats_preference
                     .unwrap_or(AttestationFormatsPreference::Packed)
@@ -292,6 +342,12 @@ impl Test for TestMakeCredential {
                 } else {
                     assert_eq!(reply.fmt, AttStmtFormat::None.as_str());
                     assert!(reply.att_stmt.is_none());
+                }
+                if self.hmac_secret {
+                    let extensions = reply.auth_data.extensions.unwrap();
+                    assert_eq!(extensions.get("hmac-secret"), Some(&Value::from(true)));
+                } else {
+                    assert_eq!(reply.auth_data.extensions, None);
                 }
             }
         });
@@ -325,6 +381,7 @@ impl Test for TestGetAssertion {
             if let Some(third_party_payment) = self.mc_third_party_payment {
                 request.extensions = Some(ExtensionsInput {
                     third_party_payment: Some(third_party_payment),
+                    ..Default::default()
                 });
             }
             let response = device.exec(request).unwrap();
@@ -338,6 +395,7 @@ impl Test for TestGetAssertion {
             if let Some(third_party_payment) = self.ga_third_party_payment {
                 request.extensions = Some(ExtensionsInput {
                     third_party_payment: Some(third_party_payment),
+                    ..Default::default()
                 });
             }
             let response = device.exec(request).unwrap();
@@ -397,6 +455,7 @@ impl Test for TestListCredentials {
             if let Some(third_party_payment) = self.third_party_payment {
                 request.extensions = Some(ExtensionsInput {
                     third_party_payment: Some(third_party_payment),
+                    ..Default::default()
                 });
             }
             let reply = device.exec(request).unwrap();
