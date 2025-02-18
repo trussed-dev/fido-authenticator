@@ -4,6 +4,7 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     fmt::{self, Debug, Formatter},
+    ops::Deref as _,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Once,
@@ -20,7 +21,7 @@ use ctaphid::{
 };
 use ctaphid_dispatch::{Channel, Dispatch, Requester};
 use fido_authenticator::{Authenticator, Config, Conforming};
-use littlefs2::{path, path::PathBuf};
+use littlefs2::{object_safe::DynFilesystem, path, path::PathBuf};
 use rand::{
     distributions::{Distribution, Uniform},
     RngCore as _,
@@ -62,45 +63,53 @@ where
     let mut files = options.files;
     files.push((path!("fido/x5c/00").into(), ATTESTATION_CERT.into()));
     files.push((path!("fido/sec/00").into(), ATTESTATION_KEY.into()));
-    with_client(&files, |client| {
-        let mut authenticator = Authenticator::new(
-            client,
-            Conforming {},
-            Config {
-                max_msg_size: 0,
-                skip_up_timeout: None,
-                max_resident_credential_count: options.max_resident_credential_count,
-                large_blobs: None,
-                nfc_transport: false,
-            },
-        );
+    with_client(
+        &files,
+        |client| {
+            let mut authenticator = Authenticator::new(
+                client,
+                Conforming {},
+                Config {
+                    max_msg_size: 0,
+                    skip_up_timeout: None,
+                    max_resident_credential_count: options.max_resident_credential_count,
+                    large_blobs: None,
+                    nfc_transport: false,
+                },
+            );
 
-        let channel = Channel::new();
-        let (rq, rp) = channel.split().unwrap();
+            let channel = Channel::new();
+            let (rq, rp) = channel.split().unwrap();
 
-        thread::scope(|s| {
-            let stop = Arc::new(AtomicBool::new(false));
-            let poller_stop = stop.clone();
-            let poller = s.spawn(move || {
-                let mut dispatch = Dispatch::new(rp);
-                while !poller_stop.load(Ordering::Relaxed) {
-                    dispatch.poll(&mut [&mut authenticator]);
-                    thread::sleep(Duration::from_millis(1));
-                }
-            });
+            thread::scope(|s| {
+                let stop = Arc::new(AtomicBool::new(false));
+                let poller_stop = stop.clone();
+                let poller = s.spawn(move || {
+                    let mut dispatch = Dispatch::new(rp);
+                    while !poller_stop.load(Ordering::Relaxed) {
+                        dispatch.poll(&mut [&mut authenticator]);
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                });
 
-            let runner = s.spawn(move || {
-                let device = Device::new(rq);
-                let device = ctaphid::Device::new(device, DeviceInfo).unwrap();
-                f(device)
-            });
+                let runner = s.spawn(move || {
+                    let device = Device::new(rq);
+                    let device = ctaphid::Device::new(device, DeviceInfo).unwrap();
+                    f(device)
+                });
 
-            let result = runner.join();
-            stop.store(true, Ordering::Relaxed);
-            poller.join().unwrap();
-            result.unwrap()
-        })
-    })
+                let result = runner.join();
+                stop.store(true, Ordering::Relaxed);
+                poller.join().unwrap();
+                result.unwrap()
+            })
+        },
+        |ifs| {
+            if let Some(inspect_ifs) = options.inspect_ifs {
+                inspect_ifs(ifs);
+            }
+        },
+    )
 }
 
 pub fn run_ctap2<F, T>(f: F) -> T
@@ -119,10 +128,13 @@ where
     run_ctaphid_with_options(options, |device| f(Ctap2(device)))
 }
 
-#[derive(Debug, Default)]
+pub type InspectFsFn = Box<dyn Fn(&dyn DynFilesystem)>;
+
+#[derive(Default)]
 pub struct Options {
     pub files: Vec<(PathBuf, Vec<u8>)>,
     pub max_resident_credential_count: Option<u32>,
+    pub inspect_ifs: Option<InspectFsFn>,
 }
 
 pub struct Ctap2<'a>(ctaphid::Device<Device<'a>>);
@@ -235,9 +247,10 @@ impl HidDevice for Device<'_> {
     }
 }
 
-fn with_client<F, T>(files: &[(PathBuf, Vec<u8>)], f: F) -> T
+fn with_client<F, F2, T>(files: &[(PathBuf, Vec<u8>)], f: F, inspect_ifs: F2) -> T
 where
     F: FnOnce(Client<Ram>) -> T,
+    F2: FnOnce(&dyn DynFilesystem),
 {
     virt::with_platform(Ram::default(), |mut platform| {
         // virt always uses the same seed -- request some random bytes to reach a somewhat random
@@ -257,7 +270,7 @@ where
             ifs.write(path, content).unwrap();
         }
 
-        platform.run_client_with_backends(
+        let result = platform.run_client_with_backends(
             "fido",
             Dispatcher::default(),
             &[
@@ -265,6 +278,10 @@ where
                 BackendId::Core,
             ],
             f,
-        )
+        );
+
+        inspect_ifs(ifs.deref());
+
+        result
     })
 }

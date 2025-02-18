@@ -1,5 +1,6 @@
 #![cfg(feature = "dispatch")]
 
+pub mod fs;
 pub mod virt;
 pub mod webauthn;
 
@@ -12,7 +13,8 @@ use ciborium::Value;
 use exhaustive::Exhaustive;
 use hex_literal::hex;
 
-use virt::{Ctap2, Ctap2Error};
+use fs::list_fs;
+use virt::{Ctap2, Ctap2Error, Options};
 use webauthn::{
     AttStmtFormat, ClientPin, CredentialManagement, CredentialManagementParams, ExtensionsInput,
     GetAssertion, GetAssertionOptions, GetInfo, GetNextAssertion, KeyAgreementKey, MakeCredential,
@@ -51,7 +53,15 @@ fn test_ping() {
 
 #[test]
 fn test_get_info() {
-    virt::run_ctap2(|device| {
+    let options = Options {
+        inspect_ifs: Some(Box::new(|ifs| {
+            let mut files = list_fs(ifs);
+            files.remove_standard();
+            files.assert_empty();
+        })),
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
         let reply = device.exec(GetInfo).unwrap();
         assert!(reply.versions.contains(&"FIDO_2_0".to_owned()));
         assert!(reply.versions.contains(&"FIDO_2_1".to_owned()));
@@ -93,7 +103,16 @@ fn set_pin(
 #[test]
 fn test_set_pin() {
     let key_agreement_key = KeyAgreementKey::generate();
-    virt::run_ctap2(|device| {
+    let options = Options {
+        inspect_ifs: Some(Box::new(|ifs| {
+            let mut files = list_fs(ifs);
+            files.remove_standard();
+            files.remove_state();
+            files.assert_empty();
+        })),
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
         let reply = device.exec(GetInfo).unwrap();
         let options = reply.options.unwrap();
         assert_eq!(options.get("clientPin"), Some(&Value::from(false)));
@@ -576,7 +595,27 @@ impl Test for TestMakeCredential {
         // TODO: client data
         let client_data_hash = b"";
 
-        virt::run_ctap2(|device| {
+        let is_rk = self
+            .options
+            .and_then(|options| options.rk)
+            .unwrap_or_default();
+        let is_successful = self.expected_error().is_none();
+        let options = Options {
+            inspect_ifs: Some(Box::new(move |ifs| {
+                let mut files = list_fs(ifs);
+                files.remove_standard();
+                files.try_remove_state();
+                let n = files.try_remove_keys();
+                assert!(n <= 2, "n: {n}, files: {files:?}");
+                if is_rk && is_successful {
+                    assert_eq!(files.try_remove_rks(), 1, "{files:?}");
+                }
+                files.assert_empty();
+            })),
+            ..Default::default()
+        };
+
+        virt::run_ctap2_with_options(options, |device| {
             let mut pin_auth = None;
             match &self.pin_auth {
                 PinAuth::NoPin => {}
@@ -850,7 +889,19 @@ fn run_test_get_next_assertion(device: &Ctap2) {
 
 #[test]
 fn test_get_next_assertion() {
-    virt::run_ctap2(|device| {
+    let options = Options {
+        inspect_ifs: Some(Box::new(move |ifs| {
+            let mut files = list_fs(ifs);
+            files.remove_standard();
+            files.remove_state();
+            assert_eq!(files.try_remove_keys(), 4);
+            assert_eq!(files.try_remove_rks(), 3);
+            files.assert_empty();
+        })),
+        ..Default::default()
+    };
+
+    virt::run_ctap2_with_options(options, |device| {
         run_test_get_next_assertion(&device);
     });
 }
@@ -858,7 +909,19 @@ fn test_get_next_assertion() {
 #[test]
 fn test_get_next_assertion_multi_rp() {
     let client_data_hash = b"";
-    virt::run_ctap2(|device| {
+    let options = Options {
+        inspect_ifs: Some(Box::new(move |ifs| {
+            let mut files = list_fs(ifs);
+            files.remove_standard();
+            files.remove_state();
+            assert_eq!(files.try_remove_keys(), 10);
+            assert_eq!(files.try_remove_rks(), 9);
+            files.assert_empty();
+        })),
+        ..Default::default()
+    };
+
+    virt::run_ctap2_with_options(options, |device| {
         let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
         for rp in ["test.com", "something.dev", "else.foobar"] {
             for user in [b"john.doe", b"jane.doe"] {

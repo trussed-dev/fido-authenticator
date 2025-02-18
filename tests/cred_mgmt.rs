@@ -1,6 +1,7 @@
 #![cfg(feature = "dispatch")]
 
 pub mod authenticator;
+pub mod fs;
 pub mod virt;
 pub mod webauthn;
 
@@ -9,6 +10,7 @@ use std::collections::BTreeSet;
 use littlefs2::path::PathBuf;
 
 use authenticator::{Authenticator, Pin};
+use fs::list_fs;
 use virt::{Ctap2Error, Options};
 use webauthn::{CredentialData, PubKeyCredDescriptor, Rp, User};
 
@@ -112,7 +114,19 @@ fn generate_user(i: u8) -> User {
 
 #[test]
 fn test_list_credentials() {
-    virt::run_ctap2(|device| {
+    let options = Options {
+        inspect_ifs: Some(Box::new(move |ifs| {
+            let mut files = list_fs(ifs);
+            files.remove_standard();
+            files.remove_state();
+            assert_eq!(files.try_remove_keys(), 11);
+            assert_eq!(files.try_remove_rks(), 10);
+            files.assert_empty();
+        })),
+        ..Default::default()
+    };
+
+    virt::run_ctap2_with_options(options, |device| {
         let authenticator = Authenticator::new(device).set_pin(b"123456");
         let mut cred_mgmt = CredMgmt::new(authenticator);
         for i in 0..10 {
@@ -127,7 +141,19 @@ fn test_list_credentials() {
 
 #[test]
 fn test_list_credentials_multi() {
-    virt::run_ctap2(|device| {
+    let options = Options {
+        inspect_ifs: Some(Box::new(move |ifs| {
+            let mut files = list_fs(ifs);
+            files.remove_standard();
+            files.remove_state();
+            assert_eq!(files.try_remove_keys(), 11);
+            assert_eq!(files.try_remove_rks(), 10);
+            files.assert_empty();
+        })),
+        ..Default::default()
+    };
+
+    virt::run_ctap2_with_options(options, |device| {
         let authenticator = Authenticator::new(device).set_pin(b"123456");
         let mut cred_mgmt = CredMgmt::new(authenticator);
         for (i, n) in [1, 3, 1, 3, 2].into_iter().enumerate() {
@@ -144,7 +170,19 @@ fn test_list_credentials_multi() {
 
 #[test]
 fn test_list_credentials_delete() {
-    virt::run_ctap2(|device| {
+    let options = Options {
+        inspect_ifs: Some(Box::new(move |ifs| {
+            let mut files = list_fs(ifs);
+            files.remove_standard();
+            files.remove_state();
+            assert_eq!(files.try_remove_keys(), 9);
+            assert_eq!(files.try_remove_rks(), 8);
+            files.assert_empty();
+        })),
+        ..Default::default()
+    };
+
+    virt::run_ctap2_with_options(options, |device| {
         let authenticator = Authenticator::new(device).set_pin(b"123456");
         let mut cred_mgmt = CredMgmt::new(authenticator);
         for (i, n) in [1, 3, 1, 3, 2].into_iter().enumerate() {
@@ -165,8 +203,51 @@ fn test_list_credentials_delete() {
 }
 
 #[test]
+fn test_list_credentials_delete_all() {
+    let options = Options {
+        inspect_ifs: Some(Box::new(move |ifs| {
+            let mut files = list_fs(ifs);
+            files.remove_standard();
+            files.remove_state();
+            assert_eq!(files.try_remove_keys(), 1);
+            files.remove_empty_dir("fido/dat/rk");
+            files.assert_empty();
+        })),
+        ..Default::default()
+    };
+
+    virt::run_ctap2_with_options(options, |device| {
+        let authenticator = Authenticator::new(device).set_pin(b"123456");
+        let mut cred_mgmt = CredMgmt::new(authenticator);
+        for (i, n) in [1, 3, 1, 3, 2].into_iter().enumerate() {
+            let rp = generate_rp(i);
+            for j in 0..n {
+                let user = generate_user(j);
+                cred_mgmt.make_credential(rp.clone(), user).unwrap();
+            }
+        }
+
+        for _ in 0..10 {
+            cred_mgmt.delete_credential_at(0).unwrap();
+        }
+    })
+}
+
+#[test]
 fn test_list_credentials_update_user() {
-    virt::run_ctap2(|device| {
+    let options = Options {
+        inspect_ifs: Some(Box::new(move |ifs| {
+            let mut files = list_fs(ifs);
+            files.remove_standard();
+            files.remove_state();
+            assert_eq!(files.try_remove_keys(), 11);
+            assert_eq!(files.try_remove_rks(), 10);
+            files.assert_empty();
+        })),
+        ..Default::default()
+    };
+
+    virt::run_ctap2_with_options(options, |device| {
         let authenticator = Authenticator::new(device).set_pin(b"123456");
         let mut cred_mgmt = CredMgmt::new(authenticator);
         for (i, n) in [1, 3, 1, 3, 2].into_iter().enumerate() {
@@ -256,13 +337,17 @@ fn test_max_credential_count() {
 fn test_filesystem_full() {
     let mut options = Options {
         max_resident_credential_count: Some(10),
+        inspect_ifs: Some(Box::new(|ifs| {
+            let blocks = ifs.available_blocks().unwrap();
+            assert!(blocks < 5, "{blocks}");
+            assert!(blocks > 1, "{blocks}");
+        })),
         ..Default::default()
     };
     for i in 0..80 {
         let path = PathBuf::try_from(format!("/test/{i}").as_str()).unwrap();
         options.files.push((path, vec![0; 512]));
     }
-    // TODO: inspect filesystem after run and check remaining blocks
     virt::run_ctap2_with_options(options, |device| {
         let mut authenticator = Authenticator::new(device).set_pin(b"123456");
         let metadata = authenticator.credentials_metadata();
@@ -305,13 +390,17 @@ fn test_filesystem_full() {
 fn test_filesystem_full_update_user() {
     let mut options = Options {
         max_resident_credential_count: Some(10),
+        inspect_ifs: Some(Box::new(|ifs| {
+            let blocks = ifs.available_blocks().unwrap();
+            assert!(blocks < 5, "{blocks}");
+            assert!(blocks > 1, "{blocks}");
+        })),
         ..Default::default()
     };
     for i in 0..80 {
         let path = PathBuf::try_from(format!("/test/{i}").as_str()).unwrap();
         options.files.push((path, vec![0; 512]));
     }
-    // TODO: inspect filesystem after run and check remaining blocks
     virt::run_ctap2_with_options(options, |device| {
         let authenticator = Authenticator::new(device).set_pin(b"123456");
         let mut cred_mgmt = CredMgmt::new(authenticator);
