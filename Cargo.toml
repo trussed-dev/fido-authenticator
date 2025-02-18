@@ -62,6 +62,7 @@ ctaphid = { version = "0.3.1", default-features = false }
 ctaphid-dispatch = "0.2"
 delog = { version = "0.1.6", features = ["std-log"] }
 env_logger = "0.11.0"
+exhaustive = "0.2.2"
 hex-literal = "0.4.1"
 hmac = "0.12.1"
 interchange = "0.3.0"

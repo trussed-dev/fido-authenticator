@@ -3,9 +3,10 @@
 pub mod virt;
 pub mod webauthn;
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt::Debug};
 
 use ciborium::Value;
+use exhaustive::Exhaustive;
 use hex_literal::hex;
 
 use virt::{Ctap2, Ctap2Error};
@@ -14,6 +15,28 @@ use webauthn::{
     GetAssertion, GetInfo, KeyAgreementKey, MakeCredential, MakeCredentialOptions, PinToken,
     PubKeyCredDescriptor, PubKeyCredParam, PublicKey, Rp, SharedSecret, User,
 };
+
+trait Test: Debug {
+    fn test(&self);
+
+    fn run(&self) {
+        println!("{}", "=".repeat(80));
+        println!("Running test:");
+        println!("{self:#?}");
+        println!();
+
+        self.test();
+    }
+
+    fn run_all()
+    where
+        Self: Exhaustive,
+    {
+        for test in Self::iter_exhaustive(None) {
+            test.run();
+        }
+    }
+}
 
 #[test]
 fn test_ping() {
@@ -107,13 +130,34 @@ fn test_get_pin_token() {
     })
 }
 
-#[derive(Clone, Debug)]
-struct RequestPinToken {
-    permissions: u8,
-    rp_id: Option<String>,
+#[derive(Clone, Debug, Exhaustive)]
+enum RequestPinToken {
+    InvalidPermissions,
+    InvalidRpId,
+    NoRpId,
+    ValidRpId,
 }
 
-#[derive(Clone, Copy, Debug)]
+impl RequestPinToken {
+    fn permissions(&self, valid: u8, invalid: u8) -> u8 {
+        if matches!(self, Self::InvalidPermissions) {
+            invalid
+        } else {
+            valid
+        }
+    }
+
+    fn rp_id(&self, valid: &str, invalid: &str) -> Option<String> {
+        match self {
+            Self::InvalidPermissions => None,
+            Self::InvalidRpId => Some(invalid.to_owned()),
+            Self::NoRpId => None,
+            Self::ValidRpId => Some(valid.to_owned()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Exhaustive)]
 enum AttestationFormatsPreference {
     Empty,
     None,
@@ -125,16 +169,6 @@ enum AttestationFormatsPreference {
 }
 
 impl AttestationFormatsPreference {
-    const ALL: &'static [Self] = &[
-        Self::Empty,
-        Self::None,
-        Self::Packed,
-        Self::NonePacked,
-        Self::PackedNone,
-        Self::OtherNonePacked,
-        Self::MultiOtherNonePacked,
-    ];
-
     fn format(&self) -> Option<AttStmtFormat> {
         match self {
             Self::Empty | Self::Packed | Self::PackedNone => Some(AttStmtFormat::Packed),
@@ -180,23 +214,36 @@ impl From<AttestationFormatsPreference> for Vec<&'static str> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Exhaustive)]
 struct TestMakeCredential {
     pin_token: Option<RequestPinToken>,
-    pub_key_alg: i32,
+    valid_pub_key_alg: bool,
     attestation_formats_preference: Option<AttestationFormatsPreference>,
 }
 
 impl TestMakeCredential {
-    fn run(&self) {
-        println!("{}", "=".repeat(80));
-        println!("Running test:");
-        println!("{self:#?}");
-        println!();
+    fn expected_error(&self) -> Option<u8> {
+        if let Some(pin_token) = &self.pin_token {
+            if matches!(
+                pin_token,
+                RequestPinToken::InvalidPermissions | RequestPinToken::InvalidRpId
+            ) {
+                return Some(0x33);
+            }
+        }
+        if !self.valid_pub_key_alg {
+            return Some(0x26);
+        }
+        None
+    }
+}
 
+impl Test for TestMakeCredential {
+    fn test(&self) {
         let key_agreement_key = KeyAgreementKey::generate();
         let pin = b"123456";
         let rp_id = "example.com";
+        let invalid_rp_id = "test.com";
         // TODO: client data
         let client_data_hash = b"";
 
@@ -209,8 +256,8 @@ impl TestMakeCredential {
                     &key_agreement_key,
                     &shared_secret,
                     pin,
-                    pin_token.permissions,
-                    pin_token.rp_id.clone(),
+                    pin_token.permissions(0x01, 0x04),
+                    pin_token.rp_id(rp_id, invalid_rp_id),
                 );
                 pin_token.authenticate(client_data_hash)
             });
@@ -219,7 +266,8 @@ impl TestMakeCredential {
             let user = User::new(b"id123")
                 .name("john.doe")
                 .display_name("John Doe");
-            let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", self.pub_key_alg)];
+            let pub_key_alg = if self.valid_pub_key_alg { -7 } else { -11 };
+            let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", pub_key_alg)];
             let mut request = MakeCredential::new(client_data_hash, rp, user, pub_key_cred_params);
             if let Some(pin_auth) = pin_auth {
                 request.pin_auth = Some(pin_auth);
@@ -248,79 +296,21 @@ impl TestMakeCredential {
             }
         });
     }
-
-    fn expected_error(&self) -> Option<u8> {
-        if let Some(pin_token) = &self.pin_token {
-            if pin_token.permissions != 0x01 {
-                return Some(0x33);
-            }
-            if let Some(rp_id) = &pin_token.rp_id {
-                if rp_id != "example.com" {
-                    return Some(0x33);
-                }
-            }
-        }
-        if self.pub_key_alg != -7 {
-            return Some(0x26);
-        }
-        None
-    }
 }
 
 #[test]
 fn test_make_credential() {
-    let pin_tokens = [
-        None,
-        Some(RequestPinToken {
-            permissions: 0x01,
-            rp_id: None,
-        }),
-        Some(RequestPinToken {
-            permissions: 0x01,
-            rp_id: Some("example.com".to_owned()),
-        }),
-        Some(RequestPinToken {
-            permissions: 0x01,
-            rp_id: Some("test.com".to_owned()),
-        }),
-        Some(RequestPinToken {
-            permissions: 0x04,
-            rp_id: None,
-        }),
-    ];
-    for pin_token in pin_tokens {
-        for pub_key_alg in [-7, -11] {
-            TestMakeCredential {
-                pin_token: pin_token.clone(),
-                pub_key_alg,
-                attestation_formats_preference: None,
-            }
-            .run();
-            for attestation_formats_preference in AttestationFormatsPreference::ALL {
-                TestMakeCredential {
-                    pin_token: pin_token.clone(),
-                    pub_key_alg,
-                    attestation_formats_preference: Some(*attestation_formats_preference),
-                }
-                .run();
-            }
-        }
-    }
+    TestMakeCredential::run_all();
 }
 
-#[derive(Debug)]
+#[derive(Debug, Exhaustive)]
 struct TestGetAssertion {
     mc_third_party_payment: Option<bool>,
     ga_third_party_payment: Option<bool>,
 }
 
-impl TestGetAssertion {
-    fn run(&self) {
-        println!("{}", "=".repeat(80));
-        println!("Running test:");
-        println!("{self:#?}");
-        println!();
-
+impl Test for TestGetAssertion {
+    fn test(&self) {
         let rp_id = "example.com";
         // TODO: client data
         let client_data_hash = &[0; 32];
@@ -372,25 +362,17 @@ impl TestGetAssertion {
 
 #[test]
 fn test_get_assertion() {
-    for mc_third_party_payment in [Some(false), Some(true), None] {
-        for ga_third_party_payment in [Some(false), Some(true), None] {
-            TestGetAssertion {
-                mc_third_party_payment,
-                ga_third_party_payment,
-            }
-            .run()
-        }
-    }
+    TestGetAssertion::run_all();
 }
 
-#[derive(Debug)]
+#[derive(Debug, Exhaustive)]
 struct TestListCredentials {
     pin_token_rp_id: bool,
     third_party_payment: Option<bool>,
 }
 
-impl TestListCredentials {
-    fn run(&self) {
+impl Test for TestListCredentials {
+    fn test(&self) {
         let key_agreement_key = KeyAgreementKey::generate();
         let pin = b"123456";
         let rp_id = "example.com";
@@ -483,17 +465,5 @@ impl TestListCredentials {
 
 #[test]
 fn test_list_credentials() {
-    for pin_token_rp_id in [false, true] {
-        for third_party_payment in [Some(false), Some(true), None] {
-            let test = TestListCredentials {
-                pin_token_rp_id,
-                third_party_payment,
-            };
-            println!("{}", "=".repeat(80));
-            println!("Running test:");
-            println!("{test:#?}");
-            println!();
-            test.run();
-        }
-    }
+    TestListCredentials::run_all();
 }

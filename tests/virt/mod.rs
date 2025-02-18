@@ -85,7 +85,7 @@ where
                 let mut dispatch = Dispatch::new(rp);
                 while !poller_stop.load(Ordering::Relaxed) {
                     dispatch.poll(&mut [&mut authenticator]);
-                    thread::sleep(Duration::from_millis(10));
+                    thread::sleep(Duration::from_millis(1));
                 }
             });
 
@@ -230,7 +230,7 @@ impl HidDevice for Device<'_> {
                 };
             }
 
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(1));
         }
     }
 }
