@@ -113,6 +113,83 @@ fn test_set_pin() {
     })
 }
 
+fn get_pin_hash_enc(shared_secret: &SharedSecret, pin: &[u8]) -> Vec<u8> {
+    use sha2::{Digest as _, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(pin);
+    let pin_hash = hasher.finalize();
+    shared_secret.encrypt(&pin_hash[..16])
+}
+
+fn change_pin(
+    device: &Ctap2,
+    key_agreement_key: &KeyAgreementKey,
+    shared_secret: &SharedSecret,
+    old_pin: &[u8],
+    new_pin: &[u8],
+) -> Result<(), Ctap2Error> {
+    let old_pin_hash_enc = get_pin_hash_enc(shared_secret, old_pin);
+    let mut padded_new_pin = [0; 64];
+    padded_new_pin[..new_pin.len()].copy_from_slice(new_pin);
+    let new_pin_enc = shared_secret.encrypt(&padded_new_pin);
+    let mut pin_auth_data = Vec::new();
+    pin_auth_data.extend_from_slice(&new_pin_enc);
+    pin_auth_data.extend_from_slice(&old_pin_hash_enc);
+    let pin_auth = shared_secret.authenticate(&pin_auth_data);
+    let mut request = ClientPin::new(2, 4);
+    request.key_agreement = Some(key_agreement_key.public_key());
+    request.pin_hash_enc = Some(old_pin_hash_enc);
+    request.new_pin_enc = Some(new_pin_enc);
+    request.pin_auth = Some(pin_auth);
+    device.exec(request).map(|_| ())
+}
+
+#[test]
+fn test_change_pin() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin1 = b"123456";
+    let pin2 = b"654321";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let result = change_pin(&device, &key_agreement_key, &shared_secret, pin1, pin2);
+        // TODO: review error code
+        assert_eq!(result, Err(Ctap2Error(0x35)));
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin1).unwrap();
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        change_pin(&device, &key_agreement_key, &shared_secret, pin1, pin2).unwrap();
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let result = change_pin(&device, &key_agreement_key, &shared_secret, pin1, pin2);
+        assert_eq!(result, Err(Ctap2Error(0x31)));
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let result = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin1,
+            0x01,
+            None,
+        );
+        assert_eq!(result, Err(Ctap2Error(0x31)));
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin2,
+            0x01,
+            None,
+        )
+        .unwrap();
+    })
+}
+
 fn get_pin_token(
     device: &Ctap2,
     key_agreement_key: &KeyAgreementKey,
@@ -121,12 +198,7 @@ fn get_pin_token(
     permissions: u8,
     rp_id: Option<String>,
 ) -> Result<PinToken, Ctap2Error> {
-    use sha2::{Digest as _, Sha256};
-
-    let mut hasher = Sha256::new();
-    hasher.update(pin);
-    let pin_hash = hasher.finalize();
-    let pin_hash_enc = shared_secret.encrypt(&pin_hash[..16]);
+    let pin_hash_enc = get_pin_hash_enc(shared_secret, pin);
     let mut request = ClientPin::new(2, 9);
     request.key_agreement = Some(key_agreement_key.public_key());
     request.pin_hash_enc = Some(pin_hash_enc);
