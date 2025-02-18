@@ -562,6 +562,7 @@ pub struct GetAssertion {
     client_data_hash: Vec<u8>,
     pub allow_list: Option<Vec<PubKeyCredDescriptor>>,
     pub extensions: Option<ExtensionsInput>,
+    pub options: Option<GetAssertionOptions>,
 }
 
 impl GetAssertion {
@@ -571,6 +572,7 @@ impl GetAssertion {
             client_data_hash: client_data_hash.into(),
             allow_list: None,
             extensions: None,
+            options: None,
         }
     }
 }
@@ -587,6 +589,9 @@ impl From<GetAssertion> for Value {
         if let Some(extensions) = request.extensions {
             map.push(0x04, extensions);
         }
+        if let Some(options) = request.options {
+            map.push(0x05, options);
+        }
         map.into()
     }
 }
@@ -597,6 +602,38 @@ impl Request for GetAssertion {
     type Reply = GetAssertionReply;
 }
 
+#[derive(Clone, Copy, Debug, Default, Exhaustive)]
+pub struct GetAssertionOptions {
+    pub up: Option<bool>,
+    pub uv: Option<bool>,
+}
+
+impl GetAssertionOptions {
+    pub fn up(mut self, up: bool) -> Self {
+        self.up = Some(up);
+        self
+    }
+
+    pub fn uv(mut self, uv: bool) -> Self {
+        self.uv = Some(uv);
+        self
+    }
+}
+
+impl From<GetAssertionOptions> for Value {
+    fn from(options: GetAssertionOptions) -> Value {
+        let mut map = Map::default();
+        if let Some(up) = options.up {
+            map.push("up", up);
+        }
+        if let Some(uv) = options.uv {
+            map.push("uv", uv);
+        }
+        map.into()
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub struct GetAssertionReply {
     pub credential: PubKeyCredDescriptor,
     pub auth_data: AuthData,

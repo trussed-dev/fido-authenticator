@@ -12,8 +12,9 @@ use hex_literal::hex;
 use virt::{Ctap2, Ctap2Error};
 use webauthn::{
     AttStmtFormat, ClientPin, CredentialManagement, CredentialManagementParams, ExtensionsInput,
-    GetAssertion, GetInfo, KeyAgreementKey, MakeCredential, MakeCredentialOptions, PinToken,
-    PubKeyCredDescriptor, PubKeyCredParam, PublicKey, Rp, SharedSecret, User,
+    GetAssertion, GetAssertionOptions, GetInfo, KeyAgreementKey, MakeCredential,
+    MakeCredentialOptions, PinToken, PubKeyCredDescriptor, PubKeyCredParam, PublicKey, Rp,
+    SharedSecret, User,
 };
 
 trait Test: Debug {
@@ -361,8 +362,25 @@ fn test_make_credential() {
 
 #[derive(Debug, Exhaustive)]
 struct TestGetAssertion {
+    rk: bool,
+    allow_list: bool,
+    options: Option<GetAssertionOptions>,
     mc_third_party_payment: Option<bool>,
     ga_third_party_payment: Option<bool>,
+}
+
+impl TestGetAssertion {
+    fn expected_error(&self) -> Option<u8> {
+        if let Some(options) = self.options {
+            if options.uv == Some(true) {
+                return Some(0x2c);
+            }
+        }
+        if !self.rk && !self.allow_list {
+            return Some(0x2e);
+        }
+        None
+    }
 }
 
 impl Test for TestGetAssertion {
@@ -371,6 +389,7 @@ impl Test for TestGetAssertion {
         // TODO: client data
         let client_data_hash = &[0; 32];
 
+        // TODO: test with PIN
         virt::run_ctap2(|device| {
             let rp = Rp::new(rp_id);
             let user = User::new(b"id123")
@@ -378,6 +397,9 @@ impl Test for TestGetAssertion {
                 .display_name("John Doe");
             let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
             let mut request = MakeCredential::new(client_data_hash, rp, user, pub_key_cred_params);
+            if self.rk {
+                request.options = Some(MakeCredentialOptions::default().rk(true));
+            }
             if let Some(third_party_payment) = self.mc_third_party_payment {
                 request.extensions = Some(ExtensionsInput {
                     third_party_payment: Some(third_party_payment),
@@ -388,20 +410,41 @@ impl Test for TestGetAssertion {
             let credential = response.auth_data.credential.unwrap();
 
             let mut request = GetAssertion::new(rp_id, client_data_hash);
-            request.allow_list = Some(vec![PubKeyCredDescriptor::new(
-                "public-key",
-                credential.id.clone(),
-            )]);
+            // TODO: test more cases:
+            // - multiple credentials in allow list
+            // - invalid allow list
+            if self.allow_list {
+                request.allow_list = Some(vec![PubKeyCredDescriptor::new(
+                    "public-key",
+                    credential.id.clone(),
+                )]);
+            }
             if let Some(third_party_payment) = self.ga_third_party_payment {
                 request.extensions = Some(ExtensionsInput {
                     third_party_payment: Some(third_party_payment),
                     ..Default::default()
                 });
             }
-            let response = device.exec(request).unwrap();
+            request.options = self.options;
+            let result = device.exec(request);
+            if let Some(error) = self.expected_error() {
+                assert_eq!(result, Err(Ctap2Error(error)));
+                return;
+            }
+            let response = result.unwrap();
             assert_eq!(response.credential.ty, "public-key");
             assert_eq!(response.credential.id, credential.id);
             assert_eq!(response.auth_data.credential, None);
+            assert_eq!(
+                response.auth_data.up_flag(),
+                self.options.and_then(|options| options.up).unwrap_or(true)
+            );
+            assert!(!response.auth_data.uv_flag());
+            assert!(!response.auth_data.at_flag());
+            assert_eq!(
+                response.auth_data.ed_flag(),
+                self.ga_third_party_payment.unwrap_or_default()
+            );
             credential.verify_assertion(&response.auth_data, client_data_hash, &response.signature);
             if self.ga_third_party_payment.unwrap_or_default() {
                 let extensions = response.auth_data.extensions.unwrap();
