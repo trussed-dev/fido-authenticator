@@ -3,7 +3,10 @@
 pub mod virt;
 pub mod webauthn;
 
-use std::{collections::BTreeMap, fmt::Debug};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Debug,
+};
 
 use ciborium::Value;
 use exhaustive::Exhaustive;
@@ -12,7 +15,7 @@ use hex_literal::hex;
 use virt::{Ctap2, Ctap2Error};
 use webauthn::{
     AttStmtFormat, ClientPin, CredentialManagement, CredentialManagementParams, ExtensionsInput,
-    GetAssertion, GetAssertionOptions, GetInfo, KeyAgreementKey, MakeCredential,
+    GetAssertion, GetAssertionOptions, GetInfo, GetNextAssertion, KeyAgreementKey, MakeCredential,
     MakeCredentialOptions, PinToken, PubKeyCredDescriptor, PubKeyCredParam, PublicKey, Rp,
     SharedSecret, User,
 };
@@ -748,6 +751,7 @@ impl Test for TestGetAssertion {
                 response.auth_data.ed_flag(),
                 self.ga_third_party_payment.unwrap_or_default()
             );
+            assert_eq!(response.number_of_credentials, None);
             credential.verify_assertion(&response.auth_data, client_data_hash, &response.signature);
             if self.ga_third_party_payment.unwrap_or_default() {
                 let extensions = response.auth_data.extensions.unwrap();
@@ -767,6 +771,109 @@ impl Test for TestGetAssertion {
 #[test]
 fn test_get_assertion() {
     TestGetAssertion::run_all();
+}
+
+fn run_test_get_next_assertion(device: &Ctap2) {
+    let rp_id = "example.com";
+    // TODO: client data
+    let client_data_hash = &[0; 32];
+
+    let rp = Rp::new(rp_id);
+    let users = vec![User::new(b"id1"), User::new(b"id2"), User::new(b"id3")];
+    let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+    // TODO: test non-discoverable credentials and with allow list
+    let mut credentials: Vec<_> = users
+        .into_iter()
+        .map(|user| {
+            let mut request = MakeCredential::new(
+                client_data_hash,
+                rp.clone(),
+                user.clone(),
+                pub_key_cred_params.clone(),
+            );
+            request.options = Some(MakeCredentialOptions::default().rk(true));
+            let response = device.exec(request).unwrap();
+            response.auth_data.credential.unwrap()
+        })
+        .collect();
+
+    let credential_ids: BTreeSet<_> = credentials
+        .iter()
+        .map(|credential| &credential.id)
+        .collect();
+    assert_eq!(credential_ids.len(), credentials.len());
+
+    let request = GetAssertion::new(rp_id, client_data_hash);
+    let response = device.exec(request).unwrap();
+    assert_eq!(response.credential.ty, "public-key");
+    assert_eq!(response.auth_data.credential, None);
+    assert_eq!(response.number_of_credentials, Some(credentials.len()));
+    let i = credentials
+        .iter()
+        .position(|credential| credential.id == response.credential.id)
+        .unwrap();
+    let credential = credentials.remove(i);
+    credential.verify_assertion(&response.auth_data, client_data_hash, &response.signature);
+    assert!(response.auth_data.extensions.is_none());
+
+    let response = device.exec(GetNextAssertion).unwrap();
+    assert_eq!(response.credential.ty, "public-key");
+    assert_eq!(response.auth_data.credential, None);
+    // TODO: fix number_of_credentials
+    // assert_eq!(response.number_of_credentials, Some(credentials.len()));
+    assert_eq!(response.number_of_credentials, None);
+    let i = credentials
+        .iter()
+        .position(|credential| credential.id == response.credential.id)
+        .unwrap();
+    let credential = credentials.remove(i);
+    credential.verify_assertion(&response.auth_data, client_data_hash, &response.signature);
+    assert!(response.auth_data.extensions.is_none());
+
+    let response = device.exec(GetNextAssertion).unwrap();
+    assert_eq!(response.credential.ty, "public-key");
+    assert_eq!(response.auth_data.credential, None);
+    assert_eq!(response.number_of_credentials, None);
+    let i = credentials
+        .iter()
+        .position(|credential| credential.id == response.credential.id)
+        .unwrap();
+    let credential = credentials.remove(i);
+    credential.verify_assertion(&response.auth_data, client_data_hash, &response.signature);
+    assert!(response.auth_data.extensions.is_none());
+
+    assert_eq!(credentials, Vec::new());
+
+    let error = device.exec(GetNextAssertion).unwrap_err();
+    assert_eq!(error, Ctap2Error(0x30));
+}
+
+#[test]
+fn test_get_next_assertion() {
+    virt::run_ctap2(|device| {
+        run_test_get_next_assertion(&device);
+    });
+}
+
+#[test]
+fn test_get_next_assertion_multi_rp() {
+    let client_data_hash = b"";
+    virt::run_ctap2(|device| {
+        let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+        for rp in ["test.com", "something.dev", "else.foobar"] {
+            for user in [b"john.doe", b"jane.doe"] {
+                let mut request = MakeCredential::new(
+                    client_data_hash,
+                    Rp::new(rp),
+                    User::new(user),
+                    pub_key_cred_params.clone(),
+                );
+                request.options = Some(MakeCredentialOptions::default().rk(true));
+                device.exec(request).unwrap();
+            }
+        }
+        run_test_get_next_assertion(&device);
+    });
 }
 
 #[derive(Debug, Exhaustive)]

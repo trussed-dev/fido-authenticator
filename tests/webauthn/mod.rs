@@ -306,6 +306,7 @@ impl From<Value> for User {
     }
 }
 
+#[derive(Clone)]
 pub struct PubKeyCredParam {
     ty: String,
     alg: i32,
@@ -641,6 +642,7 @@ pub struct GetAssertionReply {
     pub credential: PubKeyCredDescriptor,
     pub auth_data: AuthData,
     pub signature: Vec<u8>,
+    pub number_of_credentials: Option<usize>,
 }
 
 impl From<Value> for GetAssertionReply {
@@ -650,6 +652,7 @@ impl From<Value> for GetAssertionReply {
             credential: map.remove(&0x01).unwrap().into(),
             auth_data: map.remove(&0x02).unwrap().into(),
             signature: map.remove(&0x03).unwrap().into_bytes().unwrap(),
+            number_of_credentials: map.remove(&0x05).map(|value| value.deserialized().unwrap()),
         }
     }
 }
@@ -770,6 +773,20 @@ impl CredentialData {
         message.extend_from_slice(client_data_hash);
         public_key.verify(&message, &signature).unwrap();
     }
+}
+
+pub struct GetNextAssertion;
+
+impl From<GetNextAssertion> for Value {
+    fn from(_: GetNextAssertion) -> Self {
+        Self::Null
+    }
+}
+
+impl Request for GetNextAssertion {
+    const COMMAND: u8 = 0x08;
+
+    type Reply = GetAssertionReply;
 }
 
 pub struct GetInfo;
