@@ -789,6 +789,7 @@ impl Request for GetInfo {
 pub struct GetInfoReply {
     pub versions: Vec<String>,
     pub aaguid: Value,
+    pub options: Option<BTreeMap<String, Value>>,
     pub pin_protocols: Option<Vec<u8>>,
     pub attestation_formats: Option<Vec<String>>,
 }
@@ -799,6 +800,7 @@ impl From<Value> for GetInfoReply {
         Self {
             versions: map.remove(&1).unwrap().deserialized().unwrap(),
             aaguid: map.remove(&3).unwrap().deserialized().unwrap(),
+            options: map.remove(&4).map(|value| value.deserialized().unwrap()),
             pin_protocols: map.remove(&6).map(|value| value.deserialized().unwrap()),
             attestation_formats: map.remove(&0x16).map(|value| value.deserialized().unwrap()),
         }
