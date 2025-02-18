@@ -99,6 +99,7 @@ impl SharedSecret {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct PinToken([u8; 32]);
 
 impl PinToken {
