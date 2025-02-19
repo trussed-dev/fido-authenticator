@@ -86,3 +86,6 @@ features = ["dispatch"]
 trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "6bba8fde36d05c0227769eb63345744e87d84b2b" }
 trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "1e1ca03a3a62ea9b802f4070ea4bce002eeb4bec" }
 trussed-usbip = { git = "https://github.com/trussed-dev/pc-usbip-runner.git", rev = "4fe4e4e287dac1d92fcd4f97e8926497bfa9d7a9" }
+
+[profile.test]
+opt-level = 2
