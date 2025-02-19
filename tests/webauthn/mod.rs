@@ -1,12 +1,39 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, iter};
 
 use ciborium::Value;
 use cipher::{BlockDecryptMut as _, BlockEncryptMut as _, KeyIvInit};
-use exhaustive::Exhaustive;
 use hmac::Mac;
+use itertools::iproduct;
 use p256::ecdsa::{signature::Verifier as _, DerSignature, VerifyingKey};
 use rand::RngCore as _;
 use serde::Deserialize;
+
+pub trait Exhaustive: Sized {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone;
+}
+
+impl Exhaustive for bool {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
+        [false, true].into_iter()
+    }
+}
+
+impl<T: Exhaustive + Clone> Exhaustive for Option<T> {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
+        iter::once(None).chain(T::iter_exhaustive().map(Some))
+    }
+}
+
+macro_rules! exhaustive_struct {
+    ($($field:ident: $type:ty,)*) => {
+        iproduct!(
+            $(<$type as Exhaustive>::iter_exhaustive(),)*
+        )
+        .map(|($($field,)*)| Self { $($field,)* })
+    }
+}
+
+pub(crate) use exhaustive_struct;
 
 pub struct KeyAgreementKey(p256::ecdh::EphemeralSecret);
 
@@ -419,7 +446,7 @@ impl From<ExtensionsInput> for Value {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Exhaustive)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct MakeCredentialOptions {
     pub rk: Option<bool>,
     pub up: Option<bool>,
@@ -456,6 +483,16 @@ impl From<MakeCredentialOptions> for Value {
             map.push("uv", uv);
         }
         map.into()
+    }
+}
+
+impl Exhaustive for MakeCredentialOptions {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
+        exhaustive_struct! {
+            rk: Option<bool>,
+            up: Option<bool>,
+            uv: Option<bool>,
+        }
     }
 }
 
@@ -606,7 +643,7 @@ impl Request for GetAssertion {
     type Reply = GetAssertionReply;
 }
 
-#[derive(Clone, Copy, Debug, Default, Exhaustive)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct GetAssertionOptions {
     pub up: Option<bool>,
     pub uv: Option<bool>,
@@ -634,6 +671,15 @@ impl From<GetAssertionOptions> for Value {
             map.push("uv", uv);
         }
         map.into()
+    }
+}
+
+impl Exhaustive for GetAssertionOptions {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
+        exhaustive_struct! {
+            up: Option<bool>,
+            uv: Option<bool>,
+        }
     }
 }
 

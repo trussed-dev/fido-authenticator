@@ -10,16 +10,16 @@ use std::{
 };
 
 use ciborium::Value;
-use exhaustive::Exhaustive;
 use hex_literal::hex;
+use itertools::iproduct;
 
 use fs::list_fs;
 use virt::{Ctap2, Ctap2Error, Options};
 use webauthn::{
-    AttStmtFormat, ClientPin, CredentialManagement, CredentialManagementParams, ExtensionsInput,
-    GetAssertion, GetAssertionOptions, GetInfo, GetNextAssertion, KeyAgreementKey, MakeCredential,
-    MakeCredentialOptions, PinToken, PubKeyCredDescriptor, PubKeyCredParam, PublicKey, Rp,
-    SharedSecret, User,
+    exhaustive_struct, AttStmtFormat, ClientPin, CredentialManagement, CredentialManagementParams,
+    Exhaustive, ExtensionsInput, GetAssertion, GetAssertionOptions, GetInfo, GetNextAssertion,
+    KeyAgreementKey, MakeCredential, MakeCredentialOptions, PinToken, PubKeyCredDescriptor,
+    PubKeyCredParam, PublicKey, Rp, SharedSecret, User,
 };
 
 trait Test: Debug {
@@ -38,7 +38,7 @@ trait Test: Debug {
     where
         Self: Exhaustive,
     {
-        for test in Self::iter_exhaustive(None) {
+        for test in Self::iter_exhaustive() {
             test.run();
         }
     }
@@ -455,7 +455,7 @@ fn test_get_pin_token_no_pin() {
     })
 }
 
-#[derive(Clone, Debug, Exhaustive)]
+#[derive(Clone, Copy, Debug)]
 enum RequestPinToken {
     InvalidPermissions,
     InvalidRpId,
@@ -482,7 +482,19 @@ impl RequestPinToken {
     }
 }
 
-#[derive(Clone, Copy, Debug, Exhaustive)]
+impl Exhaustive for RequestPinToken {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
+        [
+            Self::InvalidPermissions,
+            Self::InvalidRpId,
+            Self::NoRpId,
+            Self::ValidRpId,
+        ]
+        .into_iter()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 enum AttestationFormatsPreference {
     Empty,
     None,
@@ -539,14 +551,37 @@ impl From<AttestationFormatsPreference> for Vec<&'static str> {
     }
 }
 
-#[derive(Debug, Exhaustive)]
+impl Exhaustive for AttestationFormatsPreference {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
+        [
+            Self::Empty,
+            Self::None,
+            Self::Packed,
+            Self::NonePacked,
+            Self::PackedNone,
+            Self::OtherNonePacked,
+            Self::MultiOtherNonePacked,
+        ]
+        .into_iter()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 enum PinAuth {
     NoPin,
     PinNoToken,
     PinToken(RequestPinToken),
 }
 
-#[derive(Debug, Exhaustive)]
+impl Exhaustive for PinAuth {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
+        [Self::NoPin, Self::PinNoToken]
+            .into_iter()
+            .chain(RequestPinToken::iter_exhaustive().map(Self::PinToken))
+    }
+}
+
+#[derive(Clone, Debug)]
 struct TestMakeCredential {
     pin_auth: PinAuth,
     options: Option<MakeCredentialOptions>,
@@ -700,12 +735,24 @@ impl Test for TestMakeCredential {
     }
 }
 
+impl Exhaustive for TestMakeCredential {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
+        exhaustive_struct! {
+            pin_auth: PinAuth,
+            options: Option<MakeCredentialOptions>,
+            valid_pub_key_alg: bool,
+            attestation_formats_preference: Option<AttestationFormatsPreference>,
+            hmac_secret: bool,
+        }
+    }
+}
+
 #[test]
 fn test_make_credential() {
     TestMakeCredential::run_all();
 }
 
-#[derive(Debug, Exhaustive)]
+#[derive(Clone, Debug)]
 struct TestGetAssertion {
     rk: bool,
     allow_list: bool,
@@ -804,6 +851,18 @@ impl Test for TestGetAssertion {
                 assert!(response.auth_data.extensions.is_none());
             }
         });
+    }
+}
+
+impl Exhaustive for TestGetAssertion {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
+        exhaustive_struct! {
+            rk: bool,
+            allow_list: bool,
+            options: Option<GetAssertionOptions>,
+            mc_third_party_payment: Option<bool>,
+            ga_third_party_payment: Option<bool>,
+        }
     }
 }
 
@@ -939,7 +998,7 @@ fn test_get_next_assertion_multi_rp() {
     });
 }
 
-#[derive(Debug, Exhaustive)]
+#[derive(Clone, Debug)]
 struct TestListCredentials {
     pin_token_rp_id: bool,
     third_party_payment: Option<bool>,
@@ -1038,6 +1097,15 @@ impl Test for TestListCredentials {
                 Some(self.third_party_payment.unwrap_or_default())
             );
         });
+    }
+}
+
+impl Exhaustive for TestListCredentials {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
+        exhaustive_struct! {
+            pin_token_rp_id: bool,
+            third_party_payment: Option<bool>,
+        }
     }
 }
 
