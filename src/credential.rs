@@ -1078,7 +1078,7 @@ mod test {
 
     #[test]
     fn max_credential_id() {
-        let rp_id: String<256> = core::iter::repeat('?').take(256).collect();
+        let rp_id: String<256> = core::iter::repeat_n('?', 256).collect();
         let key = Bytes::from_slice(&[u8::MAX; 128]).unwrap();
         let credential = StrippedCredential {
             ctap: CtapVersion::Fido21Pre,
