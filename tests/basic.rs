@@ -774,6 +774,11 @@ impl TestGetAssertion {
         if !self.rk && !self.allow_list {
             return Some(0x2e);
         }
+        if let Some(options) = self.options {
+            if options.up == Some(false) && self.ga_hmac_secret {
+                return Some(0x2b);
+            }
+        }
         None
     }
 }

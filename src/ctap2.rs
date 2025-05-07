@@ -1448,6 +1448,10 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 .transpose()?
                 .unwrap_or(PinProtocolVersion::V1);
 
+            if !get_assertion_state.up_performed {
+                return Err(Error::UnsupportedOption);
+            }
+
             // We derive credRandom as an hmac of the existing private key.
             // UV is used as input data since credRandom should depend UV
             // i.e. credRandom = HMAC(private_key, uv)
