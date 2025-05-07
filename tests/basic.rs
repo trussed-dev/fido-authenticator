@@ -599,6 +599,9 @@ impl TestMakeCredential {
             if options.up.is_some() {
                 return Some(0x2c);
             }
+            if !matches!(self.pin_auth, PinAuth::PinToken(_)) && options.uv == Some(true) {
+                return Some(0x2c);
+            }
         }
         match &self.pin_auth {
             PinAuth::PinToken(
@@ -610,12 +613,6 @@ impl TestMakeCredential {
                 return Some(0x36);
             }
             _ => {}
-        }
-        if let Some(options) = self.options {
-            // TODO: review if uv should be always rejected due to the lack of built-in uv
-            if !matches!(self.pin_auth, PinAuth::PinToken(_)) && options.uv == Some(true) {
-                return Some(0x2c);
-            }
         }
         if !self.valid_pub_key_alg {
             return Some(0x26);
