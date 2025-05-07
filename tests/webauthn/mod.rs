@@ -57,6 +57,7 @@ impl KeyAgreementKey {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct PublicKey(p256::PublicKey);
 
 impl From<PublicKey> for Value {
@@ -109,14 +110,17 @@ impl SharedSecret {
         result
     }
 
-    pub fn decrypt_pin_token(&self, data: &[u8]) -> PinToken {
+    pub fn decrypt(&self, data: &[u8]) -> Vec<u8> {
         let (iv, data) = data.split_first_chunk::<16>().unwrap();
         let cipher: cbc::Decryptor<aes::Aes256> =
             KeyIvInit::new(self.aes_key.as_ref().into(), iv.into());
-        let pin_token = cipher
+        cipher
             .decrypt_padded_vec_mut::<cipher::block_padding::NoPadding>(data)
-            .unwrap();
-        PinToken(pin_token.try_into().unwrap())
+            .unwrap()
+    }
+
+    pub fn decrypt_pin_token(&self, data: &[u8]) -> PinToken {
+        PinToken(self.decrypt(data).try_into().unwrap())
     }
 
     pub fn authenticate(&self, data: &[u8]) -> [u8; 32] {
@@ -362,7 +366,7 @@ pub struct MakeCredential {
     rp: Rp,
     user: User,
     pub_key_cred_params: Vec<PubKeyCredParam>,
-    pub extensions: Option<ExtensionsInput>,
+    pub extensions: Option<MakeCredentialExtensionsInput>,
     pub options: Option<MakeCredentialOptions>,
     pub pin_auth: Option<[u8; 32]>,
     pub pin_protocol: Option<u8>,
@@ -428,13 +432,22 @@ impl From<MakeCredential> for Value {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct ExtensionsInput {
+pub struct MakeCredentialExtensionsInput {
     pub hmac_secret: Option<bool>,
     pub third_party_payment: Option<bool>,
 }
 
-impl From<ExtensionsInput> for Value {
-    fn from(extensions: ExtensionsInput) -> Value {
+impl Exhaustive for MakeCredentialExtensionsInput {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
+        exhaustive_struct! {
+            hmac_secret: Option<bool>,
+            third_party_payment: Option<bool>,
+        }
+    }
+}
+
+impl From<MakeCredentialExtensionsInput> for Value {
+    fn from(extensions: MakeCredentialExtensionsInput) -> Value {
         let mut map = Map::default();
         if let Some(hmac_secret) = extensions.hmac_secret {
             map.push("hmac-secret", hmac_secret);
@@ -602,7 +615,7 @@ pub struct GetAssertion {
     rp_id: String,
     client_data_hash: Vec<u8>,
     pub allow_list: Option<Vec<PubKeyCredDescriptor>>,
-    pub extensions: Option<ExtensionsInput>,
+    pub extensions: Option<GetAssertionExtensionsInput>,
     pub options: Option<GetAssertionOptions>,
 }
 
@@ -641,6 +654,46 @@ impl Request for GetAssertion {
     const COMMAND: u8 = 0x02;
 
     type Reply = GetAssertionReply;
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct GetAssertionExtensionsInput {
+    pub third_party_payment: Option<bool>,
+    pub hmac_secret: Option<HmacSecretInput>,
+}
+
+impl From<GetAssertionExtensionsInput> for Value {
+    fn from(extensions: GetAssertionExtensionsInput) -> Value {
+        let mut map = Map::default();
+        if let Some(hmac_secret) = extensions.hmac_secret {
+            map.push("hmac-secret", hmac_secret);
+        }
+        if let Some(third_party_payment) = extensions.third_party_payment {
+            map.push("thirdPartyPayment", third_party_payment);
+        }
+        map.into()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct HmacSecretInput {
+    pub key_agreement: PublicKey,
+    pub salt_enc: Vec<u8>,
+    pub salt_auth: [u8; 32],
+    pub pin_protocol: Option<u32>,
+}
+
+impl From<HmacSecretInput> for Value {
+    fn from(input: HmacSecretInput) -> Value {
+        let mut map = Map::default();
+        map.push(0x01, input.key_agreement);
+        map.push(0x02, input.salt_enc);
+        map.push(0x03, input.salt_auth.as_slice());
+        if let Some(pin_protocol) = input.pin_protocol {
+            map.push(0x04, pin_protocol);
+        }
+        map.into()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]

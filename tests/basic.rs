@@ -12,13 +12,15 @@ use std::{
 use ciborium::Value;
 use hex_literal::hex;
 use itertools::iproduct;
+use rand::RngCore as _;
 
 use fs::list_fs;
 use virt::{Ctap2, Ctap2Error, Options};
 use webauthn::{
     exhaustive_struct, AttStmtFormat, ClientPin, CredentialManagement, CredentialManagementParams,
-    Exhaustive, ExtensionsInput, GetAssertion, GetAssertionOptions, GetInfo, GetNextAssertion,
-    KeyAgreementKey, MakeCredential, MakeCredentialOptions, PinToken, PubKeyCredDescriptor,
+    Exhaustive, GetAssertion, GetAssertionExtensionsInput, GetAssertionOptions, GetInfo,
+    GetNextAssertion, HmacSecretInput, KeyAgreementKey, MakeCredential,
+    MakeCredentialExtensionsInput, MakeCredentialOptions, PinToken, PubKeyCredDescriptor,
     PubKeyCredParam, PublicKey, Rp, SharedSecret, User,
 };
 
@@ -692,7 +694,7 @@ impl Test for TestMakeCredential {
                 self.attestation_formats_preference.map(From::from);
             // TODO: test other extensions and permutations
             if self.hmac_secret {
-                request.extensions = Some(ExtensionsInput {
+                request.extensions = Some(MakeCredentialExtensionsInput {
                     hmac_secret: Some(true),
                     ..Default::default()
                 });
@@ -757,7 +759,8 @@ struct TestGetAssertion {
     rk: bool,
     allow_list: bool,
     options: Option<GetAssertionOptions>,
-    mc_third_party_payment: Option<bool>,
+    mc_extensions: Option<MakeCredentialExtensionsInput>,
+    ga_hmac_secret: bool,
     ga_third_party_payment: Option<bool>,
 }
 
@@ -783,6 +786,9 @@ impl Test for TestGetAssertion {
 
         // TODO: test with PIN
         virt::run_ctap2(|device| {
+            let key_agreement_key = KeyAgreementKey::generate();
+            let shared_secret = get_shared_secret(&device, &key_agreement_key);
+
             let rp = Rp::new(rp_id);
             let user = User::new(b"id123")
                 .name("john.doe")
@@ -792,12 +798,7 @@ impl Test for TestGetAssertion {
             if self.rk {
                 request.options = Some(MakeCredentialOptions::default().rk(true));
             }
-            if let Some(third_party_payment) = self.mc_third_party_payment {
-                request.extensions = Some(ExtensionsInput {
-                    third_party_payment: Some(third_party_payment),
-                    ..Default::default()
-                });
-            }
+            request.extensions = self.mc_extensions;
             let response = device.exec(request).unwrap();
             let credential = response.auth_data.credential.unwrap();
 
@@ -811,11 +812,26 @@ impl Test for TestGetAssertion {
                     credential.id.clone(),
                 )]);
             }
-            if let Some(third_party_payment) = self.ga_third_party_payment {
-                request.extensions = Some(ExtensionsInput {
-                    third_party_payment: Some(third_party_payment),
+            if self.ga_hmac_secret || self.ga_third_party_payment.is_some() {
+                let mut extensions = GetAssertionExtensionsInput {
+                    third_party_payment: self.ga_third_party_payment,
                     ..Default::default()
-                });
+                };
+                if self.ga_hmac_secret {
+                    // TODO: We always set the last byte to 0xff to work around the zero padding
+                    // currently used by trussed.
+                    let mut salt = [0xff; 32];
+                    rand::thread_rng().fill_bytes(&mut salt[..31]);
+                    let salt_enc = shared_secret.encrypt(&salt);
+                    let salt_auth = shared_secret.authenticate(&salt_enc);
+                    extensions.hmac_secret = Some(HmacSecretInput {
+                        key_agreement: key_agreement_key.public_key(),
+                        salt_enc,
+                        salt_auth,
+                        pin_protocol: Some(2),
+                    });
+                }
+                request.extensions = Some(extensions);
             }
             request.options = self.options;
             let result = device.exec(request);
@@ -823,6 +839,8 @@ impl Test for TestGetAssertion {
                 assert_eq!(result, Err(Ctap2Error(error)));
                 return;
             }
+            let has_extensions =
+                self.ga_hmac_secret || self.ga_third_party_payment.unwrap_or_default();
             let response = result.unwrap();
             assert_eq!(response.credential.ty, "public-key");
             assert_eq!(response.credential.id, credential.id);
@@ -833,20 +851,28 @@ impl Test for TestGetAssertion {
             );
             assert!(!response.auth_data.uv_flag());
             assert!(!response.auth_data.at_flag());
-            assert_eq!(
-                response.auth_data.ed_flag(),
-                self.ga_third_party_payment.unwrap_or_default()
-            );
+            assert_eq!(response.auth_data.ed_flag(), has_extensions,);
             assert_eq!(response.number_of_credentials, None);
             credential.verify_assertion(&response.auth_data, client_data_hash, &response.signature);
-            if self.ga_third_party_payment.unwrap_or_default() {
+            if has_extensions {
                 let extensions = response.auth_data.extensions.unwrap();
-                assert_eq!(
-                    extensions.get("thirdPartyPayment"),
-                    Some(&Value::from(
-                        self.mc_third_party_payment.unwrap_or_default()
-                    ))
-                );
+
+                if self.ga_hmac_secret {
+                    let hmac_secret = extensions.get("hmac-secret").unwrap().as_bytes().unwrap();
+                    let output = shared_secret.decrypt(hmac_secret);
+                    assert_eq!(output.len(), 32);
+                }
+
+                if self.ga_third_party_payment.unwrap_or_default() {
+                    let expected = self
+                        .mc_extensions
+                        .and_then(|e| e.third_party_payment)
+                        .unwrap_or_default();
+                    assert_eq!(
+                        extensions.get("thirdPartyPayment"),
+                        Some(&Value::from(expected))
+                    );
+                }
             } else {
                 assert!(response.auth_data.extensions.is_none());
             }
@@ -860,7 +886,8 @@ impl Exhaustive for TestGetAssertion {
             rk: bool,
             allow_list: bool,
             options: Option<GetAssertionOptions>,
-            mc_third_party_payment: Option<bool>,
+            mc_extensions: Option<MakeCredentialExtensionsInput>,
+            ga_hmac_secret: bool,
             ga_third_party_payment: Option<bool>,
         }
     }
@@ -1029,7 +1056,7 @@ impl Test for TestListCredentials {
             request.pin_auth = Some(pin_auth);
             request.pin_protocol = Some(2);
             if let Some(third_party_payment) = self.third_party_payment {
-                request.extensions = Some(ExtensionsInput {
+                request.extensions = Some(MakeCredentialExtensionsInput {
                     third_party_payment: Some(third_party_payment),
                     ..Default::default()
                 });
