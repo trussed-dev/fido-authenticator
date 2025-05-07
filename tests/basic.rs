@@ -602,17 +602,15 @@ impl TestMakeCredential {
             if !matches!(self.pin_auth, PinAuth::PinToken(_)) && options.uv == Some(true) {
                 return Some(0x2c);
             }
-        }
-        match &self.pin_auth {
-            PinAuth::PinToken(
-                RequestPinToken::InvalidPermissions | RequestPinToken::InvalidRpId,
-            ) => {
-                return Some(0x33);
-            }
-            PinAuth::PinNoToken => {
+            if matches!(self.pin_auth, PinAuth::PinNoToken) && options.rk == Some(true) {
                 return Some(0x36);
             }
-            _ => {}
+        }
+        if let PinAuth::PinToken(
+            RequestPinToken::InvalidPermissions | RequestPinToken::InvalidRpId,
+        ) = &self.pin_auth
+        {
+            return Some(0x33);
         }
         if !self.valid_pub_key_alg {
             return Some(0x26);
