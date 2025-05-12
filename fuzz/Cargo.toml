@@ -8,7 +8,7 @@ edition = "2021"
 cargo-fuzz = true
 
 [dependencies]
-ctap-types = { version = "0.3.0", features = ["arbitrary"] }
+ctap-types = { version = "0.4", features = ["arbitrary"] }
 libfuzzer-sys = "0.4"
 trussed = { version = "0.1", features = ["clients-1", "certificate-client", "crypto-client", "filesystem-client", "management-client", "aes256-cbc", "ed255", "p256", "sha256"] }
 trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"] }

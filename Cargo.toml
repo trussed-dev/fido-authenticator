@@ -16,7 +16,7 @@ required-features = ["dispatch"]
 
 [dependencies]
 cbor-smol = { version = "0.5" }
-ctap-types = { version = "0.3.1", features = ["get-info-full", "large-blobs", "third-party-payment"] }
+ctap-types = { version = "0.4", features = ["get-info-full", "large-blobs", "third-party-payment"] }
 cosey = "0.3"
 delog = "0.1.0"
 heapless = "0.7"

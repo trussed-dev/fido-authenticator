@@ -530,7 +530,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         debug_now!("CTAP2.PIN...");
         // info_now!("{:?}", parameters);
 
-        let pin_protocol = self.parse_pin_protocol(parameters.pin_protocol)?;
+        let pin_protocol = parameters
+            .pin_protocol
+            .ok_or(Error::MissingParameter)
+            .and_then(|pin_protocol| self.parse_pin_protocol(pin_protocol));
         let mut response = ctap2::client_pin::Response::default();
 
         match parameters.sub_command {
@@ -543,6 +546,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             Subcommand::GetKeyAgreement => {
                 debug_now!("CTAP2.Pin.GetKeyAgreement");
 
+                let pin_protocol = pin_protocol?;
                 response.key_agreement = Some(self.pin_protocol(pin_protocol).key_agreement_key());
             }
 
@@ -567,6 +571,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                         return Err(Error::MissingParameter);
                     }
                 };
+                let pin_protocol = pin_protocol?;
 
                 // 2. is pin already set
                 if self.state.persistent.pin_is_set() {
@@ -624,6 +629,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                         return Err(Error::MissingParameter);
                     }
                 };
+                let pin_protocol = pin_protocol?;
 
                 // 2. fail if no retries left
                 self.state.pin_blocked()?;
@@ -679,7 +685,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     .ok_or(Error::MissingParameter)?;
 
                 // 2. Check PIN protocol
-                let pin_protocol = self.parse_pin_protocol(parameters.pin_protocol)?;
+                let pin_protocol = pin_protocol?;
 
                 // 3. + 4. Check invalid parameters
                 if parameters.permissions.is_some() || parameters.rp_id.is_some() {
@@ -744,7 +750,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 let permissions = parameters.permissions.ok_or(Error::MissingParameter)?;
 
                 // 2. Check PIN protocol
-                let pin_protocol = self.parse_pin_protocol(parameters.pin_protocol)?;
+                let pin_protocol = pin_protocol?;
 
                 // 3. Check that permissions are not empty
                 let permissions = Permissions::from_bits_truncate(permissions);
