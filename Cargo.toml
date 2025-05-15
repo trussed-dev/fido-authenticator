@@ -8,12 +8,6 @@ repository = "https://github.com/solokeys/fido-authenticator"
 documentation = "https://docs.rs/fido-authenticator"
 description = "FIDO authenticator Trussed app"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[[example]]
-name = "usbip"
-required-features = ["dispatch"]
-
 [dependencies]
 cbor-smol = { version = "0.5" }
 ctap-types = { version = "0.4", features = ["get-info-full", "large-blobs", "third-party-payment"] }
