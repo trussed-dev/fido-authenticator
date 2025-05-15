@@ -54,14 +54,14 @@ ciborium = { version = "0.2.2" }
 ciborium-io = "0.2.2"
 cipher = "0.4.4"
 ctaphid = { version = "0.3.1", default-features = false }
-ctaphid-dispatch = "0.2"
+ctaphid-dispatch = "0.3"
 delog = { version = "0.1.6", features = ["std-log"] }
 env_logger = "0.11.0"
 hex-literal = "0.4.1"
 hmac = "0.12.1"
 interchange = "0.3.0"
 itertools = "0.14.0"
-littlefs2 = "0.5.0"
+littlefs2 = "0.6.0"
 log = "0.4.21"
 p256 = { version = "0.13.2", features = ["ecdh"] }
 rand = "0.8.4"
@@ -71,17 +71,17 @@ serde_test = "1.0.176"
 trussed = { version = "0.1", features = ["virt"] }
 trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
 trussed-usbip = { version = "0.0.1", default-features = false, features = ["ctaphid"] }
-usbd-ctaphid = "0.2.0"
+usbd-ctaphid = "0.3.0"
 x509-parser = "0.16.0"
 
 [package.metadata.docs.rs]
 features = ["dispatch"]
 
 [patch.crates-io]
-admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-nitrokey.19" }
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "6bba8fde36d05c0227769eb63345744e87d84b2b" }
-trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "1e1ca03a3a62ea9b802f4070ea4bce002eeb4bec" }
-trussed-usbip = { git = "https://github.com/trussed-dev/pc-usbip-runner.git", rev = "4fe4e4e287dac1d92fcd4f97e8926497bfa9d7a9" }
+admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-nitrokey.20" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "024e0eca5fb7dbd2457831f7c7bffe4341e08775" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "7922d67e9637a87e5625aaff9e5111f0d4ec0346" }
+trussed-usbip = { git = "https://github.com/trussed-dev/pc-usbip-runner.git", rev = "504674453c9573a30aa2f155101df49eb2af1ba7" }
 
 [profile.test]
 opt-level = 2

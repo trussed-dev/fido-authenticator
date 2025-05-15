@@ -787,7 +787,7 @@ mod test {
         key::{Kind, Secrecy},
         store::keystore::{ClientKeystore, Keystore as _},
         types::Location,
-        virt::{self, Ram},
+        virt::{self, StoreConfig},
         Platform as _,
     };
 
@@ -960,7 +960,7 @@ mod test {
         );
         const SERIALIZED_CREDENTIAL: &[u8] = &hex!("A3000201A700A1626964684A6F686E20446F6501A16269644301020302187B03F404260582014301020306F4024C000000000000000000000000");
 
-        virt::with_platform(Ram::default(), |mut platform| {
+        virt::with_platform(StoreConfig::ram(), |mut platform| {
             let kek = [0; 44];
             let client_id = path!("fido");
             let kek = {
@@ -1030,7 +1030,7 @@ mod test {
 
     #[test]
     fn credential_ids() {
-        trussed::virt::with_ram_client("fido", |mut client| {
+        trussed::virt::with_client(StoreConfig::ram(), "fido", |mut client| {
             let kek = syscall!(client.generate_chacha8poly1305_key(Location::Internal)).key;
             let nonce = ByteArray::new([0; 12]);
             let data = credential_data();
@@ -1092,7 +1092,7 @@ mod test {
             large_blob_key: Some(ByteArray::new([0xff; 32])),
             third_party_payment: Some(true),
         };
-        trussed::virt::with_ram_client("fido", |mut client| {
+        trussed::virt::with_client(StoreConfig::ram(), "fido", |mut client| {
             let kek = syscall!(client.generate_chacha8poly1305_key(Location::Internal)).key;
             let rp_id_hash = syscall!(client.hash_sha256(rp_id.as_ref()))
                 .hash

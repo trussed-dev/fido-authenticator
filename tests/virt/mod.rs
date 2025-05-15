@@ -4,7 +4,6 @@ use std::{
     borrow::Cow,
     cell::RefCell,
     fmt::{self, Debug, Formatter},
-    ops::Deref as _,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Once,
@@ -19,7 +18,7 @@ use ctaphid::{
     error::{RequestError, ResponseError},
     HidDevice, HidDeviceInfo,
 };
-use ctaphid_dispatch::{Channel, Dispatch, Requester};
+use ctaphid_dispatch::{Channel, Dispatch, Requester, DEFAULT_MESSAGE_SIZE};
 use fido_authenticator::{Authenticator, Config, Conforming};
 use littlefs2::{object_safe::DynFilesystem, path, path::PathBuf};
 use rand::{
@@ -30,7 +29,7 @@ use trussed::{
     backend::BackendId,
     platform::Platform as _,
     store::Store as _,
-    virt::{self, Ram},
+    virt::{self, StoreConfig},
 };
 use trussed_staging::virt::{BackendIds, Client, Dispatcher};
 
@@ -199,10 +198,10 @@ impl HidDeviceInfo for DeviceInfo {
     }
 }
 
-pub struct Device<'a>(RefCell<Pipe<'a>>);
+pub struct Device<'a>(RefCell<Pipe<'a, DEFAULT_MESSAGE_SIZE>>);
 
 impl<'a> Device<'a> {
-    fn new(requester: Requester<'a>) -> Self {
+    fn new(requester: Requester<'a, DEFAULT_MESSAGE_SIZE>) -> Self {
         Self(RefCell::new(Pipe::new(requester)))
     }
 }
@@ -249,10 +248,10 @@ impl HidDevice for Device<'_> {
 
 fn with_client<F, F2, T>(files: &[(PathBuf, Vec<u8>)], f: F, inspect_ifs: F2) -> T
 where
-    F: FnOnce(Client<Ram>) -> T,
+    F: FnOnce(Client) -> T,
     F2: FnOnce(&dyn DynFilesystem),
 {
-    virt::with_platform(Ram::default(), |mut platform| {
+    virt::with_platform(StoreConfig::ram(), |mut platform| {
         // virt always uses the same seed -- request some random bytes to reach a somewhat random
         // state
         let uniform = Uniform::from(0..64);
@@ -261,7 +260,8 @@ where
             platform.rng().next_u32();
         }
 
-        let ifs = platform.store().ifs();
+        let store = platform.store();
+        let ifs = store.ifs();
 
         for (path, content) in files {
             if let Some(dir) = path.parent() {
@@ -280,7 +280,7 @@ where
             f,
         );
 
-        inspect_ifs(ifs.deref());
+        inspect_ifs(ifs);
 
         result
     })
