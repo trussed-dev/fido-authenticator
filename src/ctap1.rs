@@ -4,15 +4,16 @@ use ctap_types::{
     ctap1::{authenticate, register, Authenticator, ControlByte, Error, Result},
     heapless_bytes::Bytes,
 };
+use serde_bytes::ByteArray;
 
-use trussed::{
+use trussed_core::{
     syscall,
     types::{KeySerialization, Location, Mechanism, SignatureSerialization},
 };
 
 use crate::{
     constants,
-    credential::{self, Credential, Key},
+    credential::{self, Credential, Key, StrippedCredential},
     SigningAlgorithm, TrussedRequirements, UserPresence,
 };
 
@@ -50,8 +51,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             .serialize_p256_key(public_key, KeySerialization::EcdhEsHkdf256))
         .serialized_key;
         syscall!(self.trussed.delete(public_key));
-        let cose_key: ctap_types::cose::EcdhEsHkdf256PublicKey =
-            trussed::cbor_deserialize(&serialized_cose_public_key).unwrap();
+        let cose_key: cosey::EcdhEsHkdf256PublicKey =
+            cbor_smol::cbor_deserialize(&serialized_cose_public_key).unwrap();
 
         let wrapping_key = self
             .state
@@ -63,7 +64,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let wrapped_key =
             syscall!(self
                 .trussed
-                .wrap_key_chacha8poly1305(wrapping_key, private_key, &[]))
+                .wrap_key_chacha8poly1305(wrapping_key, private_key, &[], None))
             .wrapped_key;
         // debug!("wrapped_key = {:?}", &wrapped_key);
 
@@ -74,45 +75,24 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 .to_bytes()
                 .map_err(|_| Error::UnspecifiedCheckingError)?,
         );
-        let nonce = syscall!(self.trussed.random_bytes(12))
-            .bytes
-            .as_slice()
-            .try_into()
-            .unwrap();
+        let nonce = ByteArray::new(self.nonce());
 
-        let mut rp_id = heapless::String::new();
-
-        // We do not know the rpId string in U2F.  Just using placeholder.
-        // TODO: Is this true?
-        // <https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#cross-version-credentials>
-        rp_id.push_str("u2f").ok();
-        let rp = ctap_types::webauthn::PublicKeyCredentialRpEntity {
-            id: rp_id,
-            name: None,
-            url: None,
-        };
-
-        let user = ctap_types::webauthn::PublicKeyCredentialUserEntity {
-            id: Bytes::from_slice(&[0u8; 8]).unwrap(),
-            icon: None,
-            name: None,
-            display_name: None,
-        };
-
-        let credential = Credential::new(
-            credential::CtapVersion::U2fV2,
-            &rp,
-            &user,
-            SigningAlgorithm::P256 as i32,
-            key,
-            self.state
+        let credential = StrippedCredential {
+            ctap: credential::CtapVersion::U2fV2,
+            creation_time: self
+                .state
                 .persistent
                 .timestamp(&mut self.trussed)
                 .map_err(|_| Error::NotEnoughMemory)?,
-            None,
-            None,
+            use_counter: true,
+            algorithm: SigningAlgorithm::P256 as i32,
+            key,
             nonce,
-        );
+            hmac_secret: None,
+            cred_protect: None,
+            large_blob_key: None,
+            third_party_payment: None,
+        };
 
         // info!("made credential {:?}", &credential);
 
@@ -123,14 +103,14 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             .key_encryption_key(&mut self.trussed)
             .map_err(|_| Error::NotEnoughMemory)?;
         let credential_id = credential
-            .id(&mut self.trussed, kek, Some(&reg.app_id))
+            .id(&mut self.trussed, kek, reg.app_id)
             .map_err(|_| Error::NotEnoughMemory)?;
 
         let mut commitment = Commitment::new();
 
         commitment.push(0).unwrap(); // reserve byte
-        commitment.extend_from_slice(&reg.app_id).unwrap();
-        commitment.extend_from_slice(&reg.challenge).unwrap();
+        commitment.extend_from_slice(reg.app_id).unwrap();
+        commitment.extend_from_slice(reg.challenge).unwrap();
 
         commitment.extend_from_slice(&credential_id.0).unwrap();
 
@@ -165,14 +145,14 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         Ok(register::Response::new(
             0x05,
             &cose_key,
-            &credential_id.0,
+            credential_id.0,
             signature,
-            &cert,
+            cert,
         ))
     }
 
     fn authenticate(&mut self, auth: &authenticate::Request) -> Result<authenticate::Response> {
-        let cred = Credential::try_from_bytes(self, &auth.app_id, &auth.key_handle);
+        let cred = Credential::try_from_bytes(self, auth.app_id, auth.key_handle);
 
         let user_presence_byte = match auth.control_byte {
             ControlByte::CheckOnly => {
@@ -198,7 +178,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let cred = cred.map_err(|_| Error::IncorrectDataParameter)?;
 
-        let key = match &cred.key {
+        let key = match cred.key() {
             Key::WrappedKey(bytes) => {
                 let wrapping_key = self
                     .state
@@ -226,7 +206,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             _ => return Err(Error::IncorrectDataParameter),
         };
 
-        if cred.algorithm != -7 {
+        if cred.algorithm() != -7 {
             info!("Unexpected mechanism for u2f");
             return Err(Error::IncorrectDataParameter);
         }
@@ -239,12 +219,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let mut commitment = Commitment::new();
 
-        commitment.extend_from_slice(&auth.app_id).unwrap();
+        commitment.extend_from_slice(auth.app_id).unwrap();
         commitment.push(user_presence_byte).unwrap();
         commitment
             .extend_from_slice(&sig_count.to_be_bytes())
             .unwrap();
-        commitment.extend_from_slice(&auth.challenge).unwrap();
+        commitment.extend_from_slice(auth.challenge).unwrap();
 
         let signature = syscall!(self.trussed.sign(
             Mechanism::P256,

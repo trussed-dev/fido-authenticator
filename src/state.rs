@@ -2,26 +2,34 @@
 //!
 //! Needs cleanup.
 
+pub mod migrate;
+
+use core::num::NonZeroU32;
+
 use ctap_types::{
-    cose::EcdhEsHkdf256PublicKey as CoseEcdhEsHkdf256PublicKey,
+    ctap2::AttestationFormatsPreference,
     // 2022-02-27: 10 credentials
     sizes::MAX_CREDENTIAL_COUNT_IN_LIST, // U8 currently
-    Bytes,
     Error,
     String,
 };
-use trussed::{
-    client, syscall, try_syscall,
-    types::{self, KeyId, Location, Mechanism},
-    Client as TrussedClient,
+use littlefs2_core::{path, Path};
+use trussed_core::{
+    mechanisms::{Chacha8Poly1305, P256},
+    syscall, try_syscall,
+    types::{KeyId, Location, Mechanism, Message, PathBuf},
+    CertificateClient, CryptoClient, FilesystemClient,
 };
 
 use heapless::binary_heap::{BinaryHeap, Max};
-use littlefs2::path::PathBuf;
 
-use crate::{cbor_serialize_message, credential::Credential, Result};
+use crate::{
+    credential::FullCredential,
+    ctap2::{self, pin::PinProtocolState},
+    Result,
+};
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CachedCredential {
     pub timestamp: u32,
     // PathBuf has length 255 + 1, we only need 36 + 1
@@ -41,7 +49,7 @@ impl Ord for CachedCredential {
     }
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Default)]
 pub struct CredentialCacheGeneric<const N: usize>(BinaryHeap<CachedCredential, Max, N>);
 impl<const N: usize> CredentialCacheGeneric<N> {
     pub fn push(&mut self, item: CachedCredential) {
@@ -71,7 +79,7 @@ impl<const N: usize> CredentialCacheGeneric<N> {
 
 pub type CredentialCache = CredentialCacheGeneric<MAX_CREDENTIAL_COUNT_IN_LIST>;
 
-#[derive(Clone, Debug, /*uDebug, Eq, PartialEq,*/ serde::Deserialize, serde::Serialize)]
+#[derive(Debug)]
 pub struct State {
     /// Batch device identity (aaguid, certificate, key).
     pub identity: Identity,
@@ -101,13 +109,13 @@ impl State {
         }
     }
 
-    pub fn decrement_retries<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
+    pub fn decrement_retries<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<()> {
         self.persistent.decrement_retries(trussed)?;
         self.runtime.decrement_retries();
         Ok(())
     }
 
-    pub fn reset_retries<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
+    pub fn reset_retries<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<()> {
         self.persistent.reset_retries(trussed)?;
         self.runtime.reset_retries();
         Ok(())
@@ -126,7 +134,7 @@ impl State {
 }
 
 /// Batch device identity (aaguid, certificate, key).
-#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Identity {
     // can this be [u8; 16] or need Bytes for serialization?
     // aaguid: Option<Bytes<consts::U16>>,
@@ -134,7 +142,7 @@ pub struct Identity {
 }
 
 pub type Aaguid = [u8; 16];
-pub type Certificate = trussed::types::Message;
+pub type Certificate = trussed_core::types::Message;
 
 impl Identity {
     // Attempt to yank out the aaguid of a certificate.
@@ -168,7 +176,7 @@ impl Identity {
     }
 
     /// Lookup batch key and certificate, together with AAUGID.
-    pub fn attestation<T: TrussedClient>(
+    pub fn attestation<T: CryptoClient + CertificateClient>(
         &mut self,
         trussed: &mut T,
     ) -> (Option<(KeyId, Certificate)>, Aaguid) {
@@ -194,22 +202,19 @@ impl Identity {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CredentialManagementEnumerateRps {
-    pub remaining: u32,
-    pub rp_id_hash: Bytes<32>,
+    pub remaining: NonZeroU32,
+    pub rp_id_hash: [u8; 32],
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CredentialManagementEnumerateCredentials {
     pub remaining: u32,
-    pub rp_dir: PathBuf,
     pub prev_filename: PathBuf,
 }
 
-#[derive(
-    Clone, Debug, /*uDebug,*/ Default, /*PartialEq,*/ serde::Deserialize, serde::Serialize,
-)]
+#[derive(Clone, Debug, Default)]
 pub struct ActiveGetAssertionData {
     pub rp_id_hash: [u8; 32],
     pub client_data_hash: [u8; 32],
@@ -217,24 +222,22 @@ pub struct ActiveGetAssertionData {
     pub up_performed: bool,
     pub multiple_credentials: bool,
     pub extensions: Option<ctap_types::ctap2::get_assertion::ExtensionsInput>,
+    pub attestation_formats_preference: Option<AttestationFormatsPreference>,
 }
 
-#[derive(
-    Clone, Debug, /*uDebug,*/ Default, /*PartialEq,*/ serde::Deserialize, serde::Serialize,
-)]
+#[derive(Debug, Default)]
 pub struct RuntimeState {
-    key_agreement_key: Option<KeyId>,
-    pin_token: Option<KeyId>,
-    // TODO: why is this field not used?
-    shared_secret: Option<KeyId>,
+    pin_protocol: Option<PinProtocolState>,
     consecutive_pin_mismatches: u8,
 
     // both of these are a cache for previous Get{Next,}Assertion call
     cached_credentials: CredentialCache,
     pub active_get_assertion: Option<ActiveGetAssertionData>,
-    channel: Option<u32>,
     pub cached_rp: Option<CredentialManagementEnumerateRps>,
     pub cached_rk: Option<CredentialManagementEnumerateCredentials>,
+
+    // largeBlob command
+    pub large_blobs: ctap2::large_blobs::State,
 }
 
 // TODO: Plan towards future extensibility
@@ -251,7 +254,7 @@ pub struct RuntimeState {
 // Currently, this causes the entire authnr to reset state. Maybe it should even reformat disk
 //
 // - An alternative would be `heapless::Map`, but I'd prefer something more typed.
-#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, Default)]
 pub struct PersistentState {
     #[serde(skip)]
     // TODO: there has to be a better way than.. this
@@ -263,6 +266,7 @@ pub struct PersistentState {
     key_encryption_key: Option<KeyId>,
     key_wrapping_key: Option<KeyId>,
     consecutive_pin_mismatches: u8,
+    #[serde(with = "serde_bytes")]
     pin_hash: Option<[u8; 16]>,
     // Ideally, we'd dogfood a "Monotonic Counter" from trussed.
     // TODO: Add per-key counters for resident keys.
@@ -272,14 +276,9 @@ pub struct PersistentState {
 
 impl PersistentState {
     const RESET_RETRIES: u8 = 8;
-    const FILENAME: &'static [u8] = b"persistent-state.cbor";
-    const MAX_RESIDENT_CREDENTIALS_GUESSTIMATE: u32 = 100;
+    const FILENAME: &'static Path = path!("persistent-state.cbor");
 
-    pub fn max_resident_credentials_guesstimate(&self) -> u32 {
-        Self::MAX_RESIDENT_CREDENTIALS_GUESSTIMATE
-    }
-
-    pub fn load<T: client::Client + client::Chacha8Poly1305>(trussed: &mut T) -> Result<Self> {
+    pub fn load<T: FilesystemClient>(trussed: &mut T) -> Result<Self> {
         // TODO: add "exists_file" method instead?
         let result =
             try_syscall!(trussed.read_file(Location::Internal, PathBuf::from(Self::FILENAME),))
@@ -292,19 +291,20 @@ impl PersistentState {
 
         let data = result.unwrap().data;
 
-        let result = trussed::cbor_deserialize(&data);
-
-        if result.is_err() {
-            info!("err deser'ing: {:?}", result.err().unwrap());
+        let state: Self = cbor_smol::cbor_deserialize(&data).map_err(|_err| {
+            info!("err deser'ing: {_err:?}",);
             info!("{}", hex_str!(&data));
-            return Err(Error::Other);
-        }
+            Error::Other
+        })?;
 
-        result.map_err(|_| Error::Other)
+        debug!("Loaded state: {state:#?}");
+
+        Ok(state)
     }
 
-    pub fn save<T: TrussedClient>(&self, trussed: &mut T) -> Result<()> {
-        let data = crate::cbor_serialize_message(self).unwrap();
+    pub fn save<T: FilesystemClient>(&self, trussed: &mut T) -> Result<()> {
+        let mut data = Message::new();
+        cbor_smol::cbor_serialize_to(self, &mut data).unwrap();
 
         syscall!(trussed.write_file(
             Location::Internal,
@@ -315,7 +315,7 @@ impl PersistentState {
         Ok(())
     }
 
-    pub fn reset<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
+    pub fn reset<T: CryptoClient + FilesystemClient>(&mut self, trussed: &mut T) -> Result<()> {
         if let Some(key) = self.key_encryption_key {
             syscall!(trussed.delete(key));
         }
@@ -330,10 +330,7 @@ impl PersistentState {
         self.save(trussed)
     }
 
-    pub fn load_if_not_initialised<T: client::Client + client::Chacha8Poly1305>(
-        &mut self,
-        trussed: &mut T,
-    ) {
+    pub fn load_if_not_initialised<T: FilesystemClient>(&mut self, trussed: &mut T) {
         if !self.initialised {
             match Self::load(trussed) {
                 Ok(previous_self) => {
@@ -348,14 +345,14 @@ impl PersistentState {
         }
     }
 
-    pub fn timestamp<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<u32> {
+    pub fn timestamp<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<u32> {
         let now = self.timestamp;
         self.timestamp += 1;
         self.save(trussed)?;
         Ok(now)
     }
 
-    pub fn key_encryption_key<T: client::Client + client::Chacha8Poly1305>(
+    pub fn key_encryption_key<T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
         &mut self,
         trussed: &mut T,
     ) -> Result<KeyId> {
@@ -365,7 +362,7 @@ impl PersistentState {
         }
     }
 
-    pub fn rotate_key_encryption_key<T: client::Client + client::Chacha8Poly1305>(
+    pub fn rotate_key_encryption_key<T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
         &mut self,
         trussed: &mut T,
     ) -> Result<KeyId> {
@@ -378,7 +375,7 @@ impl PersistentState {
         Ok(key)
     }
 
-    pub fn key_wrapping_key<T: client::Client + client::Chacha8Poly1305>(
+    pub fn key_wrapping_key<T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
         &mut self,
         trussed: &mut T,
     ) -> Result<KeyId> {
@@ -388,7 +385,7 @@ impl PersistentState {
         }
     }
 
-    pub fn rotate_key_wrapping_key<T: client::Client + client::Chacha8Poly1305>(
+    pub fn rotate_key_wrapping_key<T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
         &mut self,
         trussed: &mut T,
     ) -> Result<KeyId> {
@@ -407,14 +404,14 @@ impl PersistentState {
     }
 
     pub fn retries(&self) -> u8 {
-        Self::RESET_RETRIES - self.consecutive_pin_mismatches
+        Self::RESET_RETRIES.saturating_sub(self.consecutive_pin_mismatches)
     }
 
     pub fn pin_blocked(&self) -> bool {
         self.consecutive_pin_mismatches >= Self::RESET_RETRIES
     }
 
-    fn reset_retries<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
+    fn reset_retries<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<()> {
         if self.consecutive_pin_mismatches > 0 {
             self.consecutive_pin_mismatches = 0;
             self.save(trussed)?;
@@ -422,7 +419,7 @@ impl PersistentState {
         Ok(())
     }
 
-    fn decrement_retries<T: TrussedClient>(&mut self, trussed: &mut T) -> Result<()> {
+    fn decrement_retries<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<()> {
         // error to call before initialization
         if self.consecutive_pin_mismatches < Self::RESET_RETRIES {
             self.consecutive_pin_mismatches += 1;
@@ -438,7 +435,7 @@ impl PersistentState {
         self.pin_hash
     }
 
-    pub fn set_pin_hash<T: TrussedClient>(
+    pub fn set_pin_hash<T: FilesystemClient>(
         &mut self,
         trussed: &mut T,
         pin_hash: [u8; 16],
@@ -482,118 +479,60 @@ impl RuntimeState {
         self.cached_credentials.push(credential);
     }
 
-    pub fn pop_credential<T: client::FilesystemClient>(
+    pub fn pop_credential<T: FilesystemClient>(
         &mut self,
         trussed: &mut T,
-    ) -> Option<Credential> {
+    ) -> Option<FullCredential> {
         let cached_credential = self.cached_credentials.pop()?;
 
         let credential_data = syscall!(trussed.read_file(
             Location::Internal,
-            PathBuf::from(cached_credential.path.as_str()),
+            PathBuf::try_from(cached_credential.path.as_str()).unwrap(),
         ))
         .data;
 
-        Credential::deserialize(&credential_data).ok()
+        FullCredential::deserialize(&credential_data).ok()
     }
 
     pub fn remaining_credentials(&self) -> u32 {
         self.cached_credentials.len() as _
     }
 
-    pub fn key_agreement_key<T: client::P256>(&mut self, trussed: &mut T) -> KeyId {
-        match self.key_agreement_key {
-            Some(key) => key,
-            None => self.rotate_key_agreement_key(trussed),
-        }
+    pub fn pin_protocol<T: P256>(&mut self, trussed: &mut T) -> &mut PinProtocolState {
+        self.pin_protocol
+            .get_or_insert_with(|| PinProtocolState::new(trussed))
     }
 
-    pub fn rotate_key_agreement_key<T: client::P256>(&mut self, trussed: &mut T) -> KeyId {
-        // TODO: need to rotate pin token?
-        if let Some(key) = self.key_agreement_key {
-            syscall!(trussed.delete(key));
-        }
-        if let Some(previous_shared_secret) = self.shared_secret {
-            syscall!(trussed.delete(previous_shared_secret));
-        }
-
-        let key = syscall!(trussed.generate_p256_private_key(Location::Volatile)).key;
-        self.key_agreement_key = Some(key);
-        self.shared_secret = None;
-        key
-    }
-
-    pub fn pin_token(&mut self, trussed: &mut impl client::HmacSha256) -> KeyId {
-        match self.pin_token {
-            Some(token) => token,
-            None => self.rotate_pin_token(trussed),
-        }
-    }
-
-    pub fn rotate_pin_token<T: client::HmacSha256>(&mut self, trussed: &mut T) -> KeyId {
-        // TODO: need to rotate key agreement key?
-        if let Some(token) = self.pin_token {
-            syscall!(trussed.delete(token));
-        }
-        let token = syscall!(trussed.generate_secret_key(16, Location::Volatile)).key;
-        self.pin_token = Some(token);
-        token
-    }
-
-    pub fn reset<T: client::HmacSha256 + client::P256 + client::FilesystemClient>(
-        &mut self,
-        trussed: &mut T,
-    ) {
+    pub fn reset<T: CryptoClient + P256>(&mut self, trussed: &mut T) {
         // Could use `free_credential_heap`, but since we're deleting everything here, this is quicker.
         syscall!(trussed.delete_all(Location::Volatile));
         self.clear_credential_cache();
         self.active_get_assertion = None;
 
-        self.rotate_pin_token(trussed);
-        self.rotate_key_agreement_key(trussed);
-    }
-
-    pub fn generate_shared_secret<T: client::P256>(
-        &mut self,
-        trussed: &mut T,
-        platform_key_agreement_key: &CoseEcdhEsHkdf256PublicKey,
-    ) -> Result<KeyId> {
-        let private_key = self.key_agreement_key(trussed);
-
-        let serialized_pkak = cbor_serialize_message(platform_key_agreement_key)
-            .map_err(|_| Error::InvalidParameter)?;
-        let platform_kak = try_syscall!(trussed.deserialize_p256_key(
-            &serialized_pkak,
-            types::KeySerialization::EcdhEsHkdf256,
-            types::StorageAttributes::new().set_persistence(types::Location::Volatile)
-        ))
-        .map_err(|_| Error::InvalidParameter)?
-        .key;
-
-        let pre_shared_secret = syscall!(trussed.agree(
-            types::Mechanism::P256,
-            private_key,
-            platform_kak,
-            types::StorageAttributes::new().set_persistence(types::Location::Volatile),
-        ))
-        .shared_secret;
-        syscall!(trussed.delete(platform_kak));
-
-        if let Some(previous_shared_secret) = self.shared_secret {
-            syscall!(trussed.delete(previous_shared_secret));
+        if let Some(pin_protocol) = self.pin_protocol.take() {
+            pin_protocol.reset(trussed);
         }
+        // to speed up future operations, we already generate the key agreement key
+        self.pin_protocol = Some(PinProtocolState::new(trussed));
+    }
+}
 
-        let shared_secret = syscall!(trussed.derive_key(
-            types::Mechanism::Sha256,
-            pre_shared_secret,
-            None,
-            types::StorageAttributes::new().set_persistence(types::Location::Volatile)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_literal::hex;
+
+    #[test]
+    fn deser() {
+        let _state: PersistentState = trussed::cbor_deserialize(&hex!(
+            "
+            a5726b65795f656e6372797074696f6e5f6b657950b19a5a2845e5ec71e3
+            2a1b890892376c706b65795f7772617070696e675f6b6579f6781a636f6e
+            73656375746976655f70696e5f6d69736d617463686573006870696e5f68
+            6173689018ef1879187c1881181818f0182d18fb186418960718dd185d18
+            3f188c18766974696d657374616d7009
+        "
         ))
-        .key;
-        self.shared_secret = Some(shared_secret);
-
-        syscall!(trussed.delete(pre_shared_secret));
-
-        Ok(shared_secret)
+        .unwrap();
     }
 }

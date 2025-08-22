@@ -8,7 +8,7 @@ use crate::msp;
 use crate::{Authenticator, TrussedRequirements, UserPresence};
 
 use ctap_types::{ctap1, ctap2};
-use iso7816::Status;
+use iso7816::{command::CommandView, Data, Status};
 
 impl<UP, T> iso7816::App for Authenticator<UP, T>
 where
@@ -21,10 +21,10 @@ where
 
 #[inline(never)]
 /// Deserialize U2F, call authenticator, serialize response *Result*.
-fn handle_ctap1_from_hid<T, UP>(
+fn handle_ctap1_from_hid<T, UP, const R: usize>(
     authenticator: &mut Authenticator<UP, T>,
     data: &[u8],
-    response: &mut apdu_dispatch::response::Data,
+    response: &mut Data<R>,
 ) where
     T: TrussedRequirements,
     UP: UserPresence,
@@ -34,16 +34,18 @@ fn handle_ctap1_from_hid<T, UP>(
         msp() - 0x2000_0000
     );
     {
-        let command = apdu_dispatch::Command::try_from(data);
-        if let Err(_status) = command {
-            let code: [u8; 2] = (Status::IncorrectDataParameter).into();
-            debug!("CTAP1 parse error: {:?} ({})", status, hex_str!(&code));
-            response.extend_from_slice(&code).ok();
-            return;
-        }
+        let command = match CommandView::try_from(data) {
+            Ok(command) => command,
+            Err(_status) => {
+                let code: [u8; 2] = (Status::IncorrectDataParameter).into();
+                debug!("CTAP1 parse error: {:?} ({})", _status, hex_str!(&code));
+                response.extend_from_slice(&code).ok();
+                return;
+            }
+        };
 
         // debug!("1A SP: {:X}", msp());
-        match try_handle_ctap1(authenticator, &command.unwrap(), response) {
+        match try_handle_ctap1(authenticator, command, response) {
             Ok(()) => {
                 debug!("U2F response {} bytes", response.len());
                 // Need to add x9000 success code (normally the apdu-dispatch does this, but
@@ -63,10 +65,10 @@ fn handle_ctap1_from_hid<T, UP>(
 
 #[inline(never)]
 /// Deserialize CBOR, call authenticator, serialize response *Result*.
-fn handle_ctap2<T, UP>(
+fn handle_ctap2<T, UP, const R: usize>(
     authenticator: &mut Authenticator<UP, T>,
     data: &[u8],
-    response: &mut apdu_dispatch::response::Data,
+    response: &mut Data<R>,
 ) where
     T: TrussedRequirements,
     UP: UserPresence,
@@ -87,10 +89,10 @@ fn handle_ctap2<T, UP>(
 }
 
 #[inline(never)]
-fn try_handle_ctap1<T, UP>(
+fn try_handle_ctap1<T, UP, const R: usize>(
     authenticator: &mut Authenticator<UP, T>,
-    command: &apdu_dispatch::Command,
-    response: &mut apdu_dispatch::response::Data,
+    command: CommandView<'_>,
+    response: &mut Data<R>,
 ) -> Result<(), Status>
 where
     T: TrussedRequirements,
@@ -122,10 +124,10 @@ where
 }
 
 #[inline(never)]
-fn try_handle_ctap2<T, UP>(
+fn try_handle_ctap2<T, UP, const R: usize>(
     authenticator: &mut Authenticator<UP, T>,
     data: &[u8],
-    response: &mut apdu_dispatch::response::Data,
+    response: &mut Data<R>,
 ) -> Result<(), u8>
 where
     T: TrussedRequirements,
@@ -175,10 +177,9 @@ where
 
     // Goal of these nested scopes is to keep stack small.
     let ctap_request = ctap2::Request::deserialize(data)
-        .map(|request| {
-            info!("Received CTAP2 request {:?}", request_operation(&request));
-            trace!("CTAP2 request: {:?}", request);
-            request
+        .inspect(|_request| {
+            info!("Received CTAP2 request {:?}", request_operation(_request));
+            trace!("CTAP2 request: {:?}", _request);
         })
         .map_err(|error| {
             error!("Failed to deserialize CTAP2 request: {:?}", error);
@@ -189,10 +190,9 @@ where
     use ctap2::Authenticator;
     authenticator
         .call_ctap2(&ctap_request)
-        .map(|response| {
-            info!("Sending CTAP2 response {:?}", response_operation(&response));
-            trace!("CTAP2 response: {:?}", response);
-            response
+        .inspect(|_response| {
+            info!("Sending CTAP2 response {:?}", response_operation(_response));
+            trace!("CTAP2 response: {:?}", _response);
         })
         .map_err(|error| {
             info!("CTAP2 error: {:?}", error);
@@ -201,17 +201,20 @@ where
 }
 
 #[allow(unused)]
-fn request_operation(request: &ctap2::Request) -> ctap2::Operation {
+fn request_operation(request: &ctap2::Request) -> Option<ctap2::Operation> {
+    // TODO: move into ctap-types
     match request {
-        ctap2::Request::MakeCredential(_) => ctap2::Operation::MakeCredential,
-        ctap2::Request::GetAssertion(_) => ctap2::Operation::GetAssertion,
-        ctap2::Request::GetNextAssertion => ctap2::Operation::GetNextAssertion,
-        ctap2::Request::GetInfo => ctap2::Operation::GetInfo,
-        ctap2::Request::ClientPin(_) => ctap2::Operation::ClientPin,
-        ctap2::Request::Reset => ctap2::Operation::Reset,
-        ctap2::Request::CredentialManagement(_) => ctap2::Operation::CredentialManagement,
-        ctap2::Request::Selection => ctap2::Operation::Selection,
-        ctap2::Request::Vendor(operation) => ctap2::Operation::Vendor(*operation),
+        ctap2::Request::MakeCredential(_) => Some(ctap2::Operation::MakeCredential),
+        ctap2::Request::GetAssertion(_) => Some(ctap2::Operation::GetAssertion),
+        ctap2::Request::GetNextAssertion => Some(ctap2::Operation::GetNextAssertion),
+        ctap2::Request::GetInfo => Some(ctap2::Operation::GetInfo),
+        ctap2::Request::ClientPin(_) => Some(ctap2::Operation::ClientPin),
+        ctap2::Request::Reset => Some(ctap2::Operation::Reset),
+        ctap2::Request::CredentialManagement(_) => Some(ctap2::Operation::CredentialManagement),
+        ctap2::Request::Selection => Some(ctap2::Operation::Selection),
+        ctap2::Request::LargeBlobs(_) => Some(ctap2::Operation::LargeBlobs),
+        ctap2::Request::Vendor(operation) => Some(ctap2::Operation::Vendor(*operation)),
+        _ => None,
     }
 }
 
@@ -226,6 +229,8 @@ fn response_operation(request: &ctap2::Response) -> Option<ctap2::Operation> {
         ctap2::Response::Reset => Some(ctap2::Operation::Reset),
         ctap2::Response::CredentialManagement(_) => Some(ctap2::Operation::CredentialManagement),
         ctap2::Response::Selection => Some(ctap2::Operation::Selection),
+        ctap2::Response::LargeBlobs(_) => Some(ctap2::Operation::LargeBlobs),
         ctap2::Response::Vendor => None,
+        _ => None,
     }
 }

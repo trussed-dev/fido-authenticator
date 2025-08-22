@@ -1,0 +1,28 @@
+[package]
+name = "fido-authenticator-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+ctap-types = { version = "0.4", features = ["arbitrary"] }
+libfuzzer-sys = "0.4"
+trussed = { version = "0.1", features = ["clients-1", "certificate-client", "crypto-client", "filesystem-client", "management-client", "aes256-cbc", "ed255", "p256", "sha256"] }
+trussed-staging = { version = "0.3.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
+
+[dependencies.fido-authenticator]
+path = ".."
+
+[[bin]]
+name = "ctap"
+path = "fuzz_targets/ctap.rs"
+test = false
+doc = false
+bench = false
+
+[patch.crates-io]
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "6bba8fde36d05c0227769eb63345744e87d84b2b" }
+trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", rev = "1e1ca03a3a62ea9b802f4070ea4bce002eeb4bec" }

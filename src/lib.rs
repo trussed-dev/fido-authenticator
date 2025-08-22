@@ -7,6 +7,9 @@
 //!
 //! With feature `dispatch` activated, it also implements the `App` traits
 //! of [`apdu_dispatch`] and [`ctaphid_dispatch`].
+//!
+//! [`apdu_dispatch`]: https://docs.rs/apdu-dispatch
+//! [`ctaphid_dispatch`]: https://docs.rs/ctaphid-dispatch
 
 #![cfg_attr(not(test), no_std)]
 // #![warn(missing_docs)]
@@ -15,11 +18,20 @@
 extern crate delog;
 generate_macros!();
 
+pub use state::migrate;
+
 use core::time::Duration;
 
-use trussed::{client, syscall, types::Message, Client as TrussedClient};
-
-use ctap_types::heapless_bytes::Bytes;
+use trussed_core::{
+    mechanisms, syscall,
+    types::{
+        KeyId, KeySerialization, Location, Mechanism, SerializedKey, Signature,
+        SignatureSerialization, StorageAttributes,
+    },
+    CertificateClient, CryptoClient, FilesystemClient, ManagementClient, UiClient,
+};
+use trussed_fs_info::{FsInfoClient, FsInfoReply};
+use trussed_hkdf::HkdfClient;
 
 /// Re-export of `ctap-types` authenticator errors.
 pub use ctap_types::Error;
@@ -34,6 +46,8 @@ pub mod constants;
 pub mod credential;
 pub mod state;
 
+pub use ctap2::large_blobs::Config as LargeBlobsConfig;
+
 /// Results with our [`Error`].
 pub type Result<T> = core::result::Result<T, Error>;
 
@@ -43,27 +57,55 @@ pub type Result<T> = core::result::Result<T, Error>;
 /// - Ed25519 and P-256 are the core signature algorithms.
 /// - AES-256, SHA-256 and its HMAC are used within the CTAP protocols.
 /// - ChaCha8Poly1305 is our AEAD of choice, used e.g. for the key handles.
+/// - Some Trussed extensions might be required depending on the activated features, see
+///   [`ExtensionRequirements`][].
 pub trait TrussedRequirements:
-    client::Client
-    + client::P256
-    + client::Chacha8Poly1305
-    + client::Aes256Cbc
-    + client::Sha256
-    + client::HmacSha256
-    + client::Ed255 // + client::Totp
+    CertificateClient
+    + CryptoClient
+    + FilesystemClient
+    + ManagementClient
+    + UiClient
+    + mechanisms::P256
+    + mechanisms::Chacha8Poly1305
+    + mechanisms::Aes256Cbc
+    + mechanisms::Sha256
+    + mechanisms::HmacSha256
+    + mechanisms::Ed255
+    + FsInfoClient
+    + HkdfClient
+    + ExtensionRequirements
 {
 }
 
 impl<T> TrussedRequirements for T where
-    T: client::Client
-        + client::P256
-        + client::Chacha8Poly1305
-        + client::Aes256Cbc
-        + client::Sha256
-        + client::HmacSha256
-        + client::Ed255 // + client::Totp
+    T: CertificateClient
+        + CryptoClient
+        + FilesystemClient
+        + ManagementClient
+        + UiClient
+        + mechanisms::P256
+        + mechanisms::Chacha8Poly1305
+        + mechanisms::Aes256Cbc
+        + mechanisms::Sha256
+        + mechanisms::HmacSha256
+        + mechanisms::Ed255
+        + FsInfoClient
+        + HkdfClient
+        + ExtensionRequirements
 {
 }
+
+#[cfg(not(feature = "chunked"))]
+pub trait ExtensionRequirements {}
+
+#[cfg(not(feature = "chunked"))]
+impl<T> ExtensionRequirements for T {}
+
+#[cfg(feature = "chunked")]
+pub trait ExtensionRequirements: trussed_chunked::ChunkedClient {}
+
+#[cfg(feature = "chunked")]
+impl<T> ExtensionRequirements for T where T: trussed_chunked::ChunkedClient {}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 /// Externally defined configuration.
@@ -76,6 +118,20 @@ pub struct Config {
     /// If set, the first Get Assertion or Authenticate request within the specified time after
     /// boot is accepted without additional user presence verification.
     pub skip_up_timeout: Option<Duration>,
+    /// The maximum number of resident credentials.
+    pub max_resident_credential_count: Option<u32>,
+    /// Configuration for the largeBlobKey extension and the largeBlobs command.
+    ///
+    /// If this is `None`, the extension and the command are disabled.
+    pub large_blobs: Option<ctap2::large_blobs::Config>,
+    /// Whether the authenticator supports the NFC transport.
+    pub nfc_transport: bool,
+}
+
+impl Config {
+    pub fn supports_large_blobs(&self) -> bool {
+        self.large_blobs.is_some()
+    }
 }
 
 // impl Default for Config {
@@ -111,13 +167,16 @@ where
 }
 
 // EWW.. this is a bit unsafe isn't it
-fn format_hex(data: &[u8], mut buffer: &mut [u8]) {
+fn format_hex<'a>(data: &[u8], buffer: &'a mut [u8]) -> &'a str {
     const HEX_CHARS: &[u8] = b"0123456789abcdef";
-    for byte in data.iter() {
-        buffer[0] = HEX_CHARS[(byte >> 4) as usize];
-        buffer[1] = HEX_CHARS[(byte & 0xf) as usize];
-        buffer = &mut buffer[2..];
+    assert!(data.len() * 2 >= buffer.len());
+    for (idx, byte) in data.iter().enumerate() {
+        buffer[idx * 2] = HEX_CHARS[(byte >> 4) as usize];
+        buffer[idx * 2 + 1] = HEX_CHARS[(byte & 0xf) as usize];
     }
+
+    // SAFETY: we just added only ascii chars to buffer from 0 to data.len() - 1
+    unsafe { core::str::from_utf8_unchecked(&buffer[0..data.len() * 2]) }
 }
 
 // NB: to actually use this, replace the constant implementation with the inline assembly.
@@ -147,17 +206,79 @@ pub enum SigningAlgorithm {
     Ed25519 = -8,
     /// The NIST P-256 signature algorithm.
     P256 = -7,
-    // #[doc(hidden)]
-    // Totp = -9,
 }
 
-impl core::convert::TryFrom<i32> for SigningAlgorithm {
+impl SigningAlgorithm {
+    pub fn mechanism(&self) -> Mechanism {
+        match self {
+            Self::Ed25519 => Mechanism::Ed255,
+            Self::P256 => Mechanism::P256,
+        }
+    }
+
+    pub fn signature_serialization(&self) -> SignatureSerialization {
+        match self {
+            Self::Ed25519 => SignatureSerialization::Raw,
+            Self::P256 => SignatureSerialization::Asn1Der,
+        }
+    }
+
+    pub fn generate_private_key<C: CryptoClient>(
+        &self,
+        trussed: &mut C,
+        location: Location,
+    ) -> KeyId {
+        syscall!(trussed.generate_key(
+            self.mechanism(),
+            StorageAttributes::new().set_persistence(location)
+        ))
+        .key
+    }
+
+    pub fn derive_public_key<C: CryptoClient>(
+        &self,
+        trussed: &mut C,
+        private_key: KeyId,
+    ) -> SerializedKey {
+        let mechanism = self.mechanism();
+        let public_key = syscall!(trussed.derive_key(
+            mechanism,
+            private_key,
+            None,
+            StorageAttributes::new().set_persistence(Location::Volatile)
+        ))
+        .key;
+        let cose_public_key =
+            syscall!(trussed.serialize_key(mechanism, public_key, KeySerialization::Cose))
+                .serialized_key;
+        if !syscall!(trussed.delete(public_key)).success {
+            error!("failed to delete credential public key");
+        }
+        cose_public_key
+    }
+
+    pub fn sign<C: CryptoClient>(&self, trussed: &mut C, key: KeyId, data: &[u8]) -> Signature {
+        syscall!(trussed.sign(self.mechanism(), key, data, self.signature_serialization()))
+            .signature
+    }
+}
+
+impl From<SigningAlgorithm> for i32 {
+    fn from(alg: SigningAlgorithm) -> Self {
+        match alg {
+            SigningAlgorithm::P256 => -7,
+            SigningAlgorithm::Ed25519 => -8,
+        }
+    }
+}
+
+impl TryFrom<i32> for SigningAlgorithm {
     type Error = Error;
+
     fn try_from(alg: i32) -> Result<Self> {
         Ok(match alg {
             -7 => SigningAlgorithm::P256,
             -8 => SigningAlgorithm::Ed25519,
-            // -9 => SigningAlgorithm::Totp,
             _ => return Err(Error::UnsupportedAlgorithm),
         })
     }
@@ -165,7 +286,7 @@ impl core::convert::TryFrom<i32> for SigningAlgorithm {
 
 /// Method to check for user presence.
 pub trait UserPresence: Copy {
-    fn user_present<T: TrussedClient>(
+    fn user_present<T: TrussedRequirements>(
         self,
         trussed: &mut T,
         timeout_milliseconds: u32,
@@ -181,7 +302,7 @@ pub type SilentAuthenticator = Silent;
 pub struct Silent {}
 
 impl UserPresence for Silent {
-    fn user_present<T: TrussedClient>(self, _: &mut T, _: u32) -> Result<()> {
+    fn user_present<T: TrussedRequirements>(self, _: &mut T, _: u32) -> Result<()> {
         Ok(())
     }
 }
@@ -195,24 +316,18 @@ pub type NonSilentAuthenticator = Conforming;
 pub struct Conforming {}
 
 impl UserPresence for Conforming {
-    fn user_present<T: TrussedClient>(
+    fn user_present<T: TrussedRequirements>(
         self,
         trussed: &mut T,
         timeout_milliseconds: u32,
     ) -> Result<()> {
         let result = syscall!(trussed.confirm_user_present(timeout_milliseconds)).result;
         result.map_err(|err| match err {
-            trussed::types::consent::Error::TimedOut => Error::UserActionTimeout,
-            // trussed::types::consent::Error::TimedOut => Error::KeepaliveCancel,
+            trussed_core::types::consent::Error::TimedOut => Error::UserActionTimeout,
+            trussed_core::types::consent::Error::Interrupted => Error::KeepaliveCancel,
             _ => Error::OperationDenied,
         })
     }
-}
-
-fn cbor_serialize_message<T: serde::Serialize>(
-    object: &T,
-) -> core::result::Result<Message, ctap_types::serde::Error> {
-    trussed::cbor_serialize_bytes(object)
 }
 
 impl<UP, T> Authenticator<UP, T>
@@ -230,9 +345,49 @@ where
         }
     }
 
-    fn hash(&mut self, data: &[u8]) -> Bytes<32> {
+    fn estimate_remaining_inner(info: &FsInfoReply) -> Option<u32> {
+        let block_size = info.block_info.as_ref()?.size;
+        // 1 block for the directory, 1 for the private key, 400 bytes for a reasonnable key and metadata
+        let size_taken = 2 * block_size + 400;
+        // Remove 5 block kept as buffer
+        Some((info.available_space.saturating_sub(5 * block_size) / size_taken) as u32)
+    }
+
+    fn estimate_remaining(&mut self) -> Option<u32> {
+        let info = syscall!(self.trussed.fs_info(Location::Internal));
+        debug!("Got filesystem info: {info:?}");
+        Self::estimate_remaining_inner(&info)
+    }
+
+    fn can_fit_inner(info: &FsInfoReply, size: usize) -> Option<bool> {
+        let block_size = info.block_info.as_ref()?.size;
+        // 1 block for the rp directory, 5 block of margin, 50 bytes for a reasonnable metadata
+        let size_taken = 6 * block_size + size + 50;
+        Some(size_taken < info.available_space)
+    }
+
+    /// Can a credential of size `size` be stored with safe margins
+    ///
+    /// This assumes that the key has already been generated and is stored.
+    fn can_fit(&mut self, size: usize) -> Option<bool> {
+        debug!("Can fit for {size} bytes");
+        let info = syscall!(self.trussed.fs_info(Location::Internal));
+        debug!("Got filesystem info: {info:?}");
+        debug!(
+            "Available storage: {:?}",
+            Self::estimate_remaining_inner(&info)
+        );
+        Self::can_fit_inner(&info, size)
+    }
+
+    fn hash(&mut self, data: &[u8]) -> [u8; 32] {
         let hash = syscall!(self.trussed.hash_sha256(data)).hash;
-        hash.to_bytes().expect("hash should fit")
+        hash.as_slice().try_into().expect("hash should fit")
+    }
+
+    fn nonce(&mut self) -> [u8; 12] {
+        let bytes = syscall!(self.trussed.random_bytes(12)).bytes;
+        bytes.as_slice().try_into().expect("hash should fit")
     }
 
     fn skip_up_check(&mut self) -> bool {
@@ -250,4 +405,14 @@ where
 }
 
 #[cfg(test)]
-mod test {}
+mod test {
+    use super::*;
+
+    #[test]
+    fn hex() {
+        let data = [0x01, 0x02, 0xB1, 0xA1];
+        let buffer = &mut [0; 8];
+        assert_eq!(format_hex(&data, buffer), "0102b1a1");
+        assert_eq!(buffer, b"0102b1a1");
+    }
+}
