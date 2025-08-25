@@ -1,42 +1,41 @@
 [package]
 name = "fido-authenticator"
 version = "0.1.1"
-authors = ["Nicolas Stalder <n@stalder.io>"]
+authors = ["The Trussed developers", "Nicolas Stalder <n@stalder.io>", "Nitrokey GmbH"]
 edition = "2021"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/solokeys/fido-authenticator"
+repository = "https://github.com/trussed-dev/fido-authenticator"
 documentation = "https://docs.rs/fido-authenticator"
 description = "FIDO authenticator Trussed app"
 
 [dependencies]
-cbor-smol = { version = "0.5" }
-ctap-types = { version = "0.4", features = ["get-info-full", "large-blobs", "third-party-payment"] }
+apdu-app = { version = "0.1", optional = true }
+cbor-smol = "0.5"
 cosey = "0.3"
-delog = "0.1.0"
+ctap-types = { version = "0.4", features = ["get-info-full", "large-blobs", "third-party-payment"] }
+ctaphid-app = { version = "0.1", optional = true }
+delog = "0.1"
 heapless = "0.7"
 heapless-bytes = "0.3"
+iso7816 = { version = "0.1.2", optional = true }
 littlefs2-core = "0.1"
 serde = { version = "1.0", default-features = false }
 serde_bytes = { version = "0.11.14", default-features = false }
-serde-indexed = "0.1.0"
+serde-indexed = "0.1"
 sha2 = { version = "0.10", default-features = false }
-trussed-core = { version = "0.1.0", features = ["aes256-cbc", "certificate-client", "chacha8-poly1305", "crypto-client", "ed255", "filesystem-client", "hmac-sha256", "management-client", "p256", "sha256", "ui-client"] }
-trussed-fs-info = "0.2.0"
-trussed-hkdf = { version = "0.3.0" }
-trussed-chunked = { version = "0.2.0", optional = true }
-
-apdu-app = { version = "0.1", optional = true }
-ctaphid-app = { version = "0.1.0-rc.1", optional = true }
-iso7816 = { version = "0.1.2", optional = true }
+trussed-chunked = { version = "0.2", optional = true }
+trussed-core = { version = "0.1", features = ["aes256-cbc", "certificate-client", "chacha8-poly1305", "crypto-client", "ed255", "filesystem-client", "hmac-sha256", "management-client", "p256", "sha256", "ui-client"] }
+trussed-fs-info = "0.2"
+trussed-hkdf = "0.3"
 
 [features]
-dispatch = ["apdu-dispatch", "ctaphid-dispatch", "iso7816"]
+dispatch = ["apdu-dispatch", "ctaphid-dispatch", "dep:iso7816"]
 apdu-dispatch = ["dep:apdu-app"]
 ctaphid-dispatch = ["dep:ctaphid-app"]
 disable-reset-time-window = []
 
 # enables support for a large-blob array longer than 1024 bytes
-chunked = ["trussed-chunked"]
+chunked = ["dep:trussed-chunked"]
 
 log-all = []
 log-none = []
@@ -50,18 +49,18 @@ log-error = []
 admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-nitrokey.20", features = ["migration-tests"] }
 aes = "0.8.4"
 cbc = { version = "0.1.2", features = ["alloc"] }
-ciborium = { version = "0.2.2" }
+ciborium = "0.2.2"
 ciborium-io = "0.2.2"
 cipher = "0.4.4"
 ctaphid = { version = "0.3.1", default-features = false }
 ctaphid-dispatch = "0.3"
 delog = { version = "0.1.6", features = ["std-log"] }
-env_logger = "0.11.0"
+env_logger = "0.11"
 hex-literal = "0.4.1"
 hmac = "0.12.1"
-interchange = "0.3.0"
-itertools = "0.14.0"
-littlefs2 = "0.6.0"
+interchange = "0.3"
+itertools = "0.14"
+littlefs2 = "0.6"
 log = "0.4.21"
 p256 = { version = "0.13.2", features = ["ecdh"] }
 rand = "0.8.4"
@@ -71,11 +70,11 @@ serde_test = "1.0.176"
 trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "024e0eca5fb7dbd2457831f7c7bffe4341e08775", features = ["virt"] }
 trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.3.3", features = ["chunked", "hkdf", "virt", "fs-info"] }
 trussed-usbip = { git = "https://github.com/trussed-dev/pc-usbip-runner.git", rev = "504674453c9573a30aa2f155101df49eb2af1ba7", default-features = false, features = ["ctaphid"] }
-usbd-ctaphid = "0.3.0"
-x509-parser = "0.16.0"
+usbd-ctaphid = "0.3"
+x509-parser = "0.16"
 
 [package.metadata.docs.rs]
-features = ["dispatch"]
+features = ["chunked", "dispatch"]
 
 [patch.crates-io]
 trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "024e0eca5fb7dbd2457831f7c7bffe4341e08775" }
