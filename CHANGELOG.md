@@ -6,7 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
--
+- Update dependencies:
+  - `apdu-app` v0.2
+  - `cosey` v0.4
+  - `ctap-types` v0.5
+  - `ctaphid-app` v0.2
+  - `heapless` v0.9
+  - `heapless-bytes` v0.5
+  - `iso7816` v0.2
+  - `trussed-chunked` v0.3
+  - `trussed-core` v0.2
+  - `trussed-fs-info` v0.3
+  - `trussed-hkdf` v0.4
 
 ## [v0.2.0](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.2.0) (2025-09-02)
 

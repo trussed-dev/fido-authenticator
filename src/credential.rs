@@ -202,13 +202,14 @@ impl Credential {
 fn deserialize_bytes<E: serde::de::Error, const N: usize>(
     s: &[u8],
 ) -> core::result::Result<Bytes<N>, E> {
-    Bytes::from_slice(s).map_err(|_| E::invalid_length(s.len(), &"a fixed-size sequence of bytes"))
+    Bytes::try_from(s).map_err(|_| E::invalid_length(s.len(), &"a fixed-size sequence of bytes"))
 }
 
 fn deserialize_str<E: serde::de::Error, const N: usize>(
     s: &str,
 ) -> core::result::Result<String<N>, E> {
-    Ok(s.into())
+    s.try_into()
+        .map_err(|_| E::custom("Serialized string doesn't fit "))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -794,12 +795,12 @@ mod test {
     fn credential_data() -> CredentialData {
         CredentialData {
             rp: Rp::new(PublicKeyCredentialRpEntity {
-                id: String::from("John Doe"),
+                id: String::try_from("John Doe").unwrap(),
                 name: None,
                 icon: None,
             }),
             user: User::new(PublicKeyCredentialUserEntity {
-                id: Bytes::from_slice(&[1, 2, 3]).unwrap(),
+                id: Bytes::from(&[1, 2, 3]),
                 icon: None,
                 name: None,
                 display_name: None,
@@ -807,7 +808,7 @@ mod test {
             creation_time: 123,
             use_counter: false,
             algorithm: -7,
-            key: Key::WrappedKey(Bytes::from_slice(&[1, 2, 3]).unwrap()),
+            key: Key::WrappedKey(Bytes::from(&[1, 2, 3])),
             hmac_secret: Some(false),
             cred_protect: None,
             use_short_id: Some(true),
@@ -821,7 +822,7 @@ mod test {
             rp: Rp {
                 format: SerializationFormat::Long,
                 inner: PublicKeyCredentialRpEntity {
-                    id: String::from("John Doe"),
+                    id: String::try_from("John Doe").unwrap(),
                     name: None,
                     icon: None,
                 },
@@ -829,7 +830,7 @@ mod test {
             user: User {
                 format: SerializationFormat::Long,
                 inner: PublicKeyCredentialUserEntity {
-                    id: Bytes::from_slice(&[1, 2, 3]).unwrap(),
+                    id: Bytes::from(&[1, 2, 3]),
                     icon: None,
                     name: None,
                     display_name: None,
@@ -838,7 +839,7 @@ mod test {
             creation_time: 123,
             use_counter: false,
             algorithm: -7,
-            key: Key::WrappedKey(Bytes::from_slice(&[1, 2, 3]).unwrap()),
+            key: Key::WrappedKey(Bytes::from(&[1, 2, 3])),
             hmac_secret: Some(false),
             cred_protect: None,
             use_short_id: None,
@@ -865,7 +866,7 @@ mod test {
         let between = Uniform::from(0..(N + 1));
         let n = between.sample(&mut OsRng);
 
-        bytes.resize_default(n).unwrap();
+        bytes.resize_zero(n).unwrap();
 
         OsRng.fill_bytes(&mut bytes);
         bytes
@@ -1079,7 +1080,7 @@ mod test {
     #[test]
     fn max_credential_id() {
         let rp_id: String<256> = core::iter::repeat_n('?', 256).collect();
-        let key = Bytes::from_slice(&[u8::MAX; 128]).unwrap();
+        let key = Bytes::from(&[u8::MAX; 128]);
         let credential = StrippedCredential {
             ctap: CtapVersion::Fido21Pre,
             creation_time: u32::MAX,
@@ -1160,8 +1161,8 @@ mod test {
 
         fn inner(&self) -> PublicKeyCredentialRpEntity {
             PublicKeyCredentialRpEntity {
-                id: self.id.into(),
-                name: self.name.map(From::from),
+                id: self.id.try_into().unwrap(),
+                name: self.name.map(|n| n.try_into().unwrap()),
                 icon: None,
             }
         }
@@ -1225,10 +1226,10 @@ mod test {
 
         fn inner(&self) -> PublicKeyCredentialUserEntity {
             PublicKeyCredentialUserEntity {
-                id: Bytes::from_slice(self.id).unwrap(),
-                icon: self.icon.map(From::from),
-                name: self.name.map(From::from),
-                display_name: self.display_name.map(From::from),
+                id: Bytes::try_from(self.id).unwrap(),
+                icon: self.icon.map(|v| v.try_into().unwrap()),
+                name: self.name.map(|v| v.try_into().unwrap()),
+                display_name: self.display_name.map(|v| v.try_into().unwrap()),
             }
         }
     }
@@ -1300,7 +1301,7 @@ mod test {
         "
         );
 
-        let credential = FullCredential::deserialize(&Bytes::from_slice(&data).unwrap()).unwrap();
+        let credential = FullCredential::deserialize(&Bytes::from(&data)).unwrap();
         assert!(matches!(credential.ctap, CtapVersion::Fido21Pre));
         assert_eq!(credential.nonce, &hex!("F62CA01ED181A3D03D561FC7"));
         assert_eq!(
@@ -1309,7 +1310,7 @@ mod test {
                 rp: Rp {
                     format: SerializationFormat::Long,
                     inner: PublicKeyCredentialRpEntity {
-                        id: "webauthn.io".into(),
+                        id: "webauthn.io".try_into().unwrap(),
                         name: None,
                         icon: None,
                     },
@@ -1317,9 +1318,9 @@ mod test {
                 user: User {
                     format: SerializationFormat::Long,
                     inner: PublicKeyCredentialUserEntity {
-                        id: Bytes::from_slice(&hex!("6447567A644445")).unwrap(),
+                        id: Bytes::from(&hex!("6447567A644445")),
                         icon: None,
-                        name: Some("test1".into()),
+                        name: Some("test1".try_into().unwrap()),
                         display_name: None,
                     },
                 },

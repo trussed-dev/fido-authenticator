@@ -96,7 +96,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let mut response = ctap2::get_info::Response::default();
         response.versions = versions;
         response.extensions = Some(extensions);
-        response.aaguid = Bytes::from_slice(&aaguid).unwrap();
+        response.aaguid = Bytes::from(&aaguid);
         response.options = Some(options);
         response.transports = Some(transports);
         // 1200
@@ -293,7 +293,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 // Turns out it's size 92 (enum serialization not optimized yet...)
                 // let mut wrapped_key = Bytes::<60>::new();
                 // wrapped_key.extend_from_slice(&wrapped_key_msg).unwrap();
-                Key::WrappedKey(wrapped_key.to_bytes().map_err(|_| Error::Other)?)
+                Key::WrappedKey(Bytes::try_from(&*wrapped_key).map_err(|_| Error::Other)?)
             }
         };
 
@@ -450,7 +450,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                         attestation_algorithm.sign(&mut self.trussed, attestation_key, &commitment);
                     let packed = PackedAttestationStatement {
                         alg: attestation_algorithm.into(),
-                        sig: signature.to_bytes().map_err(|_| Error::Other)?,
+                        sig: Bytes::try_from(&*signature).map_err(|_| Error::Other)?,
                         x5c: attestation_maybe.as_ref().map(|attestation| {
                             // See: https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation-cert-requirements
                             let cert = attestation.1.clone();
@@ -900,11 +900,15 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
     fn vendor(&mut self, op: VendorOperation) -> Result<()> {
         info_now!("hello VO {:?}", &op);
         match op.into() {
-            0x79 => syscall!(self.trussed.debug_dump_store()),
-            _ => return Err(Error::InvalidCommand),
-        };
-
-        Ok(())
+            0x79 => {
+                #[allow(deprecated)]
+                {
+                    syscall!(self.trussed.debug_dump_store());
+                }
+                Err(Error::InvalidCommand)
+            }
+            _ => Err(Error::InvalidCommand),
+        }
     }
 
     #[inline(never)]
@@ -1249,7 +1253,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             return Err(Error::PinPolicyViolation);
         }
 
-        pin.resize_default(pin_length).unwrap();
+        pin.resize_zero(pin_length).unwrap();
 
         Ok(pin)
     }
@@ -1286,7 +1290,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
                 // check pinAuth
                 let mut data: Bytes<{ sizes::MAX_CREDENTIAL_ID_LENGTH_PLUS_256 }> =
-                    Bytes::from_slice(&[parameters.sub_command as u8]).unwrap();
+                    Bytes::from(&[parameters.sub_command as u8]);
                 let len = 1 + match parameters.sub_command {
                     Subcommand::EnumerateCredentialsBegin
                     | Subcommand::DeleteCredential
@@ -1468,7 +1472,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             let cred_random = syscall!(self.trussed.derive_key(
                 Mechanism::HmacSha256,
                 credential_key,
-                Some(Bytes::from_slice(&[get_assertion_state.uv_performed as u8]).unwrap()),
+                Some(Bytes::from(&[get_assertion_state.uv_performed as u8])),
                 StorageAttributes::new().set_persistence(Location::Volatile)
             ))
             .key;
@@ -1515,7 +1519,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
             shared_secret.delete(&mut self.trussed);
 
-            output.hmac_secret = Some(Bytes::from_slice(&output_enc).unwrap());
+            output.hmac_secret = Some(Bytes::try_from(&*output_enc).unwrap());
         }
 
         if extensions.third_party_payment.unwrap_or_default() {
@@ -1619,10 +1623,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
         let signing_algorithm =
             SigningAlgorithm::try_from(credential.algorithm()).map_err(|_| Error::Other)?;
-        let signature = signing_algorithm
-            .sign(&mut self.trussed, key, &commitment)
-            .to_bytes()
-            .unwrap();
+        let signature =
+            Bytes::try_from(&*signing_algorithm.sign(&mut self.trussed, key, &commitment)).unwrap();
 
         // select preferred format or skip attestation statement
         let att_stmt_fmt = data
@@ -1645,7 +1647,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                                 &commitment,
                             );
                             (
-                                signature.to_bytes().map_err(|_| Error::Other)?,
+                                Bytes::try_from(&*signature).map_err(|_| Error::Other)?,
                                 signing_algorithm.into(),
                             )
                         } else {

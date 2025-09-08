@@ -33,6 +33,7 @@ macro_rules! exhaustive_struct {
     }
 }
 
+#[allow(unused_imports)]
 pub(crate) use exhaustive_struct;
 
 pub struct KeyAgreementKey(p256::ecdh::EphemeralSecret);

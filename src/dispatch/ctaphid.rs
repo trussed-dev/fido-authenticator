@@ -1,12 +1,12 @@
 use ctaphid_app::{App, Command, Error};
-use heapless_bytes::Bytes;
+use heapless_bytes::BytesView;
 use trussed_core::InterruptFlag;
 
 #[allow(unused_imports)]
 use crate::msp;
 use crate::{Authenticator, TrussedRequirements, UserPresence};
 
-impl<UP, T, const N: usize> App<'static, N> for Authenticator<UP, T>
+impl<UP, T> App<'static> for Authenticator<UP, T>
 where
     UP: UserPresence,
     T: TrussedRequirements,
@@ -20,7 +20,7 @@ where
         &mut self,
         command: Command,
         request: &[u8],
-        response: &mut Bytes<N>,
+        response: &mut BytesView,
     ) -> Result<(), Error> {
         debug_now!(
             "ctaphid-dispatch: remaining stack: {} bytes",
@@ -35,8 +35,8 @@ where
         // info_now!("request: ");
         // blocking::dump_hex(request, request.len());
         match command {
-            Command::Cbor => super::handle_ctap2(self, request, response),
-            Command::Msg => super::handle_ctap1_from_hid(self, request, response),
+            Command::Cbor => super::handle_ctap2(self, request, response.as_mut()),
+            Command::Msg => super::handle_ctap1_from_hid(self, request, response.as_mut()),
             _ => {
                 debug_now!("ctaphid trying to dispatch {:?}", command);
             }

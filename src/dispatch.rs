@@ -8,7 +8,8 @@ use crate::msp;
 use crate::{Authenticator, TrussedRequirements, UserPresence};
 
 use ctap_types::{ctap1, ctap2};
-use iso7816::{command::CommandView, Data, Status};
+use heapless::VecView;
+use iso7816::{command::CommandView, Status};
 
 impl<UP, T> iso7816::App for Authenticator<UP, T>
 where
@@ -21,10 +22,10 @@ where
 
 #[inline(never)]
 /// Deserialize U2F, call authenticator, serialize response *Result*.
-fn handle_ctap1_from_hid<T, UP, const R: usize>(
+fn handle_ctap1_from_hid<T, UP>(
     authenticator: &mut Authenticator<UP, T>,
     data: &[u8],
-    response: &mut Data<R>,
+    response: &mut VecView<u8>,
 ) where
     T: TrussedRequirements,
     UP: UserPresence,
@@ -65,10 +66,10 @@ fn handle_ctap1_from_hid<T, UP, const R: usize>(
 
 #[inline(never)]
 /// Deserialize CBOR, call authenticator, serialize response *Result*.
-fn handle_ctap2<T, UP, const R: usize>(
+fn handle_ctap2<T, UP>(
     authenticator: &mut Authenticator<UP, T>,
     data: &[u8],
-    response: &mut Data<R>,
+    response: &mut VecView<u8>,
 ) where
     T: TrussedRequirements,
     UP: UserPresence,
@@ -89,10 +90,10 @@ fn handle_ctap2<T, UP, const R: usize>(
 }
 
 #[inline(never)]
-fn try_handle_ctap1<T, UP, const R: usize>(
+fn try_handle_ctap1<T, UP>(
     authenticator: &mut Authenticator<UP, T>,
     command: CommandView<'_>,
-    response: &mut Data<R>,
+    response: &mut VecView<u8>,
 ) -> Result<(), Status>
 where
     T: TrussedRequirements,
@@ -124,10 +125,10 @@ where
 }
 
 #[inline(never)]
-fn try_handle_ctap2<T, UP, const R: usize>(
+fn try_handle_ctap2<T, UP>(
     authenticator: &mut Authenticator<UP, T>,
     data: &[u8],
-    response: &mut Data<R>,
+    response: &mut VecView<u8>,
 ) -> Result<(), u8>
 where
     T: TrussedRequirements,

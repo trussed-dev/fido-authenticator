@@ -2,12 +2,13 @@
 
 use ctap_types::{authenticator::Request, ctap1::Authenticator as _, ctap2::Authenticator as _};
 use fido_authenticator::{Authenticator, Config, Conforming};
+use trussed::virt::StoreConfig;
 use trussed_staging::virt;
 
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|requests: Vec<Request<'_>>| {
-    virt::with_ram_client("fido", |client| {
+    virt::with_client(StoreConfig::ram(), "fido", |client| {
         let mut authenticator = Authenticator::new(
             client,
             Conforming {},

@@ -1,6 +1,7 @@
 use apdu_app::Interface;
 use ctap_types::{serde::error::Error as SerdeError, Error};
-use iso7816::{command::CommandView, Data, Status};
+use heapless::VecView;
+use iso7816::{command::CommandView, Status};
 
 use crate::{Authenticator, TrussedRequirements, UserPresence};
 
@@ -21,7 +22,7 @@ impl From<CtapMappingError> for Error {
     }
 }
 
-impl<UP, T, const R: usize> apdu_app::App<R> for Authenticator<UP, T>
+impl<UP, T> apdu_app::App for Authenticator<UP, T>
 where
     UP: UserPresence,
     T: TrussedRequirements,
@@ -30,7 +31,7 @@ where
         &mut self,
         interface: Interface,
         _: CommandView<'_>,
-        reply: &mut Data<R>,
+        reply: &mut VecView<u8>,
     ) -> apdu_app::Result {
         // FIDO-over-CCID does not seem to officially be a thing; we don't support it.
         // If we would, need to review the following cases catering to semi-documented U2F legacy.
@@ -48,7 +49,7 @@ where
         &mut self,
         interface: Interface,
         apdu: CommandView<'_>,
-        response: &mut Data<R>,
+        response: &mut VecView<u8>,
     ) -> apdu_app::Result {
         // FIDO-over-CCID does not seem to officially be a thing; we don't support it.
         // If we would, need to review the following cases catering to semi-documented U2F legacy.
@@ -77,7 +78,7 @@ where
                         super::handle_ctap2(self, apdu.data(), response)
                     }
                     Ok(ctaphid_app::Command::Msg) => super::try_handle_ctap1(self, apdu, response)?,
-                    Ok(ctaphid_app::Command::Deselect) => apdu_app::App::<R>::deselect(self),
+                    Ok(ctaphid_app::Command::Deselect) => apdu_app::App::deselect(self),
                     _ => {
                         info!("Unsupported ins for fido app {:02x}", instruction);
                         return Err(iso7816::Status::InstructionNotSupportedOrInvalid);
