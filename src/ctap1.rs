@@ -1,9 +1,7 @@
 //! The `ctap_types::ctap1::Authenticator` implementation.
 
-use ctap_types::{
-    ctap1::{authenticate, register, Authenticator, ControlByte, Error, Result},
-    heapless_bytes::Bytes,
-};
+use ctap_types::ctap1::{authenticate, register, Authenticator, ControlByte, Error, Result};
+use heapless_bytes::Bytes;
 use serde_bytes::ByteArray;
 
 use trussed_core::{
@@ -71,9 +69,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         syscall!(self.trussed.delete(private_key));
 
         let key = Key::WrappedKey(
-            wrapped_key
-                .to_bytes()
-                .map_err(|_| Error::UnspecifiedCheckingError)?,
+            Bytes::try_from(&*wrapped_key).map_err(|_| Error::UnspecifiedCheckingError)?,
         );
         let nonce = ByteArray::new(self.nonce());
 
@@ -124,14 +120,15 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             (Some((key, cert)), _aaguid) => {
                 info!("aaguid: {}", hex_str!(&_aaguid));
                 (
-                    syscall!(self.trussed.sign(
-                        Mechanism::P256,
-                        key,
-                        &commitment,
-                        SignatureSerialization::Asn1Der
-                    ))
-                    .signature
-                    .to_bytes()
+                    Bytes::try_from(
+                        &*syscall!(self.trussed.sign(
+                            Mechanism::P256,
+                            key,
+                            &commitment,
+                            SignatureSerialization::Asn1Der
+                        ))
+                        .signature,
+                    )
                     .unwrap(),
                     cert,
                 )
@@ -226,14 +223,15 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             .unwrap();
         commitment.extend_from_slice(auth.challenge).unwrap();
 
-        let signature = syscall!(self.trussed.sign(
-            Mechanism::P256,
-            key,
-            &commitment,
-            SignatureSerialization::Asn1Der
-        ))
-        .signature
-        .to_bytes()
+        let signature = Bytes::try_from(
+            &*syscall!(self.trussed.sign(
+                Mechanism::P256,
+                key,
+                &commitment,
+                SignatureSerialization::Asn1Der
+            ))
+            .signature,
+        )
         .unwrap();
 
         Ok(authenticate::Response {

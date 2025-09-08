@@ -202,13 +202,14 @@ impl Credential {
 fn deserialize_bytes<E: serde::de::Error, const N: usize>(
     s: &[u8],
 ) -> core::result::Result<Bytes<N>, E> {
-    Bytes::from_slice(s).map_err(|_| E::invalid_length(s.len(), &"a fixed-size sequence of bytes"))
+    Bytes::try_from(s).map_err(|_| E::invalid_length(s.len(), &"a fixed-size sequence of bytes"))
 }
 
 fn deserialize_str<E: serde::de::Error, const N: usize>(
     s: &str,
 ) -> core::result::Result<String<N>, E> {
-    Ok(s.into())
+    s.try_into()
+        .map_err(|_| E::custom("Serialized string doesn't fit "))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

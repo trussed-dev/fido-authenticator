@@ -106,7 +106,7 @@ impl<T: CryptoClient> PinTokenMut<'_, T> {
     // in spec: encrypt(..., pinUvAuthToken)
     pub fn encrypt(&mut self, shared_secret: &SharedSecret) -> Result<Bytes<48>> {
         let token = shared_secret.wrap(self.trussed, self.pin_token.key_id);
-        Bytes::from_slice(&token).map_err(|_| Error::Other)
+        Bytes::try_from(&*token).map_err(|_| Error::Other)
     }
 }
 
@@ -119,7 +119,7 @@ struct Rp {
 impl Rp {
     fn new<T: CryptoClient>(trussed: &mut T, id: String<256>) -> Self {
         let hash =
-            syscall!(trussed.hash(Mechanism::Sha256, Message::from_slice(id.as_ref()).unwrap()))
+            syscall!(trussed.hash(Mechanism::Sha256, Message::try_from(id.as_bytes()).unwrap()))
                 .hash
                 .as_slice()
                 .try_into()
@@ -366,7 +366,7 @@ impl<'a, T: CryptoClient + HkdfClient + HmacSha256 + P256> PinProtocol<'a, T> {
     // operations.  For simplicity, we store two separate keys instead.
     fn kdf_v2(&mut self, input: KeyId) -> Option<SharedSecret> {
         fn hkdf<T: HkdfClient>(trussed: &mut T, okm: OkmId, info: &[u8]) -> Option<KeyId> {
-            let info = Message::from_slice(info).ok()?;
+            let info = Message::try_from(info).ok()?;
             try_syscall!(trussed.hkdf_expand(okm, info, 32, Location::Volatile))
                 .ok()
                 .map(|reply| reply.key)
@@ -420,11 +420,10 @@ impl SharedSecret {
 
     fn generate_iv<T: CryptoClient>(&self, trussed: &mut T) -> ShortData {
         match self {
-            Self::V1 { .. } => ShortData::from_slice(&[0; 16]).unwrap(),
-            Self::V2 { .. } => syscall!(trussed.random_bytes(16))
-                .bytes
-                .try_convert_into()
-                .unwrap(),
+            Self::V1 { .. } => ShortData::try_from(&[0; 16]).unwrap(),
+            Self::V2 { .. } => {
+                ShortData::try_from(&*syscall!(trussed.random_bytes(16)).bytes).unwrap()
+            }
         }
     }
 
@@ -436,7 +435,10 @@ impl SharedSecret {
             syscall!(trussed.encrypt(Mechanism::Aes256Cbc, key_id, data, &[], Some(iv.clone())))
                 .ciphertext;
         if matches!(self, Self::V2 { .. }) {
-            ciphertext.insert_slice_at(&iv, 0).unwrap();
+            let ciphertext_len = ciphertext.len();
+            ciphertext.resize_zero(iv.len() + ciphertext_len).unwrap();
+            ciphertext.copy_within(..ciphertext_len, iv.len());
+            ciphertext[..iv.len()].copy_from_slice(&iv);
         }
         ciphertext
     }
@@ -454,7 +456,10 @@ impl SharedSecret {
         ))
         .wrapped_key;
         if matches!(self, Self::V2 { .. }) {
-            wrapped_key.insert_slice_at(&iv, 0).unwrap();
+            let wrapped_key_len = wrapped_key.len();
+            wrapped_key.resize_zero(iv.len() + wrapped_key_len).unwrap();
+            wrapped_key.copy_within(..wrapped_key_len, iv.len());
+            wrapped_key[..iv.len()].copy_from_slice(&iv);
         }
         wrapped_key
     }
