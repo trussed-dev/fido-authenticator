@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+-
+
+## [v0.3.0](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.3.0) (2026-03-25)
+
 - Update dependencies:
   - `apdu-app` v0.2
   - `cosey` v0.4

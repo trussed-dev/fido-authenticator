@@ -1,6 +1,6 @@
 [package]
 name = "fido-authenticator"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["The Trussed developers", "Nicolas Stalder <n@stalder.io>", "Nitrokey GmbH"]
 edition = "2021"
 license = "Apache-2.0 OR MIT"
