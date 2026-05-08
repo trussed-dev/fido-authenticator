@@ -197,6 +197,13 @@ impl Credential {
             Self::Stripped(credential) => credential.third_party_payment,
         }
     }
+
+    pub fn cred_blob(&self) -> Option<&Bytes<{ crate::constants::MAX_CRED_BLOB_LENGTH }>> {
+        match self {
+            Self::Full(credential) => credential.data.cred_blob.as_ref(),
+            Self::Stripped(credential) => credential.cred_blob.as_ref(),
+        }
+    }
 }
 
 fn deserialize_bytes<E: serde::de::Error, const N: usize>(
@@ -518,6 +525,11 @@ pub struct CredentialData {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub third_party_payment: Option<bool>,
+
+    /// `credBlob` extension (CTAP 2.1 §11.1) — platform-supplied bytes
+    /// associated with this credential, up to `MAX_CRED_BLOB_LENGTH` bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cred_blob: Option<Bytes<{ crate::constants::MAX_CRED_BLOB_LENGTH }>>,
 }
 
 // TODO: figure out sizes
@@ -612,6 +624,7 @@ impl FullCredential {
         cred_protect: Option<CredentialProtectionPolicy>,
         large_blob_key: Option<ByteArray<32>>,
         third_party_payment: Option<bool>,
+        cred_blob: Option<Bytes<{ crate::constants::MAX_CRED_BLOB_LENGTH }>>,
         nonce: [u8; 12],
     ) -> Self {
         info!("credential for algorithm {}", algorithm);
@@ -628,6 +641,7 @@ impl FullCredential {
             cred_protect,
             large_blob_key,
             third_party_payment,
+            cred_blob,
 
             use_short_id: Some(true),
         };
@@ -735,6 +749,10 @@ pub struct StrippedCredential {
     pub large_blob_key: Option<ByteArray<32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub third_party_payment: Option<bool>,
+    /// Carries the `credBlob` for non-resident credentials inside the
+    /// credential ID itself — see [`CredentialData::cred_blob`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cred_blob: Option<Bytes<{ crate::constants::MAX_CRED_BLOB_LENGTH }>>,
 }
 
 impl StrippedCredential {
@@ -771,6 +789,7 @@ impl From<&FullCredential> for StrippedCredential {
             cred_protect: credential.data.cred_protect,
             large_blob_key: credential.data.large_blob_key,
             third_party_payment: credential.data.third_party_payment,
+            cred_blob: credential.data.cred_blob.clone(),
         }
     }
 }
@@ -814,6 +833,7 @@ mod test {
             use_short_id: Some(true),
             large_blob_key: Some(ByteArray::new([0xff; 32])),
             third_party_payment: Some(true),
+            cred_blob: None,
         }
     }
 
@@ -845,6 +865,7 @@ mod test {
             use_short_id: None,
             large_blob_key: None,
             third_party_payment: None,
+            cred_blob: None,
         }
     }
 
@@ -932,6 +953,7 @@ mod test {
             use_short_id: Some(true),
             large_blob_key: Some(random_byte_array()),
             third_party_payment: Some(false),
+            cred_blob: None,
         }
     }
 
@@ -1092,6 +1114,11 @@ mod test {
             cred_protect: Some(CredentialProtectionPolicy::Required),
             large_blob_key: Some(ByteArray::new([0xff; 32])),
             third_party_payment: Some(true),
+            // `cred_blob` is intentionally left out of the worst-case fixture:
+            // adding 32 bytes of blob alongside the other extensions blows past
+            // `MAX_CREDENTIAL_ID_LENGTH = 255`. Non-RK credentials therefore
+            // refuse to store `credBlob` (see `make_credential` in `ctap2.rs`).
+            cred_blob: None,
         };
         trussed::virt::with_client(StoreConfig::ram(), "fido", |mut client| {
             let kek = syscall!(client.generate_chacha8poly1305_key(Location::Internal)).key;
@@ -1333,6 +1360,7 @@ mod test {
                 use_short_id: Some(true),
                 large_blob_key: None,
                 third_party_payment: None,
+                cred_blob: None,
             },
         );
     }

@@ -56,6 +56,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let mut extensions = Vec::new();
         extensions.push(Extension::CredProtect).unwrap();
+        extensions.push(Extension::CredBlob).unwrap();
         extensions.push(Extension::HmacSecret).unwrap();
         if self.config.supports_large_blobs() {
             extensions.push(Extension::LargeBlobKey).unwrap();
@@ -122,6 +123,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         response.firmware_version = Some(self.config.firmware_version as usize);
         response.remaining_discoverable_credentials = remaining_discoverable_credentials
             .map(|count| count as usize);
+        response.max_cred_blob_length = Some(constants::MAX_CRED_BLOB_LENGTH);
         response.attestation_formats = Some(attestation_formats);
         response
     }
@@ -251,6 +253,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let mut cred_protect_requested = None;
         let mut large_blob_key_requested = false;
         let mut third_party_payment_requested = false;
+        let mut cred_blob_to_store: Option<Bytes<{ constants::MAX_CRED_BLOB_LENGTH }>> = None;
+        let mut cred_blob_requested = false;
         if let Some(extensions) = &parameters.extensions {
             hmac_secret_requested = extensions.hmac_secret;
 
@@ -275,6 +279,20 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }
 
             third_party_payment_requested = extensions.third_party_payment.unwrap_or_default();
+
+            if let Some(blob) = extensions.cred_blob {
+                cred_blob_requested = true;
+                // Spec (CTAP 2.1 §11.1): authenticator MAY refuse to store. We
+                // refuse when (a) the blob exceeds `MAX_CRED_BLOB_LENGTH`, or
+                // (b) the credential is non-discoverable — encoding `credBlob`
+                // into a non-RK credential ID would push it past
+                // `MAX_CREDENTIAL_ID_LENGTH = 255`. In either case, leave
+                // `cred_blob_to_store = None` and emit `credBlob: false` in the
+                // MC output extensions.
+                if rk_requested && blob.len() <= constants::MAX_CRED_BLOB_LENGTH {
+                    cred_blob_to_store = Some(Bytes::try_from(&**blob).expect("len bounded above"));
+                }
+            }
         }
 
         // debug_now!("hmac-secret = {:?}, credProtect = {:?}", hmac_secret_requested, cred_protect_requested);
@@ -346,6 +364,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             cred_protect_requested,
             large_blob_key,
             third_party_payment_requested.then_some(true),
+            cred_blob_to_store.clone(),
             nonce,
         );
 
@@ -406,7 +425,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 if true {
                     flags |= Flags::ATTESTED_CREDENTIAL_DATA;
                 }
-                if hmac_secret_requested.is_some() || cred_protect_requested.is_some() {
+                if hmac_secret_requested.is_some()
+                    || cred_protect_requested.is_some()
+                    || cred_blob_requested
+                {
                     flags |= Flags::EXTENSION_DATA;
                 }
                 flags
@@ -426,10 +448,19 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             },
 
             extensions: {
-                if hmac_secret_requested.is_some() || cred_protect_requested.is_some() {
-                    let mut extensions = ctap2::make_credential::Extensions::default();
+                if hmac_secret_requested.is_some()
+                    || cred_protect_requested.is_some()
+                    || cred_blob_requested
+                {
+                    let mut extensions = ctap2::make_credential::ExtensionsOutput::default();
                     extensions.cred_protect = parameters.extensions.as_ref().unwrap().cred_protect;
                     extensions.hmac_secret = parameters.extensions.as_ref().unwrap().hmac_secret;
+                    if cred_blob_requested {
+                        // `Some(true)` if the platform-supplied blob fit in
+                        // `MAX_CRED_BLOB_LENGTH` and was stored, `Some(false)`
+                        // otherwise (CTAP 2.1 §11.1).
+                        extensions.cred_blob = Some(cred_blob_to_store.is_some());
+                    }
                     Some(extensions)
                 } else {
                     None
@@ -1542,6 +1573,17 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
         if extensions.third_party_payment.unwrap_or_default() {
             output.third_party_payment = Some(credential.third_party_payment().unwrap_or_default());
+        }
+
+        if extensions.cred_blob.unwrap_or(false) {
+            // Spec: if the extension was requested but no blob is associated
+            // with the credential, return an empty byte string (not absent).
+            output.cred_blob = Some(
+                credential
+                    .cred_blob()
+                    .cloned()
+                    .unwrap_or_else(Bytes::new),
+            );
         }
 
         Ok(output.is_set().then_some(output))

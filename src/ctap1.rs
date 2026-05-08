@@ -88,6 +88,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             cred_protect: None,
             large_blob_key: None,
             third_party_payment: None,
+            cred_blob: None,
         };
 
         // info!("made credential {:?}", &credential);
