@@ -18,6 +18,7 @@ fuzz_target!(|requests: Vec<Request<'_>>| {
                 max_resident_credential_count: None,
                 large_blobs: None,
                 nfc_transport: false,
+                firmware_version: Some(0),
             },
         );
 

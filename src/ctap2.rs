@@ -10,7 +10,10 @@ use ctap_types::{
     heapless::{String, Vec},
     heapless_bytes::Bytes,
     sizes,
-    webauthn::PublicKeyCredentialUserEntity,
+    webauthn::{
+        FilteredPublicKeyCredentialParameters, KnownPublicKeyCredentialParameters,
+        PublicKeyCredentialUserEntity, ED_DSA, ES256,
+    },
     ByteArray, Error,
 };
 use littlefs2_core::{path, Path, PathBuf};
@@ -93,6 +96,17 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let (_, aaguid) = self.state.identity.attestation(&mut self.trussed);
 
+        let mut algorithms = Vec::new();
+        algorithms
+            .push(KnownPublicKeyCredentialParameters { alg: ES256 })
+            .unwrap();
+        algorithms
+            .push(KnownPublicKeyCredentialParameters { alg: ED_DSA })
+            .unwrap();
+        let algorithms = FilteredPublicKeyCredentialParameters(algorithms);
+
+        let remaining_discoverable_credentials = self.estimate_remaining();
+
         let mut response = ctap2::get_info::Response::default();
         response.versions = versions;
         response.extensions = Some(extensions);
@@ -104,6 +118,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         response.pin_protocols = Some(pin_protocols);
         response.max_creds_in_list = Some(ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST);
         response.max_cred_id_length = Some(ctap_types::sizes::MAX_CREDENTIAL_ID_LENGTH);
+        response.algorithms = Some(algorithms);
+        response.firmware_version = self.config.firmware_version;
+        response.remaining_discoverable_credentials =
+            remaining_discoverable_credentials.map(|count| count as usize);
         response.attestation_formats = Some(attestation_formats);
         response
     }
