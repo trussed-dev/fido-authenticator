@@ -74,6 +74,7 @@ where
                     max_resident_credential_count: options.max_resident_credential_count,
                     large_blobs: None,
                     nfc_transport: false,
+                    firmware_version: 0,
                 },
             );
 
