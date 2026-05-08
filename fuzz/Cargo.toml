@@ -24,5 +24,10 @@ doc = false
 bench = false
 
 [patch.crates-io]
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "0f8df68be879acdde1f8cf428c11e5d29692a47b" }
+# Track the ctap2.3 branches on the 0x0ece forks of ctap-types + trussed
+# until the corresponding PRs (trussed-dev/ctap-types#75,
+# trussed-dev/trussed#219) merge upstream.
+ctap-types      = { git = "https://github.com/0x0ece/ctap-types", rev = "88a5591d9205e54f8e5fae0f3978fc6e20845e79" }
+trussed         = { git = "https://github.com/0x0ece/trussed",    rev = "b69aa1fdf817cc6f679fd695724615f5f91a0812" }
+trussed-core    = { git = "https://github.com/0x0ece/trussed",    rev = "b69aa1fdf817cc6f679fd695724615f5f91a0812" }
 trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.4.0" }
