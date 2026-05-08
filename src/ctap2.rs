@@ -80,6 +80,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         options.large_blobs = Some(self.config.supports_large_blobs());
         options.pin_uv_auth_token = Some(true);
         options.make_cred_uv_not_rqd = Some(true);
+        options.authnr_cfg = Some(true);
 
         let mut transports = Vec::new();
         if self.config.nfc_transport {
@@ -570,6 +571,54 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
     fn selection(&mut self) -> Result<()> {
         self.up
             .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)
+    }
+
+    #[inline(never)]
+    fn authenticator_config(
+        &mut self,
+        request: &ctap2::authenticator_config::Request<'_>,
+    ) -> Result<()> {
+        use ctap2::authenticator_config::Subcommand;
+
+        // CTAP 2.1 §6.11.4 step 5: a PIN/UV-auth token is required. We have no
+        // built-in UV (no biometrics), so this also implies a client PIN must
+        // be set.
+        if !self.state.persistent.pin_is_set() {
+            return Err(Error::PinNotSet);
+        }
+        let pin_protocol = request.pin_protocol.ok_or(Error::MissingParameter)?;
+        let pin_protocol = self.parse_pin_protocol(pin_protocol)?;
+        let pin_auth = request.pin_auth.ok_or(Error::MissingParameter)?;
+
+        // pinUvAuthData = 0xff * 32 || 0x0d || subCommand || subCommandParams (CBOR)
+        let mut data: Bytes<{ 32 + 2 + sizes::MAX_CREDENTIAL_ID_LENGTH }> = Bytes::new();
+        data.resize(32, 0xff).map_err(|_| Error::Other)?;
+        data.push(0x0d).map_err(|_| Error::Other)?;
+        data.push(request.sub_command as u8)
+            .map_err(|_| Error::Other)?;
+        if let Some(params) = request.sub_command_params.as_ref() {
+            cbor_smol::cbor_serialize_to(params, &mut data).map_err(|_| Error::Other)?;
+        }
+
+        let mut pin_protocol_impl = self.pin_protocol(pin_protocol);
+        let pin_token = pin_protocol_impl.verify_pin_token(&data, pin_auth)?;
+        pin_token.require_permissions(Permissions::AUTHENTICATOR_CONFIGURATION)?;
+
+        // Subcommand handlers land in subsequent commits (C4: setMinPINLength,
+        // C5: toggleAlwaysUv, C11: enableLongTouchForReset). For now, refuse
+        // every subcommand cleanly so platforms can still feature-detect via
+        // the `authnrCfg` GetInfo flag without us pretending to support things
+        // we do not.
+        match request.sub_command {
+            Subcommand::EnableEnterpriseAttestation
+            | Subcommand::ToggleAlwaysUv
+            | Subcommand::SetMinPINLength
+            | Subcommand::EnableLongTouchForReset
+            | Subcommand::VendorPrototype => Err(Error::InvalidSubcommand),
+            // `Subcommand` is `#[non_exhaustive]`; refuse anything we did not
+            // explicitly enumerate above.
+            _ => Err(Error::InvalidSubcommand),
+        }
     }
 
     #[inline(never)]
