@@ -2,6 +2,7 @@
 
 use core::cmp::Ordering;
 
+use ctap_types::sizes::MAX_CRED_BLOB_LENGTH;
 use serde::Serialize;
 use serde_bytes::ByteArray;
 use trussed_core::{
@@ -195,6 +196,13 @@ impl Credential {
         match self {
             Self::Full(credential) => credential.data.third_party_payment,
             Self::Stripped(credential) => credential.third_party_payment,
+        }
+    }
+
+    pub fn cred_blob(&self) -> Option<&Bytes<MAX_CRED_BLOB_LENGTH>> {
+        match self {
+            Self::Full(credential) => credential.data.cred_blob.as_ref(),
+            Self::Stripped(_) => None,
         }
     }
 }
@@ -518,6 +526,11 @@ pub struct CredentialData {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub third_party_payment: Option<bool>,
+
+    /// `credBlob` extension (CTAP 2.1 §11.1) — platform-supplied bytes
+    /// associated with this credential, up to `MAX_CRED_BLOB_LENGTH` bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cred_blob: Option<Bytes<MAX_CRED_BLOB_LENGTH>>,
 }
 
 // TODO: figure out sizes
@@ -612,6 +625,7 @@ impl FullCredential {
         cred_protect: Option<CredentialProtectionPolicy>,
         large_blob_key: Option<ByteArray<32>>,
         third_party_payment: Option<bool>,
+        cred_blob: Option<Bytes<MAX_CRED_BLOB_LENGTH>>,
         nonce: [u8; 12],
     ) -> Self {
         info!("credential for algorithm {}", algorithm);
@@ -628,6 +642,7 @@ impl FullCredential {
             cred_protect,
             large_blob_key,
             third_party_payment,
+            cred_blob,
 
             use_short_id: Some(true),
         };
@@ -814,6 +829,7 @@ mod test {
             use_short_id: Some(true),
             large_blob_key: Some(ByteArray::new([0xff; 32])),
             third_party_payment: Some(true),
+            cred_blob: None,
         }
     }
 
@@ -845,6 +861,7 @@ mod test {
             use_short_id: None,
             large_blob_key: None,
             third_party_payment: None,
+            cred_blob: None,
         }
     }
 
@@ -932,6 +949,7 @@ mod test {
             use_short_id: Some(true),
             large_blob_key: Some(random_byte_array()),
             third_party_payment: Some(false),
+            cred_blob: None,
         }
     }
 
@@ -1333,6 +1351,7 @@ mod test {
                 use_short_id: Some(true),
                 large_blob_key: None,
                 third_party_payment: None,
+                cred_blob: None,
             },
         );
     }
