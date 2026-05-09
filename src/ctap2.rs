@@ -54,6 +54,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         versions.push(Version::Fido2_0).unwrap();
         versions.push(Version::Fido2_1).unwrap();
         versions.push(Version::Fido2_2).unwrap();
+        versions.push(Version::Fido2_3).unwrap();
 
         let mut extensions = Vec::new();
         extensions.push(Extension::CredProtect).unwrap();
