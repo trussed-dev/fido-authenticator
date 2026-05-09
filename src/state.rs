@@ -617,6 +617,21 @@ impl RuntimeState {
         self.clear_credential_cache();
         self.active_get_assertion = None;
 
+        // Clear any in-flight credMgmt enumeration cursors. Otherwise a
+        // `next_relying_party`/`next_credential` call straight after
+        // `authenticatorReset` succeeds with stale data instead of
+        // returning `NotAllowed` (caught by fido2-tests
+        // test_rpnext_without_rpbegin).
+        self.cached_rp = None;
+        self.cached_rk = None;
+
+        // The per-power-cycle pinAuthFailedAttempts counter is runtime
+        // state and lives here. `authenticatorReset` removes the PIN
+        // entirely (caller resets the persistent retries counter via
+        // `PersistentState::reset`), so the per-power-cycle counter
+        // should drop with it.
+        self.consecutive_pin_mismatches = 0;
+
         if let Some(pin_protocol) = self.pin_protocol.take() {
             pin_protocol.reset(trussed);
         }

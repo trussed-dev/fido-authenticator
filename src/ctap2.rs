@@ -137,6 +137,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         response.force_pin_change = Some(self.state.persistent.force_pin_change());
         response.max_rpids_for_set_min_pin_length =
             Some(state::PersistentState::MAX_MIN_PIN_LENGTH_RP_IDS);
+        // CTAP 2.3 §6.4 0x18: long-touch is the only reset gesture we support,
+        // and it is hard-wired on. Always advertise as "supported & enabled".
+        response.long_touch_for_reset = Some(true);
         response.attestation_formats = Some(attestation_formats);
         response
     }
@@ -614,18 +617,13 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
     #[inline(never)]
     fn reset(&mut self) -> Result<()> {
-        // 1. >10s after bootup -> NotAllowed
-        let uptime = syscall!(self.trussed.uptime()).uptime;
-        debug_now!("uptime: {:?}", uptime);
-        if uptime.as_secs() > 10 {
-            #[cfg(not(feature = "disable-reset-time-window"))]
-            return Err(Error::NotAllowed);
-        }
-        // 2. check for user presence
-        // denied -> OperationDenied
-        // timeout -> UserActionTimeout
+        // CTAP 2.3 §7.7: replace the legacy 10-second boot window with a
+        // continuous ≥5 s "long touch". The runner is responsible for timing
+        // the press and surfacing `consent::Level::Strong` here when the user
+        // holds the button long enough; anything weaker results in
+        // `OperationDenied`.
         self.up
-            .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
+            .user_present_strong(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
 
         // Delete resident keys
         syscall!(self.trussed.delete_all(Location::Internal));
@@ -687,11 +685,15 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 .state
                 .persistent
                 .toggle_always_uv(&mut self.trussed),
-            // C11 wires `EnableLongTouchForReset`. EnterpriseAttestation /
-            // VendorPrototype are deliberately not supported on this device.
-            Subcommand::EnableEnterpriseAttestation
-            | Subcommand::EnableLongTouchForReset
-            | Subcommand::VendorPrototype => Err(Error::InvalidSubcommand),
+            // CTAP 2.3 §6.11.5: long-touch is the only reset gesture we
+            // support, hard-wired on. The subcommand is therefore a no-op:
+            // already enabled, so we just acknowledge.
+            Subcommand::EnableLongTouchForReset => Ok(()),
+            // EnterpriseAttestation / VendorPrototype are deliberately not
+            // supported on this device.
+            Subcommand::EnableEnterpriseAttestation | Subcommand::VendorPrototype => {
+                Err(Error::InvalidSubcommand)
+            }
             // `Subcommand` is `#[non_exhaustive]`; refuse anything we did not
             // explicitly enumerate above.
             _ => Err(Error::InvalidSubcommand),

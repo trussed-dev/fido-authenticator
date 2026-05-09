@@ -299,6 +299,18 @@ pub trait UserPresence: Copy {
         trussed: &mut T,
         timeout_milliseconds: u32,
     ) -> Result<()>;
+
+    /// Strong user-presence check (CTAP 2.3 §7.7 long-touch reset). Default
+    /// falls back to a normal user-presence check; runners that can detect a
+    /// continuous ≥5 s touch should override this and ask trussed for
+    /// `consent::Level::Strong`.
+    fn user_present_strong<T: TrussedRequirements>(
+        self,
+        trussed: &mut T,
+        timeout_milliseconds: u32,
+    ) -> Result<()> {
+        self.user_present(trussed, timeout_milliseconds)
+    }
 }
 
 #[deprecated(note = "use `Silent` directly`")]
@@ -330,6 +342,22 @@ impl UserPresence for Conforming {
         timeout_milliseconds: u32,
     ) -> Result<()> {
         let result = syscall!(trussed.confirm_user_present(timeout_milliseconds)).result;
+        result.map_err(|err| match err {
+            trussed_core::types::consent::Error::TimedOut => Error::UserActionTimeout,
+            trussed_core::types::consent::Error::Interrupted => Error::KeepaliveCancel,
+            _ => Error::OperationDenied,
+        })
+    }
+
+    fn user_present_strong<T: TrussedRequirements>(
+        self,
+        trussed: &mut T,
+        timeout_milliseconds: u32,
+    ) -> Result<()> {
+        use trussed_core::types::consent::Level;
+        let result = syscall!(trussed
+            .confirm_user_present_with_level(Level::Strong, timeout_milliseconds))
+        .result;
         result.map_err(|err| match err {
             trussed_core::types::consent::Error::TimedOut => Error::UserActionTimeout,
             trussed_core::types::consent::Error::Interrupted => Error::KeepaliveCancel,
