@@ -2775,3 +2775,18 @@ fn test_transports_nfc_and_smart_card_combined() {
         );
     })
 }
+
+// ----------------------------------------------------------------------------
+// FIDO_2_3 version advertisement (CTAP 2.3 §6.4)
+// ----------------------------------------------------------------------------
+
+/// CTAP 2.3 §6.4: `FIDO_2_3` is advertised in the versions list; `FIDO_2_2`
+/// MUST be absent.
+#[test]
+fn test_versions_include_fido_2_3_exclude_fido_2_2() {
+    virt::run_ctap2(|device| {
+        let reply = device.exec(GetInfo).unwrap();
+        assert!(reply.versions.contains(&"FIDO_2_3".to_owned()));
+        assert!(!reply.versions.contains(&"FIDO_2_2".to_owned()));
+    })
+}
