@@ -2687,3 +2687,91 @@ fn test_make_credential_hmac_secret_mc_invalid_salt_length_rejected() {
         assert_eq!(result.err(), Some(Ctap2Error(0x03)));
     })
 }
+
+// ----------------------------------------------------------------------------
+// Transports (CTAP 2.1 §6.4 0x09 / CTAP 2.3 §3 smart-card)
+// ----------------------------------------------------------------------------
+
+/// Default config (USB only) advertises only `"usb"`.
+#[test]
+fn test_transports_usb_only_by_default() {
+    virt::run_ctap2(|device| {
+        let reply = device.exec(GetInfo).unwrap();
+        let transports = reply.transports.expect("transports list missing");
+        assert_eq!(transports, vec!["usb".to_owned()]);
+    })
+}
+
+/// With `nfc_transport=true`, `"nfc"` and `"usb"` are advertised.
+#[test]
+fn test_transports_nfc_added() {
+    let options = Options {
+        nfc_transport: true,
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        let reply = device.exec(GetInfo).unwrap();
+        let transports = reply.transports.expect("transports list missing");
+        assert!(transports.contains(&"nfc".to_owned()));
+        assert!(transports.contains(&"usb".to_owned()));
+    })
+}
+
+/// CTAP 2.3 §3: with `ccid_transport=true`, `"smart-card"` is advertised
+/// alongside the other transports.
+#[test]
+fn test_transports_smart_card_advertised_when_ccid_enabled() {
+    let options = Options {
+        ccid_transport: true,
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        let reply = device.exec(GetInfo).unwrap();
+        let transports = reply.transports.expect("transports list missing");
+        assert!(
+            transports.contains(&"smart-card".to_owned()),
+            "smart-card missing from transports: {:?}",
+            transports
+        );
+    })
+}
+
+/// `"smart-card"` is NOT advertised by default (no CCID).
+#[test]
+fn test_transports_smart_card_absent_when_ccid_disabled() {
+    virt::run_ctap2(|device| {
+        let reply = device.exec(GetInfo).unwrap();
+        let transports = reply.transports.expect("transports list missing");
+        assert!(!transports.contains(&"smart-card".to_owned()));
+    })
+}
+
+/// NFC + CCID together: all three transports advertised. Verifies the
+/// flags are independent.
+#[test]
+fn test_transports_nfc_and_smart_card_combined() {
+    let options = Options {
+        nfc_transport: true,
+        ccid_transport: true,
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        let reply = device.exec(GetInfo).unwrap();
+        let transports = reply.transports.expect("transports list missing");
+        assert!(
+            transports.contains(&"nfc".to_owned()),
+            "nfc missing: {:?}",
+            transports
+        );
+        assert!(
+            transports.contains(&"smart-card".to_owned()),
+            "smart-card missing: {:?}",
+            transports
+        );
+        assert!(
+            transports.contains(&"usb".to_owned()),
+            "usb missing: {:?}",
+            transports
+        );
+    })
+}

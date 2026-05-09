@@ -73,7 +73,8 @@ where
                     skip_up_timeout: None,
                     max_resident_credential_count: options.max_resident_credential_count,
                     large_blobs: None,
-                    nfc_transport: false,
+                    nfc_transport: options.nfc_transport,
+                    ccid_transport: options.ccid_transport,
                     firmware_version: Some(0),
                 },
             );
@@ -134,6 +135,8 @@ pub type InspectFsFn = Box<dyn Fn(&dyn DynFilesystem)>;
 pub struct Options {
     pub files: Vec<(PathBuf, Vec<u8>)>,
     pub max_resident_credential_count: Option<u32>,
+    pub nfc_transport: bool,
+    pub ccid_transport: bool,
     pub inspect_ifs: Option<InspectFsFn>,
 }
 
