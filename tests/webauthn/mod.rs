@@ -469,6 +469,11 @@ impl From<MakeCredential> for Value {
 #[derive(Clone, Debug, Default)]
 pub struct MakeCredentialExtensionsInput {
     pub hmac_secret: Option<bool>,
+    /// CTAP 2.2 §11.4.5: `hmac-secret-mc` allows the platform to evaluate
+    /// hmac-secret at MakeCredential time. Same payload shape as the
+    /// GetAssertion hmac-secret input (key_agreement + salt_enc + salt_auth
+    /// + pin_protocol).
+    pub hmac_secret_mc: Option<HmacSecretInput>,
     pub third_party_payment: Option<bool>,
     pub cred_blob: Option<Vec<u8>>,
     pub min_pin_length: Option<bool>,
@@ -497,6 +502,9 @@ impl From<MakeCredentialExtensionsInput> for Value {
         }
         if let Some(min_pin_length) = extensions.min_pin_length {
             map.push("minPinLength", min_pin_length);
+        }
+        if let Some(hmac_secret_mc) = extensions.hmac_secret_mc {
+            map.push("hmac-secret-mc", hmac_secret_mc);
         }
         if let Some(third_party_payment) = extensions.third_party_payment {
             map.push("thirdPartyPayment", third_party_payment);
@@ -965,6 +973,7 @@ impl Request for GetInfo {
 
 pub struct GetInfoReply {
     pub versions: Vec<String>,
+    pub extensions: Option<Vec<String>>,
     pub aaguid: Value,
     pub options: Option<BTreeMap<String, Value>>,
     pub pin_protocols: Option<Vec<u8>>,
@@ -978,6 +987,8 @@ impl From<Value> for GetInfoReply {
         let mut map: BTreeMap<u8, Value> = value.deserialized().unwrap();
         Self {
             versions: map.remove(&1).unwrap().deserialized().unwrap(),
+            // 0x02: extensions (CTAP 2.0+)
+            extensions: map.remove(&2).map(|value| value.deserialized().unwrap()),
             aaguid: map.remove(&3).unwrap().deserialized().unwrap(),
             options: map.remove(&4).map(|value| value.deserialized().unwrap()),
             pin_protocols: map.remove(&6).map(|value| value.deserialized().unwrap()),

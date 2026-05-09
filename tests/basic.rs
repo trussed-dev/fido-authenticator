@@ -761,6 +761,7 @@ impl From<ExhaustiveMakeCredentialExtensionsInput> for MakeCredentialExtensionsI
     fn from(input: ExhaustiveMakeCredentialExtensionsInput) -> Self {
         Self {
             hmac_secret: input.hmac_secret,
+            hmac_secret_mc: None,
             third_party_payment: input.third_party_payment,
             cred_blob: if input.cred_blob {
                 let mut v = vec![0x00; 32];
@@ -2486,5 +2487,203 @@ fn test_get_assertion_with_allow_list_non_rk_no_user_field() {
             "non-RK credential must not return user, got {:?}",
             ga_reply.user
         );
+    })
+}
+
+// ----------------------------------------------------------------------------
+// hmac-secret-mc extension (CTAP 2.2 §11.4.5)
+// ----------------------------------------------------------------------------
+
+/// GetInfo advertises the `hmac-secret-mc` extension and the device does NOT
+/// advertise the legacy `FIDO_2_2` version string (CTAP 2.3 §6.4: "The
+/// string 'FIDO_2_2' was not defined for CTAP2.2 and MUST not be present in
+/// versions member").
+#[test]
+fn test_hmac_secret_mc_advertised_in_get_info() {
+    virt::run_ctap2(|device| {
+        let reply = device.exec(GetInfo).unwrap();
+        // CTAP 2.3 §6.4: `FIDO_2_2` is NOT a valid version string.
+        assert!(!reply.versions.contains(&"FIDO_2_2".to_owned()));
+        let extensions = reply.extensions.expect("extensions list missing");
+        assert!(
+            extensions.contains(&"hmac-secret-mc".to_owned()),
+            "hmac-secret-mc not advertised: {:?}",
+            extensions
+        );
+    })
+}
+
+/// MakeCredential with `hmac-secret-mc` returns an output blob that decrypts
+/// to either a 32-byte HMAC output (one salt) or 64-byte (two salts). The
+/// authenticator data's ED flag MUST be set.
+#[test]
+fn test_make_credential_with_hmac_secret_mc_returns_output() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let rp_id = "example.com";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+
+        // Single-salt input (32 bytes → expected 32-byte HMAC output).
+        let mut salt = [0xffu8; 32];
+        rand::thread_rng().fill_bytes(&mut salt[..31]);
+        let salt_enc = shared_secret.encrypt(&salt);
+        let salt_auth = shared_secret.authenticate(&salt_enc);
+
+        let client_data_hash = vec![0u8; 32];
+        let mut mc = MakeCredential::new(
+            client_data_hash,
+            Rp::new(rp_id),
+            User::new(vec![1; 16]),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        mc.options = Some(MakeCredentialOptions::default().rk(true));
+        mc.extensions = Some(MakeCredentialExtensionsInput {
+            hmac_secret_mc: Some(HmacSecretInput {
+                key_agreement: key_agreement_key.public_key(),
+                salt_enc,
+                salt_auth,
+                pin_protocol: Some(2),
+            }),
+            ..Default::default()
+        });
+        let reply = device.exec(mc).unwrap();
+
+        // ED flag must be set when extensions are returned.
+        assert!(reply.auth_data.ed_flag(), "ED flag missing");
+
+        let extensions = reply.auth_data.extensions.expect("extensions missing");
+        let raw = extensions
+            .get("hmac-secret-mc")
+            .expect("hmac-secret-mc absent from extensions")
+            .as_bytes()
+            .unwrap();
+        let output = shared_secret.decrypt(raw);
+        assert_eq!(output.len(), 32, "single-salt output must be 32 bytes");
+    })
+}
+
+/// Two-salt hmac-secret-mc input (64 bytes encrypted) yields a 64-byte
+/// output (two concatenated HMAC values).
+#[test]
+fn test_make_credential_with_hmac_secret_mc_two_salts() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let rp_id = "example.com";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+
+        let mut salts = [0xffu8; 64];
+        rand::thread_rng().fill_bytes(&mut salts[..63]);
+        let salt_enc = shared_secret.encrypt(&salts);
+        let salt_auth = shared_secret.authenticate(&salt_enc);
+
+        let client_data_hash = vec![0u8; 32];
+        let mut mc = MakeCredential::new(
+            client_data_hash,
+            Rp::new(rp_id),
+            User::new(vec![2; 16]),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        mc.options = Some(MakeCredentialOptions::default().rk(true));
+        mc.extensions = Some(MakeCredentialExtensionsInput {
+            hmac_secret_mc: Some(HmacSecretInput {
+                key_agreement: key_agreement_key.public_key(),
+                salt_enc,
+                salt_auth,
+                pin_protocol: Some(2),
+            }),
+            ..Default::default()
+        });
+        let reply = device.exec(mc).unwrap();
+        let extensions = reply.auth_data.extensions.expect("extensions missing");
+        let raw = extensions
+            .get("hmac-secret-mc")
+            .unwrap()
+            .as_bytes()
+            .unwrap();
+        let output = shared_secret.decrypt(raw);
+        assert_eq!(output.len(), 64, "two-salt output must be 64 bytes");
+    })
+}
+
+/// hmac-secret-mc with a forged `salt_auth` MUST be rejected
+/// (CTAP 2.1 / 2.2 §6.5.5.7 `verify_pin_auth`).
+#[test]
+fn test_make_credential_hmac_secret_mc_bad_auth_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let rp_id = "example.com";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+
+        let mut salt = [0xffu8; 32];
+        rand::thread_rng().fill_bytes(&mut salt[..31]);
+        let salt_enc = shared_secret.encrypt(&salt);
+        // Forge the auth tag (all zeros — should not match HMAC output).
+        let salt_auth = [0u8; 32];
+
+        let client_data_hash = vec![0u8; 32];
+        let mut mc = MakeCredential::new(
+            client_data_hash,
+            Rp::new(rp_id),
+            User::new(vec![3; 16]),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        mc.options = Some(MakeCredentialOptions::default().rk(true));
+        mc.extensions = Some(MakeCredentialExtensionsInput {
+            hmac_secret_mc: Some(HmacSecretInput {
+                key_agreement: key_agreement_key.public_key(),
+                salt_enc,
+                salt_auth,
+                pin_protocol: Some(2),
+            }),
+            ..Default::default()
+        });
+        let result = device.exec(mc);
+        // PinAuthInvalid (0x33) — `verify_pin_auth` returns it on HMAC
+        // mismatch regardless of which input triggered the path.
+        assert_eq!(result.err(), Some(Ctap2Error(0x33)));
+    })
+}
+
+/// CTAP 2.2 §11.4.5 hmac-secret-mc: the decrypted `saltEnc` MUST be either
+/// 32 bytes (one salt) or 64 bytes (two salts). Any other length is a
+/// protocol violation; the authenticator returns CTAP1_ERR_INVALID_LENGTH
+/// (0x03). We test with a 48-byte salt (still passes the AES-CBC block
+/// constraint since 48 is a multiple of 16, but is not 32 or 64).
+#[test]
+fn test_make_credential_hmac_secret_mc_invalid_salt_length_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let rp_id = "example.com";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+
+        // 48-byte plaintext salt → 48-byte ciphertext (after AES-CBC, plus
+        // 16-byte IV inside `encrypt` ↦ 64-byte salt_enc on the wire). The
+        // device decrypts the IV+ciphertext, ends up with 48 bytes of
+        // plaintext, and must reject it.
+        let mut salt = [0xffu8; 48];
+        rand::thread_rng().fill_bytes(&mut salt[..47]);
+        let salt_enc = shared_secret.encrypt(&salt);
+        let salt_auth = shared_secret.authenticate(&salt_enc);
+
+        let client_data_hash = vec![0u8; 32];
+        let mut mc = MakeCredential::new(
+            client_data_hash,
+            Rp::new(rp_id),
+            User::new(vec![4; 16]),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        mc.options = Some(MakeCredentialOptions::default().rk(true));
+        mc.extensions = Some(MakeCredentialExtensionsInput {
+            hmac_secret_mc: Some(HmacSecretInput {
+                key_agreement: key_agreement_key.public_key(),
+                salt_enc,
+                salt_auth,
+                pin_protocol: Some(2),
+            }),
+            ..Default::default()
+        });
+        let result = device.exec(mc);
+        // CTAP1_ERR_INVALID_LENGTH = 0x03.
+        assert_eq!(result.err(), Some(Ctap2Error(0x03)));
     })
 }

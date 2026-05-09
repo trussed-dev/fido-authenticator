@@ -62,11 +62,16 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         }
         versions.push(Version::Fido2_0).unwrap();
         versions.push(Version::Fido2_1).unwrap();
+        // CTAP 2.3 §6.4: "The string 'FIDO_2_2' was not defined for CTAP2.2
+        // and MUST not be present in versions member." CTAP 2.2 was an
+        // addendum; 2.2-level features (e.g. hmac-secret-mc) are still
+        // discoverable via the extensions list.
 
         let mut extensions = Vec::new();
         extensions.push(Extension::CredProtect).unwrap();
         extensions.push(Extension::CredBlob).unwrap();
         extensions.push(Extension::HmacSecret).unwrap();
+        extensions.push(Extension::HmacSecretMc).unwrap();
         if self.config.supports_large_blobs() {
             extensions.push(Extension::LargeBlobKey).unwrap();
         }
@@ -339,6 +344,18 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }
         }
 
+        let hmac_secret_mc_input = parameters
+            .extensions
+            .as_ref()
+            .and_then(|ext| ext.hmac_secret_mc.as_ref())
+            .cloned();
+
+        // CTAP 2.2 §11.4.5: hmac-secret-mc requires hmac-secret=true on the
+        // same request (it evaluates hmac-secret at MakeCredential time).
+        if hmac_secret_mc_input.is_some() && hmac_secret_requested != Some(true) {
+            return Err(Error::MissingParameter);
+        }
+
         // debug_now!("hmac-secret = {:?}, credProtect = {:?}", hmac_secret_requested, cred_protect_requested);
 
         // 10. get UP, if denied error OperationDenied
@@ -352,6 +369,82 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         };
         let private_key = algorithm.generate_private_key(&mut self.trussed, location);
         let cose_public_key = algorithm.derive_public_key(&mut self.trussed, private_key);
+
+        // 11.b CTAP 2.2 hmac-secret-mc: evaluate hmac-secret at MakeCredential
+        // time so the platform can capture salts atomically with credential
+        // creation. Same wire format as GA's hmac-secret output.
+        let hmac_secret_mc_output: Option<Bytes<80>> = if let Some(hmac_secret) =
+            hmac_secret_mc_input.as_ref()
+        {
+            let pin_protocol = hmac_secret
+                .pin_protocol
+                .map(|i| self.parse_pin_protocol(i))
+                .transpose()?
+                .unwrap_or(PinProtocolVersion::V1);
+
+            let cred_random = syscall!(self.trussed.derive_key(
+                Mechanism::HmacSha256,
+                private_key,
+                Some(Bytes::from(&[uv_performed as u8])),
+                StorageAttributes::new().set_persistence(Location::Volatile),
+            ))
+            .key;
+
+            // Every error path below must delete cred_random and (once
+            // allocated) shared_secret before returning, else volatile FS
+            // entries leak and starve the next shared_secret_impl call.
+            let mut pin_protocol_impl = self.pin_protocol(pin_protocol);
+            let shared_secret = match pin_protocol_impl.shared_secret(&hmac_secret.key_agreement) {
+                Ok(s) => s,
+                Err(e) => {
+                    syscall!(self.trussed.delete(cred_random));
+                    return Err(e);
+                }
+            };
+            if let Err(e) = pin_protocol_impl.verify_pin_auth(
+                &shared_secret,
+                &hmac_secret.salt_enc,
+                &hmac_secret.salt_auth,
+            ) {
+                shared_secret.delete(&mut self.trussed);
+                syscall!(self.trussed.delete(cred_random));
+                return Err(e);
+            }
+
+            let salts = match shared_secret.decrypt(&mut self.trussed, &hmac_secret.salt_enc) {
+                Some(s) => s,
+                None => {
+                    shared_secret.delete(&mut self.trussed);
+                    syscall!(self.trussed.delete(cred_random));
+                    return Err(Error::InvalidOption);
+                }
+            };
+            if salts.len() != 32 && salts.len() != 64 {
+                debug_now!("invalid hmac-secret-mc salt length");
+                shared_secret.delete(&mut self.trussed);
+                syscall!(self.trussed.delete(cred_random));
+                return Err(Error::InvalidLength);
+            }
+
+            let mut salt_output: Bytes<64> = Bytes::new();
+            let output1 =
+                syscall!(self.trussed.sign_hmacsha256(cred_random, &salts[0..32])).signature;
+            salt_output.extend_from_slice(&output1).unwrap();
+            if salts.len() == 64 {
+                let output2 =
+                    syscall!(self.trussed.sign_hmacsha256(cred_random, &salts[32..64])).signature;
+                salt_output.extend_from_slice(&output2).unwrap();
+            }
+
+            syscall!(self.trussed.delete(cred_random));
+
+            let output_enc = shared_secret.encrypt(&mut self.trussed, &salt_output);
+            shared_secret.delete(&mut self.trussed);
+
+            Some(Bytes::try_from(&*output_enc).map_err(|_| Error::Other)?)
+        } else {
+            None
+        };
 
         // 12. if `rk` is set, store or overwrite key pair, if full error KeyStoreFull
 
@@ -473,6 +566,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     || cred_protect_requested.is_some()
                     || cred_blob_requested
                     || min_pin_length_to_emit.is_some()
+                    || hmac_secret_mc_output.is_some()
                 {
                     flags |= Flags::EXTENSION_DATA;
                 }
@@ -497,6 +591,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     || cred_protect_requested.is_some()
                     || cred_blob_requested
                     || min_pin_length_to_emit.is_some()
+                    || hmac_secret_mc_output.is_some()
                 {
                     let mut extensions = ctap2::make_credential::ExtensionsOutput::default();
                     extensions.cred_protect = parameters.extensions.as_ref().unwrap().cred_protect;
@@ -508,6 +603,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                         extensions.cred_blob = Some(cred_blob_to_store.is_some());
                     }
                     extensions.min_pin_length = min_pin_length_to_emit;
+                    if let Some(out) = hmac_secret_mc_output.clone() {
+                        extensions.hmac_secret_mc = Some(out);
+                    }
                     Some(extensions)
                 } else {
                     None
@@ -1199,12 +1297,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // Note: If allowList is passed, credential is Some(credential)
         // If no allowList is passed, credential is None and the retrieved credentials
         // are stored in state.runtime.credential_heap
-        let (credential, num_credentials) = self
-            .prepare_credentials(&rp_id_hash, &parameters.allow_list, uv_performed)?
-            .ok_or(Error::NoCredentials)?;
-
-        info_now!("found {:?} applicable credentials", num_credentials);
-        info_now!("{:?}", &credential);
+        let prepared =
+            self.prepare_credentials(&rp_id_hash, &parameters.allow_list, uv_performed)?;
 
         // 6. process any options present
 
@@ -1225,7 +1319,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             true
         };
 
-        // 7. collect user presence
+        // 7. collect user presence — MUST happen before returning
+        // NoCredentials per CTAP 2.0 §5.2 step 2 (privacy: don't reveal
+        // credential existence without UP).
         let up_performed = if do_up {
             if !self.skip_up_check() {
                 info_now!("asking for up");
@@ -1237,6 +1333,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             info_now!("not asking for up");
             false
         };
+
+        // 8. Now safe to bail with NoCredentials (UP collected).
+        let (credential, num_credentials) = prepared.ok_or(Error::NoCredentials)?;
+
+        info_now!("found {:?} applicable credentials", num_credentials);
+        info_now!("{:?}", &credential);
 
         let multiple_credentials = num_credentials > 1;
         self.state.runtime.active_get_assertion = Some(state::ActiveGetAssertionData {
@@ -1904,46 +2006,57 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             ))
             .key;
 
-            // Verify the auth tag, which uses the same process as the pinAuth
+            // Every error path below must delete cred_random and (once
+            // allocated) shared_secret before returning, else volatile FS
+            // entries leak and starve the next shared_secret_impl call.
             let mut pin_protocol = self.pin_protocol(pin_protocol);
-            let shared_secret = pin_protocol.shared_secret(&hmac_secret.key_agreement)?;
-            pin_protocol.verify_pin_auth(
+            let shared_secret = match pin_protocol.shared_secret(&hmac_secret.key_agreement) {
+                Ok(s) => s,
+                Err(e) => {
+                    syscall!(self.trussed.delete(cred_random));
+                    return Err(e);
+                }
+            };
+            if let Err(e) = pin_protocol.verify_pin_auth(
                 &shared_secret,
                 &hmac_secret.salt_enc,
                 &hmac_secret.salt_auth,
-            )?;
+            ) {
+                shared_secret.delete(&mut self.trussed);
+                syscall!(self.trussed.delete(cred_random));
+                return Err(e);
+            }
 
-            // decrypt input salt_enc to get salt1 or (salt1 || salt2)
-            let salts = shared_secret
-                .decrypt(&mut self.trussed, &hmac_secret.salt_enc)
-                .ok_or(Error::InvalidOption)?;
+            let salts = match shared_secret.decrypt(&mut self.trussed, &hmac_secret.salt_enc) {
+                Some(s) => s,
+                None => {
+                    shared_secret.delete(&mut self.trussed);
+                    syscall!(self.trussed.delete(cred_random));
+                    return Err(Error::InvalidOption);
+                }
+            };
 
             if salts.len() != 32 && salts.len() != 64 {
                 debug_now!("invalid hmac-secret length");
+                shared_secret.delete(&mut self.trussed);
+                syscall!(self.trussed.delete(cred_random));
                 return Err(Error::InvalidLength);
             }
 
             let mut salt_output: Bytes<64> = Bytes::new();
-
-            // output1 = hmac_sha256(credRandom, salt1)
             let output1 =
                 syscall!(self.trussed.sign_hmacsha256(cred_random, &salts[0..32])).signature;
-
             salt_output.extend_from_slice(&output1).unwrap();
 
             if salts.len() == 64 {
-                // output2 = hmac_sha256(credRandom, salt2)
                 let output2 =
                     syscall!(self.trussed.sign_hmacsha256(cred_random, &salts[32..64])).signature;
-
                 salt_output.extend_from_slice(&output2).unwrap();
             }
 
             syscall!(self.trussed.delete(cred_random));
 
-            // output_enc = aes256-cbc(sharedSecret, IV=0, output1 || output2)
             let output_enc = shared_secret.encrypt(&mut self.trussed, &salt_output);
-
             shared_secret.delete(&mut self.trussed);
 
             output.hmac_secret = Some(Bytes::try_from(&*output_enc).unwrap());
