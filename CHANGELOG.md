@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implement the `config` command with these subcommands:
   - `toggleAlwaysUv`
   - `setMinPINLength`
+- Add `ccid_transport` to `Config` and set `transports` in `get_info` accordingly.
 - Load full credential from filesstem for getAssertion if an allow list is used with a discoverable credential.
 - Use UTF-8 code points instead of bytes when checking the minimum length for PINs.
 

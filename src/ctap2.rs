@@ -110,6 +110,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         if self.config.nfc_transport {
             transports.push(Transport::Nfc).unwrap();
         }
+        if self.config.ccid_transport {
+            transports.push(Transport::SmartCard).unwrap();
+        }
         transports.push(Transport::Usb).unwrap();
 
         let mut attestation_formats = Vec::new();

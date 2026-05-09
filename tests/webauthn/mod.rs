@@ -977,6 +977,7 @@ pub struct GetInfoReply {
     pub aaguid: Value,
     pub options: Option<BTreeMap<String, Value>>,
     pub pin_protocols: Option<Vec<u8>>,
+    pub transports: Option<Vec<String>>,
     pub force_pin_change: Option<bool>,
     pub min_pin_length: Option<u32>,
     pub attestation_formats: Option<Vec<String>>,
@@ -992,6 +993,8 @@ impl From<Value> for GetInfoReply {
             aaguid: map.remove(&3).unwrap().deserialized().unwrap(),
             options: map.remove(&4).map(|value| value.deserialized().unwrap()),
             pin_protocols: map.remove(&6).map(|value| value.deserialized().unwrap()),
+            // 0x09: transports (CTAP 2.1)
+            transports: map.remove(&9).map(|value| value.deserialized().unwrap()),
             // 0x0C: forcePINChange (CTAP 2.1)
             force_pin_change: map.remove(&0x0C).map(|value| value.deserialized().unwrap()),
             // 0x0D: minPINLength (CTAP 2.1)
