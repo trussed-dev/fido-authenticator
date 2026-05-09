@@ -296,6 +296,12 @@ pub struct PersistentState {
     /// successfully calls `clientPin.changePIN`.
     #[serde(default)]
     force_pin_change: bool,
+
+    /// `alwaysUv` (CTAP 2.1 §6.11.3). When `true`, every MakeCredential and
+    /// GetAssertion must carry a valid `pinUvAuthParam`; ops without UV are
+    /// rejected with `PinRequired`.
+    #[serde(default)]
+    always_uv: bool,
 }
 
 impl PersistentState {
@@ -536,6 +542,15 @@ impl PersistentState {
 
     pub fn force_pin_change(&self) -> bool {
         self.force_pin_change
+    }
+
+    pub fn always_uv(&self) -> bool {
+        self.always_uv
+    }
+
+    pub fn toggle_always_uv<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<()> {
+        self.always_uv = !self.always_uv;
+        self.save(trussed)
     }
 }
 

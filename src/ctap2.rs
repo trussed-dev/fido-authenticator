@@ -83,6 +83,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         options.make_cred_uv_not_rqd = Some(true);
         options.authnr_cfg = Some(true);
         options.set_min_pin_length = Some(true);
+        options.always_uv = Some(self.state.persistent.always_uv());
 
         let mut transports = Vec::new();
         if self.config.nfc_transport {
@@ -610,11 +611,13 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         match request.sub_command {
             Subcommand::SetMinPINLength => self.config_set_min_pin_length(request),
-            // C5 wires `ToggleAlwaysUv`, C11 wires `EnableLongTouchForReset`.
-            // EnterpriseAttestation / VendorPrototype are deliberately not
-            // supported on this device.
+            Subcommand::ToggleAlwaysUv => self
+                .state
+                .persistent
+                .toggle_always_uv(&mut self.trussed),
+            // C11 wires `EnableLongTouchForReset`. EnterpriseAttestation /
+            // VendorPrototype are deliberately not supported on this device.
             Subcommand::EnableEnterpriseAttestation
-            | Subcommand::ToggleAlwaysUv
             | Subcommand::EnableLongTouchForReset
             | Subcommand::VendorPrototype => Err(Error::InvalidSubcommand),
             // `Subcommand` is `#[non_exhaustive]`; refuse anything we did not
@@ -1498,6 +1501,13 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         // platform calls `clientPin.changePIN`.
         if self.state.persistent.force_pin_change() {
             return Err(Error::PinPolicyViolation);
+        }
+
+        // 0b. CTAP 2.1 §6.11.3 `alwaysUv`: when set, every MC / GA must carry a
+        // valid `pinUvAuthParam`. Reject early if the platform did not send
+        // one — `PinRequired` lets it know to invoke `clientPin` first.
+        if self.state.persistent.always_uv() && pin_auth.is_none() {
+            return Err(Error::PinRequired);
         }
 
         // 1. pinAuth zero length -> wait for user touch, then
