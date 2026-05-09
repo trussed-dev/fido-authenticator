@@ -7,6 +7,23 @@ fn ignore_does_not_exists(error: Error) -> Result<(), Error> {
     Err(error)
 }
 
+/// Run every per-version migration this code knows about, in order. Idempotent
+/// — safe to call on every boot, no-op on already-migrated state.
+///
+/// `base_path` must be the base of the file directory of the fido app
+/// (typically `fido/dat`).
+///
+/// The runner is expected to call this **before** constructing the
+/// `Authenticator`, so that any on-disk state has been brought to the latest
+/// shape before [`crate::state::PersistentState::load`] tries to deserialize
+/// it.
+pub fn migrate_all(fs: &dyn DynFilesystem, base_path: &Path) -> Result<(), Error> {
+    migrate_no_rp_dir(fs, base_path)?;
+    // Future per-version migrations chain here. Each must be idempotent
+    // (run-twice = no-op).
+    Ok(())
+}
+
 /// Migration function, to be used with trussed-staging's `migrate` management syscall
 ///
 /// `base_path` must be the base of the file directory of the fido app (often `/fido/dat`)

@@ -266,7 +266,15 @@ pub struct PersistentState {
     key_encryption_key: Option<KeyId>,
     key_wrapping_key: Option<KeyId>,
     consecutive_pin_mismatches: u8,
-    #[serde(with = "serde_bytes")]
+    /// PIN hash. Always serialized as a CBOR byte string (major type 2) —
+    /// the shape used since `fido-authenticator 0.2.0`. Devices upgrading
+    /// from `0.1.1` carry blobs that encode the field as a 16-element CBOR
+    /// array (major type 4); cbor-smol's `deserialize_bytes` is permissive
+    /// enough to accept both shapes (it routes major type 4 to `visit_seq`),
+    /// so the legacy format deserializes cleanly via the `serde_bytes`
+    /// helper, and the next `save` normalises the on-disk format. There is
+    /// a regression test for the 0.1.1 shape in `state::tests::deser`.
+    #[serde(default, with = "serde_bytes")]
     pin_hash: Option<[u8; 16]>,
     // Ideally, we'd dogfood a "Monotonic Counter" from trussed.
     // TODO: Add per-key counters for resident keys.
@@ -278,18 +286,24 @@ impl PersistentState {
     const RESET_RETRIES: u8 = 8;
     const FILENAME: &'static Path = path!("persistent-state.cbor");
 
-    pub fn load<T: FilesystemClient>(trussed: &mut T) -> Result<Self> {
-        // TODO: add "exists_file" method instead?
-        let result =
-            try_syscall!(trussed.read_file(Location::Internal, PathBuf::from(Self::FILENAME),))
-                .map_err(|_| Error::Other);
-
-        if result.is_err() {
-            info!("err loading: {:?}", result.err().unwrap());
-            return Err(Error::Other);
-        }
-
-        let data = result.unwrap().data;
+    /// Load persistent state from disk.
+    ///
+    /// Returns `Ok(None)` when no state file is present (fresh / wiped
+    /// device), `Ok(Some(state))` on a successful load, and `Err(_)` when a
+    /// state file is present but cannot be deserialized. The two paths must
+    /// stay distinct so [`Self::load_if_not_initialised`] can refuse to start
+    /// the authenticator on a corrupt blob instead of silently re-initialising
+    /// (which would destroy every credential).
+    pub fn load<T: FilesystemClient>(trussed: &mut T) -> Result<Option<Self>> {
+        // Trussed's read syscall conflates "file does not exist" and
+        // "read failure" into a single `FilesystemReadFailure`. Either way,
+        // this is a fresh authenticator from our perspective.
+        let data = match try_syscall!(trussed
+            .read_file(Location::Internal, PathBuf::from(Self::FILENAME)))
+        {
+            Ok(reply) => reply.data,
+            Err(_) => return Ok(None),
+        };
 
         let state: Self = cbor_smol::cbor_deserialize(&data).map_err(|_err| {
             info!("err deser'ing: {_err:?}",);
@@ -299,7 +313,7 @@ impl PersistentState {
 
         debug!("Loaded state: {state:#?}");
 
-        Ok(state)
+        Ok(Some(state))
     }
 
     pub fn save<T: FilesystemClient>(&self, trussed: &mut T) -> Result<()> {
@@ -333,12 +347,22 @@ impl PersistentState {
     pub fn load_if_not_initialised<T: FilesystemClient>(&mut self, trussed: &mut T) {
         if !self.initialised {
             match Self::load(trussed) {
-                Ok(previous_self) => {
+                Ok(Some(previous_self)) => {
                     info!("loaded previous state!");
-                    *self = previous_self
+                    *self = previous_self;
+                }
+                Ok(None) => {
+                    // No state on disk — fresh authenticator. Leave defaults.
+                    info!("no previous state, starting fresh");
                 }
                 Err(_err) => {
-                    info!("error with previous state! {:?}", _err);
+                    // State file is present but unparseable. Silently
+                    // resetting here would silently destroy the user's PIN,
+                    // KEK, and every credential. Refuse to start instead.
+                    // The failure is at least visible in the RTT log; the
+                    // user can recover via JLink/bootloader.
+                    error_now!("PERSISTENT STATE LOAD FAILED: {:?}", _err);
+                    panic!("fido-authenticator: corrupt persistent state");
                 }
             }
             self.initialised = true;
