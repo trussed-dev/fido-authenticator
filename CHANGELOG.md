@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 - Update to `ctap-types` v0.6.0-rc.2.
-- Set `algorithms`, `firmware_version` and `remaining_discoverable_credentials` in `get_info` and add `firmware_version` to `Config`.
+- Set `algorithms`, `authenticator_config_commands`, `firmware_version`, `max_serialized_large_blob_array` and `remaining_discoverable_credentials` in `get_info` and add `firmware_version` to `Config`.
 - Implement these new extensions:
   - `credBlob`
   - `hmac-secret-mc`
@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `toggleAlwaysUv`
   - `setMinPINLength`
 - Add `ccid_transport` to `Config` and set `transports` in `get_info` accordingly.
+- Indicate support for `FIDO_2_3` in `get_info`.
 - Load full credential from filesstem for getAssertion if an allow list is used with a discoverable credential.
 - Use UTF-8 code points instead of bytes when checking the minimum length for PINs.
 

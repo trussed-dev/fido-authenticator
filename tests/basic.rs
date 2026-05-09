@@ -49,10 +49,7 @@ fn test_get_info() {
             &hex!("8BC5496807B14D5FB249607F5D527DA2")
         );
         assert_eq!(reply.pin_protocols, Some(vec![2, 1]));
-        assert_eq!(
-            reply.attestation_formats,
-            Some(vec!["packed".to_owned(), "none".to_owned()])
-        );
+        assert_eq!(reply.attestation_formats, Some(vec!["packed".to_owned()]));
     });
 }
 
@@ -2755,5 +2752,20 @@ fn test_transports_nfc_and_smart_card_combined() {
             "usb missing: {:?}",
             transports
         );
+    })
+}
+
+// ----------------------------------------------------------------------------
+// FIDO_2_3 version advertisement (CTAP 2.3 §6.4)
+// ----------------------------------------------------------------------------
+
+/// CTAP 2.3 §6.4: `FIDO_2_3` is advertised in the versions list; `FIDO_2_2`
+/// MUST be absent.
+#[test]
+fn test_versions_include_fido_2_3_exclude_fido_2_2() {
+    virt::run_ctap2(|device| {
+        let reply = device.exec(GetInfo).unwrap();
+        assert!(reply.versions.contains(&"FIDO_2_3".to_owned()));
+        assert!(!reply.versions.contains(&"FIDO_2_2".to_owned()));
     })
 }

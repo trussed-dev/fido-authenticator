@@ -67,6 +67,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         // and MUST not be present in versions member." CTAP 2.2 was an
         // addendum; 2.2-level features (e.g. hmac-secret-mc) are still
         // discoverable via the extensions list.
+        versions.push(Version::Fido2_3).unwrap();
 
         let mut extensions = Vec::new();
         extensions.push(Extension::CredProtect).unwrap();
@@ -116,11 +117,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         transports.push(Transport::Usb).unwrap();
 
         let mut attestation_formats = Vec::new();
+        // CTAP 2.1 §6.4: "none" is implied and MUST NOT appear in
+        // `authenticatorGetInfo.attestationFormats`. We still honour it
+        // internally when requested via `attestationFormatsPreference`.
         attestation_formats
             .push(AttestationStatementFormat::Packed)
-            .unwrap();
-        attestation_formats
-            .push(AttestationStatementFormat::None)
             .unwrap();
 
         let (_, aaguid) = self.state.identity.attestation(&mut self.trussed);
@@ -152,10 +153,21 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         response.remaining_discoverable_credentials =
             remaining_discoverable_credentials.map(|count| count as usize);
         response.max_cred_blob_length = Some(MAX_CRED_BLOB_LENGTH);
+        // CTAP 2.1 §6.4 0x0B: required when largeBlobs is supported.
+        if let Some(cfg) = self.config.large_blobs.as_ref() {
+            response.max_serialized_large_blob_array = Some(cfg.max_size());
+        }
         response.min_pin_length = Some(self.state.persistent.min_pin_length());
         response.force_pin_change = Some(self.state.persistent.force_pin_change());
         response.max_rpids_for_set_min_pin_length = Some(MAX_MIN_PIN_LENGTH_RP_IDS);
         response.attestation_formats = Some(attestation_formats);
+        // CTAP 2.3 §6.4 0x1F: supported authenticatorConfig sub-command IDs.
+        //   0x02 toggleAlwaysUv         (CTAP 2.1 §6.11.2)
+        //   0x03 setMinPINLength        (CTAP 2.1 §6.11.3)
+        let mut cfg_cmds = Vec::new();
+        cfg_cmds.push(0x02).unwrap();
+        cfg_cmds.push(0x03).unwrap();
+        response.authenticator_config_commands = Some(cfg_cmds);
         response
     }
 
