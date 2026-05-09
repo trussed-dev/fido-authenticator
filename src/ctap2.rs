@@ -61,6 +61,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         if self.config.supports_large_blobs() {
             extensions.push(Extension::LargeBlobKey).unwrap();
         }
+        extensions.push(Extension::MinPinLength).unwrap();
         extensions.push(Extension::ThirdPartyPayment).unwrap();
 
         let mut pin_protocols = Vec::new();
@@ -81,6 +82,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         options.pin_uv_auth_token = Some(true);
         options.make_cred_uv_not_rqd = Some(true);
         options.authnr_cfg = Some(true);
+        options.set_min_pin_length = Some(true);
 
         let mut transports = Vec::new();
         if self.config.nfc_transport {
@@ -125,6 +127,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         response.remaining_discoverable_credentials = remaining_discoverable_credentials
             .map(|count| count as usize);
         response.max_cred_blob_length = Some(constants::MAX_CRED_BLOB_LENGTH);
+        response.min_pin_length = Some(self.state.persistent.min_pin_length() as usize);
+        response.force_pin_change = Some(self.state.persistent.force_pin_change());
+        response.max_rpids_for_set_min_pin_length =
+            Some(state::PersistentState::MAX_MIN_PIN_LENGTH_RP_IDS);
         response.attestation_formats = Some(attestation_formats);
         response
     }
@@ -602,15 +608,13 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let pin_token = pin_protocol_impl.verify_pin_token(&data, pin_auth)?;
         pin_token.require_permissions(Permissions::AUTHENTICATOR_CONFIGURATION)?;
 
-        // Subcommand handlers land in subsequent commits (C4: setMinPINLength,
-        // C5: toggleAlwaysUv, C11: enableLongTouchForReset). For now, refuse
-        // every subcommand cleanly so platforms can still feature-detect via
-        // the `authnrCfg` GetInfo flag without us pretending to support things
-        // we do not.
         match request.sub_command {
+            Subcommand::SetMinPINLength => self.config_set_min_pin_length(request),
+            // C5 wires `ToggleAlwaysUv`, C11 wires `EnableLongTouchForReset`.
+            // EnterpriseAttestation / VendorPrototype are deliberately not
+            // supported on this device.
             Subcommand::EnableEnterpriseAttestation
             | Subcommand::ToggleAlwaysUv
-            | Subcommand::SetMinPINLength
             | Subcommand::EnableLongTouchForReset
             | Subcommand::VendorPrototype => Err(Error::InvalidSubcommand),
             // `Subcommand` is `#[non_exhaustive]`; refuse anything we did not
@@ -1130,6 +1134,42 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
 // impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenticator<UP, T>
 impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
+    fn config_set_min_pin_length(
+        &mut self,
+        request: &ctap2::authenticator_config::Request<'_>,
+    ) -> Result<()> {
+        let params = request
+            .sub_command_params
+            .as_ref()
+            .ok_or(Error::MissingParameter)?;
+
+        if let Some(new_value) = params.new_min_pin_length {
+            self.state
+                .persistent
+                .set_min_pin_length(&mut self.trussed, new_value)?;
+        }
+
+        if let Some(rp_ids) = params.min_pin_length_rp_ids.as_ref() {
+            if rp_ids.len() > state::PersistentState::MAX_MIN_PIN_LENGTH_RP_IDS {
+                return Err(Error::PinPolicyViolation);
+            }
+            let mut owned = heapless::Vec::new();
+            for id in rp_ids {
+                owned
+                    .push(
+                        heapless::String::try_from(*id)
+                            .map_err(|_| Error::PinPolicyViolation)?,
+                    )
+                    .map_err(|_| Error::PinPolicyViolation)?;
+            }
+            self.state
+                .persistent
+                .set_min_pin_length_rp_ids(&mut self.trussed, owned)?;
+        }
+
+        Ok(())
+    }
+
     fn parse_pin_protocol(&self, version: impl TryInto<u8>) -> Result<PinProtocolVersion> {
         if let Ok(version) = version.try_into() {
             for pin_protocol in self.pin_protocols() {
@@ -1347,7 +1387,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         //           pin.len(), pin_length, &pin);
         // chop off null bytes
         let pin_length = pin.iter().position(|&b| b == b'\0').unwrap_or(pin.len());
-        if !(4..64).contains(&pin_length) {
+        let min_pin_length = self.state.persistent.min_pin_length() as usize;
+        if pin_length < min_pin_length || pin_length >= 64 {
             return Err(Error::PinPolicyViolation);
         }
 
@@ -1452,6 +1493,13 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         permissions: Permissions,
         rp_id: &str,
     ) -> Result<bool> {
+        // 0. CTAP 2.1 §6.5.5.7 / §6.4.0x0C: while `forcePINChange` is set the
+        // authenticator MUST refuse every PIN-protected operation until the
+        // platform calls `clientPin.changePIN`.
+        if self.state.persistent.force_pin_change() {
+            return Err(Error::PinPolicyViolation);
+        }
+
         // 1. pinAuth zero length -> wait for user touch, then
         // return PinNotSet if not set, PinInvalid if set
         //
