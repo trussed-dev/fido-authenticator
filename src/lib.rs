@@ -126,6 +126,10 @@ pub struct Config {
     pub large_blobs: Option<ctap2::large_blobs::Config>,
     /// Whether the authenticator supports the NFC transport.
     pub nfc_transport: bool,
+    /// Whether the authenticator exposes FIDO over a CCID smart-card interface
+    /// (CTAP 2.3 §3 FIDO Interfaces). When `true`, GetInfo advertises the
+    /// `"smart-card"` transport alongside `"usb"` / `"nfc"`.
+    pub ccid_transport: bool,
     /// Firmware version reported by `authenticatorGetInfo` (CTAP 2.1 §6.4 0x0E).
     ///
     /// The runner is expected to plumb its own version constant in here.
