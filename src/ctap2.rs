@@ -754,8 +754,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 let pin_protocol = pin_protocol?;
 
                 // 2. is pin already set
+                // CTAP 2.1 §6.5.5.4 step 3: a setPin request against an
+                // already-provisioned authenticator returns PinAuthInvalid.
+                // (Older CTAP 2.0 implementations returned NotAllowed.)
                 if self.state.persistent.pin_is_set() {
-                    return Err(Error::NotAllowed);
+                    return Err(Error::PinAuthInvalid);
                 }
 
                 // 3. generate shared secret
@@ -1590,6 +1593,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         //
         // the idea is for multi-authnr scenario where platform
         // wants to enforce PIN and needs to figure out which authnrs support PIN
+        // (CTAP 2.1 §6.5.5.7 step 2 — was upstream PR #56; the older
+        // CTAP 2.0 reading was `PinAuthInvalid` for the "pin set" case.)
         if let Some(pin_auth) = pin_auth {
             if pin_auth.is_empty() {
                 self.up
@@ -1597,7 +1602,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 if !self.state.persistent.pin_is_set() {
                     return Err(Error::PinNotSet);
                 } else {
-                    return Err(Error::PinAuthInvalid);
+                    return Err(Error::PinInvalid);
                 }
             }
         }
