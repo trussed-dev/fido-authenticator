@@ -1328,13 +1328,35 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             // they probably meant to send None.
             if !allow_list.is_empty() {
                 for credential_id in allow_list {
-                    let credential = match Credential::try_from(self, rp_id_hash, credential_id) {
+                    let mut credential = match Credential::try_from(self, rp_id_hash, credential_id)
+                    {
                         Ok(credential) => credential,
                         _ => continue,
                     };
 
                     if !self.check_credential_applicable(&credential, true, uv_performed) {
                         continue;
+                    }
+
+                    // CTAP 2.1 §6.2.3 — for resident credentials, the daemon
+                    // must include the `user` field in the response. Modern
+                    // versions of this app encrypt only a Stripped credential
+                    // into `credential_id`, which omits user data. For RKs we
+                    // can recover the FullCredential from disk by hashing
+                    // the credential_id; if the RK file is missing fall back
+                    // to whatever try_from gave us.
+                    if matches!(&credential, Credential::Stripped(s)
+                        if matches!(s.key, Key::ResidentKey(_)))
+                    {
+                        let credential_id_hash = self.hash(credential_id.id);
+                        let path = rk_path(rp_id_hash, &credential_id_hash);
+                        if let Ok(reply) =
+                            try_syscall!(self.trussed.read_file(Location::Internal, path))
+                        {
+                            if let Ok(full) = FullCredential::deserialize(&reply.data) {
+                                credential = Credential::Full(full);
+                            }
+                        }
                     }
 
                     return Ok(Some((credential, 1)));
