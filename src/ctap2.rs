@@ -1469,8 +1469,16 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                         continue;
                     }
 
-                    // If this is an RK, we still need to load it from the filesystem to have access
-                    // to all metadata
+                    // CTAP 2.1 §6.2.3 — for resident credentials referenced
+                    // via allowList, the response must include the `user`
+                    // field. Modern versions of this app encrypt only a
+                    // Stripped credential into `credential_id`, which omits
+                    // user data. For RKs we recover the FullCredential from
+                    // disk by hashing the credential_id. If the RK file is
+                    // missing or corrupt the credential is treated as
+                    // unusable — skip it and try the next allow-list entry
+                    // (the Stripped form lacks the data the platform expects
+                    // for an RK match).
                     if let Credential::Stripped(stripped) = &credential {
                         if matches!(stripped.key, Key::ResidentKey(_)) {
                             let credential_id_hash = self.hash(credential_id.id);

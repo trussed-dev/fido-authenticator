@@ -2321,6 +2321,55 @@ fn test_set_min_pin_length_rp_ids_replace_not_append() {
     })
 }
 
+// ----------------------------------------------------------------------------
+// RK + allowList: user field in GA response (CTAP 2.1 §6.2.3)
+// ----------------------------------------------------------------------------
+
+/// CTAP 2.1 §6.2.3: when `getAssertion` is called with an `allowList` and the
+/// matched credential is a resident key, the authenticator's response must
+/// include the `user` field. Modern versions of this app stash only a
+/// `Stripped` credential into `credential_id`, so the user field must be
+/// recovered from the on-disk RK record.
+#[test]
+fn test_get_assertion_with_allow_list_rk_returns_user() {
+    let rp_id = "example.com";
+    let user_id = b"alice-id-1234567";
+    let user_name = "alice@example.com";
+    virt::run_ctap2(|device| {
+        // Make an RK with a populated user struct.
+        let client_data_hash = vec![0u8; 32];
+        let mut mc = MakeCredential::new(
+            client_data_hash.clone(),
+            Rp::new(rp_id),
+            User::new(user_id.to_vec()).name(user_name),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        mc.options = Some(MakeCredentialOptions::default().rk(true));
+        let mc_reply = device.exec(mc).unwrap();
+        let credential = mc_reply.auth_data.credential.unwrap();
+
+        // GA with allowList of just that credential — RK with allowList is
+        // the audited code path.
+        let mut ga = GetAssertion::new(rp_id.to_owned(), client_data_hash);
+        ga.allow_list = Some(vec![PubKeyCredDescriptor::new(
+            "public-key",
+            credential.id.clone(),
+        )]);
+        let ga_reply = device.exec(ga).unwrap();
+
+        let user_value = ga_reply.user.expect("user field missing in GA response");
+        let user_map: std::collections::BTreeMap<String, ciborium::Value> =
+            user_value.deserialized().unwrap();
+        // id is the required field. name is optional and may be stripped by
+        // the authenticator depending on UV state; the audit fix is about
+        // presence of the `user` map itself.
+        assert_eq!(
+            user_map.get("id").unwrap(),
+            &ciborium::Value::from(user_id.as_slice())
+        );
+    })
+}
+
 /// CTAP 2.1 §6.11.4 step 2.5: force `forcePINChange=true` only when
 /// `PINCodePointLength` is less than `newMinPINLength`. When the
 /// existing PIN already meets the new minimum, the flag stays cleared.
@@ -2357,5 +2406,85 @@ fn test_set_min_pin_length_pin_meets_new_min_no_force_change() {
         // (9) is not less than newMinPINLength (6).
         let reply = device.exec(GetInfo).unwrap();
         assert_eq!(reply.force_pin_change, Some(false));
+    })
+}
+
+/// CTAP 2.1 §6.2.2 step 12: "User identifiable information (name, displayName,
+/// icon) inside user MUST NOT be returned if UV is not done by the
+/// authenticator." Verify that when GA runs without `pin_auth` (no UV), the
+/// `user` map contains only `id` — name/displayName/icon are stripped.
+#[test]
+fn test_get_assertion_with_allow_list_rk_no_uv_strips_pii() {
+    let rp_id = "example.com";
+    let user_id = b"alice-id-1234567";
+    virt::run_ctap2(|device| {
+        let client_data_hash = vec![0u8; 32];
+        let mut mc = MakeCredential::new(
+            client_data_hash.clone(),
+            Rp::new(rp_id),
+            User::new(user_id.to_vec())
+                .name("alice@example.com")
+                .display_name("Alice In Wonderland"),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        mc.options = Some(MakeCredentialOptions::default().rk(true));
+        let mc_reply = device.exec(mc).unwrap();
+        let credential = mc_reply.auth_data.credential.unwrap();
+
+        // GA without pin_auth → uv_performed = false → PII must be stripped.
+        let mut ga = GetAssertion::new(rp_id.to_owned(), client_data_hash);
+        ga.allow_list = Some(vec![PubKeyCredDescriptor::new(
+            "public-key",
+            credential.id.clone(),
+        )]);
+        let ga_reply = device.exec(ga).unwrap();
+
+        let user_value = ga_reply.user.expect("user field missing");
+        let user_map: std::collections::BTreeMap<String, ciborium::Value> =
+            user_value.deserialized().unwrap();
+        assert_eq!(
+            user_map.get("id").unwrap(),
+            &ciborium::Value::from(user_id.as_slice())
+        );
+        assert!(!user_map.contains_key("name"), "name leaked without UV");
+        assert!(
+            !user_map.contains_key("displayName"),
+            "displayName leaked without UV"
+        );
+        assert!(!user_map.contains_key("icon"), "icon leaked without UV");
+    })
+}
+
+/// CTAP 2.1 §6.2.3: the `user` response field is for resident credentials
+/// only. A GA over an allow-list entry pointing at a non-RK credential
+/// MUST NOT include `user`.
+#[test]
+fn test_get_assertion_with_allow_list_non_rk_no_user_field() {
+    let rp_id = "example.com";
+    virt::run_ctap2(|device| {
+        // Make a NON-discoverable credential (rk=false).
+        let client_data_hash = vec![0u8; 32];
+        let mc = MakeCredential::new(
+            client_data_hash.clone(),
+            Rp::new(rp_id),
+            User::new(b"bob-id".to_vec()).name("bob@example.com"),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        // No rk(true) — defaults to non-resident.
+        let mc_reply = device.exec(mc).unwrap();
+        let credential = mc_reply.auth_data.credential.unwrap();
+
+        let mut ga = GetAssertion::new(rp_id.to_owned(), client_data_hash);
+        ga.allow_list = Some(vec![PubKeyCredDescriptor::new(
+            "public-key",
+            credential.id.clone(),
+        )]);
+        let ga_reply = device.exec(ga).unwrap();
+
+        assert!(
+            ga_reply.user.is_none(),
+            "non-RK credential must not return user, got {:?}",
+            ga_reply.user
+        );
     })
 }
