@@ -798,6 +798,7 @@ pub struct GetAssertionReply {
     pub credential: PubKeyCredDescriptor,
     pub auth_data: AuthData,
     pub signature: Vec<u8>,
+    pub user: Option<Value>,
     pub number_of_credentials: Option<usize>,
 }
 
@@ -808,6 +809,9 @@ impl From<Value> for GetAssertionReply {
             credential: map.remove(&0x01).unwrap().into(),
             auth_data: map.remove(&0x02).unwrap().into(),
             signature: map.remove(&0x03).unwrap().into_bytes().unwrap(),
+            // 0x04: user (CTAP 2.1 §6.2.3 — included for RKs by both
+            // no-allowList and allowList paths)
+            user: map.remove(&0x04),
             number_of_credentials: map.remove(&0x05).map(|value| value.deserialized().unwrap()),
         }
     }
