@@ -1915,15 +1915,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             let Some(pin_uv_auth_protocol) = request.pin_uv_auth_protocol else {
                 return Err(Error::PinRequired);
             };
-            if pin_uv_auth_protocol != 1 {
-                return Err(Error::PinAuthInvalid);
-            }
             let pin_protocol = self.parse_pin_protocol(pin_uv_auth_protocol)?;
-            // TODO: check pinUvAuthToken
-            let pin_auth: [u8; 16] = pin_uv_auth_param
-                .as_ref()
-                .try_into()
-                .map_err(|_| Error::PinAuthInvalid)?;
+            let pin_auth = pin_uv_auth_param.as_ref();
 
             let mut auth_data: Bytes<70> = Bytes::new();
             // 32x 0xff
@@ -1939,7 +1932,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             auth_data.extend_from_slice(&Sha256::digest(data)).unwrap();
 
             let mut pin_protocol = self.pin_protocol(pin_protocol);
-            let pin_token = pin_protocol.verify_pin_token(&pin_auth, &auth_data)?;
+            let pin_token = pin_protocol.verify_pin_token(&auth_data, pin_auth)?;
             pin_token.require_permissions(Permissions::LARGE_BLOB_WRITE)?;
         }
 
