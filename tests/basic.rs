@@ -3319,8 +3319,154 @@ fn test_enable_long_touch_for_reset_invalid_parameter() {
     })
 }
 
-/// CTAP 2.3 §6.11.5: `EnableLongTouchForReset` subcommand. If the feature is enabled,
-/// the request must return `Ok(())` without changing state.
+// ----------------------------------------------------------------------------
+// ML-DSA-44 (CTAP 2.3 / WebAuthn L3, alg = -50, FIPS 204)
+// ----------------------------------------------------------------------------
+// All ML-DSA tests are gated on `mldsa44` Cargo feature. Run with:
+//   cargo test --test basic --features dispatch,mldsa44
+
+/// Default build (no `mldsa44`): GetInfo's `algorithms` list contains only
+/// ES256 + EdDSA. ML-DSA-44 is NOT advertised. Asserts the negative path so
+/// the feature-gating is exercised even on the default build.
+#[test]
+#[cfg(not(feature = "mldsa44"))]
+fn test_mldsa44_not_advertised_without_feature() {
+    virt::run_ctap2(|device| {
+        let reply = device.exec(GetInfo).unwrap();
+        let algorithms = reply.algorithms.expect("algorithms missing");
+        let algs: Vec<i32> = algorithms
+            .iter()
+            .map(|v| {
+                let m: std::collections::BTreeMap<String, ciborium::Value> =
+                    v.clone().deserialized().unwrap();
+                m.get("alg").unwrap().clone().deserialized().unwrap()
+            })
+            .collect();
+        assert!(algs.contains(&-7), "ES256 (-7) missing");
+        assert!(algs.contains(&-8), "EdDSA (-8) missing");
+        assert!(
+            !algs.contains(&-50),
+            "ML-DSA-44 (-50) advertised without feature"
+        );
+    })
+}
+
+/// With `mldsa44` enabled: GetInfo advertises alg=-50 in `algorithms` and
+/// the credential creation path supports it. This is a smoke test: it
+/// verifies the wiring, not the cryptographic correctness of ML-DSA itself
+/// (that's libcrux-ml-dsa's job).
+#[test]
+#[cfg(feature = "mldsa44")]
+fn test_mldsa44_advertised_with_feature() {
+    virt::run_ctap2(|device| {
+        let reply = device.exec(GetInfo).unwrap();
+        let algorithms = reply.algorithms.expect("algorithms missing");
+        let algs: Vec<i32> = algorithms
+            .iter()
+            .map(|v| {
+                let m: std::collections::BTreeMap<String, ciborium::Value> =
+                    v.clone().deserialized().unwrap();
+                m.get("alg").unwrap().clone().deserialized().unwrap()
+            })
+            .collect();
+        assert!(
+            algs.contains(&-50),
+            "ML-DSA-44 (-50) not advertised: {:?}",
+            algs
+        );
+    })
+}
+
+/// MakeCredential with `alg = -50` (ML-DSA-44) succeeds, the attested
+/// credential public key uses COSE kty=AKP (7) and alg=-50, and the
+/// resulting credential ID round-trips through GetAssertion.
+#[test]
+#[cfg(feature = "mldsa44")]
+fn test_mldsa44_make_credential_and_get_assertion_roundtrip() {
+    let rp_id = "example.com";
+    let client_data_hash = vec![0u8; 32];
+    virt::run_ctap2(|device| {
+        let mut mc = MakeCredential::new(
+            client_data_hash.clone(),
+            Rp::new(rp_id),
+            User::new(vec![1; 16]),
+            // Send both ML-DSA-44 (preferred) and P-256 — authenticator
+            // should pick the first one it recognises and supports.
+            vec![
+                PubKeyCredParam::new("public-key", -50),
+                PubKeyCredParam::new("public-key", -7),
+            ],
+        );
+        mc.options = Some(MakeCredentialOptions::default().rk(true));
+        let mc_reply = device.exec(mc).unwrap();
+        let credential = mc_reply.auth_data.credential.unwrap();
+
+        // The COSE_Key in attestedCredentialData should be ML-DSA AKP.
+        // Field 1 (kty) = 7 (AKP), field 3 (alg) = -50, field -1 = pub bytes.
+        let pk = &credential.public_key;
+        let kty: i32 = pk.get(&1).unwrap().clone().deserialized().unwrap();
+        let alg: i32 = pk.get(&3).unwrap().clone().deserialized().unwrap();
+        let pub_bytes = pk.get(&-1).unwrap().as_bytes().unwrap();
+        assert_eq!(kty, 7, "kty must be AKP (7) for ML-DSA");
+        assert_eq!(alg, -50, "alg must be -50 (ML-DSA-44)");
+        assert_eq!(
+            pub_bytes.len(),
+            1312,
+            "ML-DSA-44 public key must be 1312 bytes"
+        );
+
+        // GA with allowList of that credential should succeed and return a
+        // 2420-byte ML-DSA-44 signature.
+        let mut ga = GetAssertion::new(rp_id.to_owned(), client_data_hash);
+        ga.allow_list = Some(vec![PubKeyCredDescriptor::new(
+            "public-key",
+            credential.id.clone(),
+        )]);
+        let ga_reply = device.exec(ga).unwrap();
+        assert_eq!(
+            ga_reply.signature.len(),
+            2420,
+            "ML-DSA-44 signature must be 2420 bytes"
+        );
+    })
+}
+
+/// CTAP 2.1 §6.1.2 step 3: "If the element specifies an algorithm that is
+/// supported by the authenticator, and no algorithm has yet been chosen by
+/// this loop, then let the algorithm specified by the current element be
+/// the chosen algorithm." This is platform-controlled preference order —
+/// the authenticator picks the FIRST supported entry. Verify that with
+/// `[-7, -50]` (P-256 listed first), the authenticator picks P-256 even
+/// when ML-DSA-44 is enabled.
+#[test]
+#[cfg(feature = "mldsa44")]
+fn test_mldsa44_p256_preferred_when_listed_first() {
+    let rp_id = "example.com";
+    let client_data_hash = vec![0u8; 32];
+    virt::run_ctap2(|device| {
+        let mut mc = MakeCredential::new(
+            client_data_hash,
+            Rp::new(rp_id),
+            User::new(vec![1; 16]),
+            // P-256 listed first → authenticator MUST pick -7.
+            vec![
+                PubKeyCredParam::new("public-key", -7),
+                PubKeyCredParam::new("public-key", -50),
+            ],
+        );
+        mc.options = Some(MakeCredentialOptions::default().rk(true));
+        let mc_reply = device.exec(mc).unwrap();
+        let credential = mc_reply.auth_data.credential.unwrap();
+        let pk = &credential.public_key;
+        let kty: i32 = pk.get(&1).unwrap().clone().deserialized().unwrap();
+        let alg: i32 = pk.get(&3).unwrap().clone().deserialized().unwrap();
+        assert_eq!(kty, 2, "kty must be EC (2) for P-256, got {}", kty);
+        assert_eq!(alg, -7, "alg must be -7 (ES256), got {}", alg);
+    })
+}
+
+/// CTAP 2.3 §6.11.5: `EnableLongTouchForReset` subcommand. Always-on for us,
+/// so the request must return `Ok(())` without changing state.
 #[test]
 fn test_enable_long_touch_for_reset_is_noop() {
     let options = Options {

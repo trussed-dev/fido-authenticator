@@ -24,5 +24,7 @@ doc = false
 bench = false
 
 [patch.crates-io]
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b2492feada78ee17b936c99c13df480a4fc6d2f5" }
+trussed = { git = "https://github.com/0x0ece/trussed", rev = "a1b33c46eb16ef7fa5f6324f7c099ff339fe21e7" }
+trussed-core = { git = "https://github.com/0x0ece/trussed", rev = "a1b33c46eb16ef7fa5f6324f7c099ff339fe21e7" }
 trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.4.0" }
+ctap-types = { git = "https://github.com/0x0ece/ctap-types", rev = "1056c78b06fddc1010afebf549434ac097a6db42" }
