@@ -1,6 +1,10 @@
 #![no_main]
 
-use ctap_types::{authenticator::Request, ctap1::Authenticator as _, ctap2::Authenticator as _};
+use ctap_types::{
+    authenticator::Request,
+    ctap1::Authenticator as _,
+    ctap2::{Authenticator as _, Response},
+};
 use fido_authenticator::{Authenticator, Config, Conforming};
 use trussed::virt::StoreConfig;
 use trussed_staging::virt;
@@ -29,7 +33,8 @@ fuzz_target!(|requests: Vec<Request<'_>>| {
                     authenticator.call_ctap1(&request).ok();
                 }
                 Request::Ctap2(request) => {
-                    authenticator.call_ctap2(&request).ok();
+                    let mut response = Response::Reset;
+                    authenticator.call_ctap2(&request, &mut response).ok();
                 }
             }
         }
