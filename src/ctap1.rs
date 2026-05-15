@@ -148,6 +148,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             }
         };
 
+        // U2F register's `attestation_certificate` is fixed at `Bytes<1024>`.
+        // Real attestation certs comfortably fit; we lift it from the
+        // trussed `Message`-typed read so it works regardless of how the
+        // mldsa44 feature sizes that Message buffer.
+        let cert =
+            ctap_types::Bytes::<1024>::try_from(&*cert).map_err(|_| Error::NotEnoughMemory)?;
         Ok(register::Response::new(
             0x05,
             &cose_key,

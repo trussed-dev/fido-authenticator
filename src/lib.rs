@@ -71,6 +71,7 @@ pub trait TrussedRequirements:
     + mechanisms::Sha256
     + mechanisms::HmacSha256
     + mechanisms::Ed255
+    + MldsaRequirement
     + FsInfoClient
     + HkdfClient
     + ExtensionRequirements
@@ -89,6 +90,7 @@ impl<T> TrussedRequirements for T where
         + mechanisms::Sha256
         + mechanisms::HmacSha256
         + mechanisms::Ed255
+        + MldsaRequirement
         + FsInfoClient
         + HkdfClient
         + ExtensionRequirements
@@ -106,6 +108,22 @@ pub trait ExtensionRequirements: trussed_chunked::ChunkedClient {}
 
 #[cfg(feature = "chunked")]
 impl<T> ExtensionRequirements for T where T: trussed_chunked::ChunkedClient {}
+
+/// Marker trait that, with the `mldsa44` feature enabled, requires the
+/// Trussed client to expose the ML-DSA-44 mechanism. With the feature
+/// disabled it is a no-op so non-PQ builds do not pay any size or stack
+/// tax for ML-DSA.
+#[cfg(not(feature = "mldsa44"))]
+pub trait MldsaRequirement {}
+
+#[cfg(not(feature = "mldsa44"))]
+impl<T> MldsaRequirement for T {}
+
+#[cfg(feature = "mldsa44")]
+pub trait MldsaRequirement: mechanisms::Mldsa44 {}
+
+#[cfg(feature = "mldsa44")]
+impl<T> MldsaRequirement for T where T: mechanisms::Mldsa44 {}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 /// Externally defined configuration.
@@ -205,7 +223,8 @@ pub(crate) fn msp() -> u32 {
     0x2000_0000
 }
 
-/// Currently Ed25519 and P256.
+/// Signing algorithms we know about. COSE alg ids: Ed25519 = -8, P-256 = -7,
+/// ML-DSA-44 = -50 (FIPS 204 / WebAuthn L3, behind the `mldsa44` feature).
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(i32)]
 #[non_exhaustive]
@@ -214,6 +233,9 @@ pub enum SigningAlgorithm {
     Ed25519 = -8,
     /// The NIST P-256 signature algorithm.
     P256 = -7,
+    /// FIPS 204 ML-DSA-44 (NIST level 2 post-quantum signature).
+    #[cfg(feature = "mldsa44")]
+    MlDsa44 = -50,
 }
 
 impl SigningAlgorithm {
@@ -221,6 +243,8 @@ impl SigningAlgorithm {
         match self {
             Self::Ed25519 => Mechanism::Ed255,
             Self::P256 => Mechanism::P256,
+            #[cfg(feature = "mldsa44")]
+            Self::MlDsa44 => Mechanism::Mldsa44,
         }
     }
 
@@ -228,6 +252,8 @@ impl SigningAlgorithm {
         match self {
             Self::Ed25519 => SignatureSerialization::Raw,
             Self::P256 => SignatureSerialization::Asn1Der,
+            #[cfg(feature = "mldsa44")]
+            Self::MlDsa44 => SignatureSerialization::Raw,
         }
     }
 
@@ -276,6 +302,8 @@ impl From<SigningAlgorithm> for i32 {
         match alg {
             SigningAlgorithm::P256 => -7,
             SigningAlgorithm::Ed25519 => -8,
+            #[cfg(feature = "mldsa44")]
+            SigningAlgorithm::MlDsa44 => -50,
         }
     }
 }
@@ -287,6 +315,8 @@ impl TryFrom<i32> for SigningAlgorithm {
         Ok(match alg {
             -7 => SigningAlgorithm::P256,
             -8 => SigningAlgorithm::Ed25519,
+            #[cfg(feature = "mldsa44")]
+            -50 => SigningAlgorithm::MlDsa44,
             _ => return Err(Error::UnsupportedAlgorithm),
         })
     }

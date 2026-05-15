@@ -37,6 +37,14 @@ disable-reset-time-window = []
 # enables support for a large-blob array longer than 1024 bytes
 chunked = ["dep:trussed-chunked"]
 
+# enables ML-DSA-44 (FIPS 204, COSE alg -50). When off, the variant, the
+# `pubKeyCredParams = -50` arm, the GetInfo algorithm entry, and the
+# `Mldsa44` Trussed-core requirement are all elided. Off by default.
+# Also bumps `MAX_PACKED_SIG_LENGTH`, x5c element size, and authData buffer
+# in ctap-types so packed attestation can carry the 2420-byte ML-DSA-44 sig
+# alongside the larger 1322-byte COSE_Key in authData.
+mldsa44 = ["trussed-core/mldsa44", "ctap-types/mldsa44"]
+
 log-all = []
 log-none = []
 log-trace = []
@@ -52,6 +60,14 @@ cbc = { version = "0.1.2", features = ["alloc"] }
 ciborium = "0.2.2"
 ciborium-io = "0.2.2"
 cipher = "0.4.4"
+# The lib's `mldsa44` feature normally turns on both `trussed-core/mldsa44`
+# and `ctap-types/mldsa44` together; they keep `Message`'s inner Bytes size
+# (1024 → 2048) and `x5c`'s inner Bytes size in lockstep. The dev-dep
+# `trussed` below pulls in `trussed-core/mldsa44` unconditionally for the
+# test runner, so we need `ctap-types/mldsa44` here too — otherwise the
+# `x5c.push(cert)` sites in `ctap2.rs` see `Bytes<2048>` going into a
+# `Bytes<1024>` slot and `cargo test` fails to compile.
+ctap-types = { version = "=0.6.0-rc.2", features = ["mldsa44"] }
 ctaphid = { version = "0.3.1", default-features = false }
 ctaphid-dispatch = "0.4"
 delog = { version = "0.1.6", features = ["std-log"] }
@@ -67,7 +83,7 @@ rand = "0.8.4"
 rand_chacha = "0.3"
 sha2 = "0.10"
 serde_test = "1.0.176"
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "0f8df68be879acdde1f8cf428c11e5d29692a47b", features = ["virt"] }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "0f8df68be879acdde1f8cf428c11e5d29692a47b", features = ["mldsa44", "virt"] }
 trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.4.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
 trussed-usbip = { git = "https://github.com/trussed-dev/pc-usbip-runner.git", rev = "017921df0930707c4af68882ccb1f8b3f1bbf7c5", default-features = false, features = ["ctaphid"] }
 usbd-ctaphid = "0.4"
@@ -77,8 +93,13 @@ x509-parser = "0.16"
 features = ["chunked", "dispatch"]
 
 [patch.crates-io]
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "0f8df68be879acdde1f8cf428c11e5d29692a47b" }
 ctap-types = { git = "https://github.com/0x0ece/ctap-types.git", rev = "1ac43bbcb19f1e5a0b3cb3798466aa12c1bde111" }
+trussed = { git = "https://github.com/0x0ece/trussed.git", rev = "d657819388f9b3cefed1ccdcb741109f0a2588d6" }
+trussed-core = { git = "https://github.com/0x0ece/trussed.git", rev = "d657819388f9b3cefed1ccdcb741109f0a2588d6" }
+
+[patch."https://github.com/trussed-dev/trussed.git"]
+trussed = { git = "https://github.com/0x0ece/trussed.git", rev = "d657819388f9b3cefed1ccdcb741109f0a2588d6" }
+trussed-core = { git = "https://github.com/0x0ece/trussed.git", rev = "d657819388f9b3cefed1ccdcb741109f0a2588d6" }
 
 [profile.test]
 opt-level = 2
