@@ -6,7 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
--
+- Update to `ctap-types` v0.6.0-rc.4.
 
 ## [v0.4.0-rc.2](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.4.0-rc.2) (2026-05-31)
 

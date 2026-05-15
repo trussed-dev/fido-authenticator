@@ -145,13 +145,11 @@ where
         msp() - 0x2000_0000
     );
 
-    // let ctap_request = ctap2::Request::deserialize(data)
-    //     .map_err(|error| error as u8)?;
-    // let ctap_response = ctap2::Authenticator::call_ctap2(authenticator, &ctap_request)
-    //         .map_err(|error| error as u8)?;
-
-    // Goal of these nested scopes is to keep stack small.
-    let ctap_response = try_get_ctap2_response(authenticator, data)?;
+    // ctap_response lives here (this is the only stack slot for the
+    // ~6 KB ctap2::Response with mldsa44). Inner layers fill it in
+    // place via &mut, avoiding by-value copies.
+    let mut ctap_response = ctap2::Response::Reset;
+    try_get_ctap2_response(authenticator, data, &mut ctap_response)?;
     ctap_response.serialize(response);
     Ok(())
 }
@@ -160,7 +158,8 @@ where
 fn try_get_ctap2_response<T, UP>(
     authenticator: &mut Authenticator<UP, T>,
     data: &[u8],
-) -> Result<ctap2::Response, u8>
+    ctap_response: &mut ctap2::Response,
+) -> Result<(), u8>
 where
     T: TrussedRequirements,
     UP: UserPresence,
@@ -190,11 +189,7 @@ where
     debug!("2a SP: {:X}", msp());
     use ctap2::Authenticator;
     authenticator
-        .call_ctap2(&ctap_request)
-        .inspect(|_response| {
-            info!("Sending CTAP2 response {:?}", response_operation(_response));
-            trace!("CTAP2 response: {:?}", _response);
-        })
+        .call_ctap2(&ctap_request, ctap_response)
         .map_err(|error| {
             info!("CTAP2 error: {:?}", error);
             error as u8

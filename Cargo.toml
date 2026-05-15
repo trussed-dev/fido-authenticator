@@ -12,7 +12,7 @@ description = "FIDO authenticator Trussed app"
 apdu-app = { version = "0.2", optional = true }
 cbor-smol = "0.5"
 cosey = "0.4"
-ctap-types = { version = "=0.6.0-rc.3", features = ["get-info-full", "large-blobs", "third-party-payment"] }
+ctap-types = { version = "=0.6.0-rc.4", features = ["get-info-full", "large-blobs", "third-party-payment"] }
 ctaphid-app = { version = "0.2", optional = true }
 delog = "0.1"
 heapless = "0.9"
