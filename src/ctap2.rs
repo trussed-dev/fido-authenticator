@@ -114,6 +114,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         algorithms
             .push(KnownPublicKeyCredentialParameters { alg: ED_DSA })
             .unwrap();
+        #[cfg(feature = "mldsa44")]
+        algorithms
+            .push(KnownPublicKeyCredentialParameters { alg: -50 })
+            .ok();
         let algorithms = FilteredPublicKeyCredentialParameters(algorithms);
 
         let remaining_discoverable_credentials = self.estimate_remaining();
@@ -131,8 +135,8 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         response.max_cred_id_length = Some(ctap_types::sizes::MAX_CREDENTIAL_ID_LENGTH);
         response.algorithms = Some(algorithms);
         response.firmware_version = Some(self.config.firmware_version as usize);
-        response.remaining_discoverable_credentials = remaining_discoverable_credentials
-            .map(|count| count as usize);
+        response.remaining_discoverable_credentials =
+            remaining_discoverable_credentials.map(|count| count as usize);
         response.max_cred_blob_length = Some(constants::MAX_CRED_BLOB_LENGTH);
         response.min_pin_length = Some(self.state.persistent.min_pin_length() as usize);
         response.force_pin_change = Some(self.state.persistent.force_pin_change());
@@ -233,17 +237,21 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         // 7. check pubKeyCredParams algorithm is valid + supported COSE identifier
 
+        // CTAP §6.1.2: walk pubKeyCredParams in order and pick the first
+        // supported algorithm. The guard on every arm matters — without
+        // it later entries silently overwrite earlier ones and we end
+        // up with last-match instead of first-match (caught by the
+        // ML-DSA-44 vs EdDSA preference test).
         let mut algorithm: Option<SigningAlgorithm> = None;
         for param in parameters.pub_key_cred_params.0.iter() {
+            if algorithm.is_some() {
+                break;
+            }
             match param.alg {
-                -7 => {
-                    if algorithm.is_none() {
-                        algorithm = Some(SigningAlgorithm::P256);
-                    }
-                }
-                -8 => {
-                    algorithm = Some(SigningAlgorithm::Ed25519);
-                }
+                -7 => algorithm = Some(SigningAlgorithm::P256),
+                -8 => algorithm = Some(SigningAlgorithm::Ed25519),
+                #[cfg(feature = "mldsa44")]
+                -50 => algorithm = Some(SigningAlgorithm::MlDsa44),
                 _ => {}
             }
         }
@@ -556,7 +564,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         };
         // debug_now!("authData = {:?}", &authenticator_data);
 
-        let serialized_auth_data = authenticator_data.serialize()?;
+        let mut serialized_auth_data = authenticator_data.serialize()?;
 
         // select attestation format or use packed attestation as default
         let att_stmt_fmt = parameters
@@ -570,11 +578,15 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     Some(AttestationStatement::None(NoneAttestationStatement {}))
                 }
                 SupportedAttestationFormat::Packed => {
-                    let mut commitment = Bytes::<1024>::new();
-                    commitment
-                        .extend_from_slice(&serialized_auth_data)
-                        .map_err(|_| Error::Other)?;
-                    commitment
+                    // Build the "commitment" (auth_data ‖ cdh) IN PLACE inside
+                    // `serialized_auth_data` to avoid a separate 2.3 KB local.
+                    // With `mldsa44`, `SerializedAuthenticatorData` has 2048 B
+                    // capacity, comfortably fitting the ~1577 B auth_data + 32 B
+                    // cdh = ~1609 B. After signing we truncate to restore the
+                    // original auth_data length so the buffer can be moved into
+                    // `response.auth_data`.
+                    let auth_data_len = serialized_auth_data.len();
+                    serialized_auth_data
                         .extend_from_slice(parameters.client_data_hash)
                         .map_err(|_| Error::Other)?;
 
@@ -582,8 +594,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                         .as_ref()
                         .map(|attestation| (attestation.0, SigningAlgorithm::P256))
                         .unwrap_or((private_key, algorithm));
-                    let signature =
-                        attestation_algorithm.sign(&mut self.trussed, attestation_key, &commitment);
+                    let signature = attestation_algorithm.sign(
+                        &mut self.trussed,
+                        attestation_key,
+                        &serialized_auth_data,
+                    );
+                    serialized_auth_data.truncate(auth_data_len);
                     let packed = PackedAttestationStatement {
                         alg: attestation_algorithm.into(),
                         sig: Bytes::try_from(&*signature).map_err(|_| Error::Other)?,
@@ -607,6 +623,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             info_now!("deleted private credential key: {}", _success);
         }
 
+        // Write fields directly into the caller-provided slot — avoids
+        // the 6 KB Response by-value return + move through the dispatch
+        // chain. `serialized_auth_data` still lives transiently on this
+        // function's stack (≈2 KB); future work could write it directly
+        // into `response.auth_data` via a mutable serialize sink.
         response.fmt = att_stmt_fmt
             .map(From::from)
             .unwrap_or(AttestationStatementFormat::None);
@@ -682,10 +703,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         match request.sub_command {
             Subcommand::SetMinPINLength => self.config_set_min_pin_length(request),
-            Subcommand::ToggleAlwaysUv => self
-                .state
-                .persistent
-                .toggle_always_uv(&mut self.trussed),
+            Subcommand::ToggleAlwaysUv => self.state.persistent.toggle_always_uv(&mut self.trussed),
             // CTAP 2.3 §6.11.5: long-touch is the only reset gesture we
             // support, hard-wired on. The subcommand is therefore a no-op:
             // already enabled, so we just acknowledge.
@@ -1238,10 +1256,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             let mut owned = heapless::Vec::new();
             for id in rp_ids {
                 owned
-                    .push(
-                        heapless::String::try_from(*id)
-                            .map_err(|_| Error::PinPolicyViolation)?,
-                    )
+                    .push(heapless::String::try_from(*id).map_err(|_| Error::PinPolicyViolation)?)
                     .map_err(|_| Error::PinPolicyViolation)?;
             }
             self.state
@@ -1788,12 +1803,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         if extensions.cred_blob.unwrap_or(false) {
             // Spec: if the extension was requested but no blob is associated
             // with the credential, return an empty byte string (not absent).
-            output.cred_blob = Some(
-                credential
-                    .cred_blob()
-                    .cloned()
-                    .unwrap_or_else(Bytes::new),
-            );
+            output.cred_blob = Some(credential.cred_blob().cloned().unwrap_or_else(Bytes::new));
         }
 
         Ok(output.is_set().then_some(output))
@@ -1882,66 +1892,53 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             extensions: extensions_output,
         };
 
-        let serialized_auth_data = authenticator_data.serialize()?;
+        let mut serialized_auth_data = authenticator_data.serialize()?;
 
-        let mut commitment = Bytes::<1024>::new();
-        commitment
-            .extend_from_slice(&serialized_auth_data)
-            .map_err(|_| Error::Other)?;
-        commitment
+        // Build commitment in place: append client_data_hash to serialized_auth_data,
+        // sign over the concatenation, then truncate back. Mirrors the elision
+        // done in make_credential — avoids a separate Bytes<1024> commitment buffer.
+        let auth_data_len = serialized_auth_data.len();
+        serialized_auth_data
             .extend_from_slice(&data.client_data_hash)
             .map_err(|_| Error::Other)?;
 
         let signing_algorithm =
             SigningAlgorithm::try_from(credential.algorithm()).map_err(|_| Error::Other)?;
-        let signature =
-            Bytes::try_from(&*signing_algorithm.sign(&mut self.trussed, key, &commitment)).unwrap();
+        let signature = Bytes::try_from(
+            &*signing_algorithm.sign(&mut self.trussed, key, &serialized_auth_data),
+        )
+        .unwrap();
 
-        // select preferred format or skip attestation statement
+        // select preferred format or skip attestation statement.
+        //
+        // The Packed branch's `PackedAttestationStatement` carries a
+        // `Bytes<MAX_PACKED_SIG_LENGTH>` sig (2436 B) and an x5c
+        // `Bytes<MAX_X5C_CERT_LENGTH>` cert (2052 B) — ~4.5 KB total
+        // with `mldsa44`. Outline the construction into a `#[inline(never)]`
+        // helper so those temporaries live in the helper's frame, not
+        // in `assert_with_credential`'s (which is preserved on the lower
+        // task's stack during the 72 KB libcrux_sign call above us).
         let att_stmt_fmt = data
             .attestation_formats_preference
             .as_ref()
             .and_then(SupportedAttestationFormat::select);
-        let att_stmt = if let Some(format) = att_stmt_fmt {
-            match format {
-                SupportedAttestationFormat::None => {
-                    Some(AttestationStatement::None(NoneAttestationStatement {}))
-                }
-                SupportedAttestationFormat::Packed => {
-                    let (attestation_maybe, _) = self.state.identity.attestation(&mut self.trussed);
-                    let (signature, attestation_algorithm) = {
-                        if let Some(attestation) = attestation_maybe.as_ref() {
-                            let signing_algorithm = SigningAlgorithm::P256;
-                            let signature = signing_algorithm.sign(
-                                &mut self.trussed,
-                                attestation.0,
-                                &commitment,
-                            );
-                            (
-                                Bytes::try_from(&*signature).map_err(|_| Error::Other)?,
-                                signing_algorithm.into(),
-                            )
-                        } else {
-                            (signature.clone(), credential.algorithm())
-                        }
-                    };
-                    let packed = PackedAttestationStatement {
-                        alg: attestation_algorithm,
-                        sig: signature,
-                        x5c: attestation_maybe.as_ref().map(|attestation| {
-                            // See: https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation-cert-requirements
-                            let cert = attestation.1.clone();
-                            let mut x5c = Vec::new();
-                            x5c.push(cert).ok();
-                            x5c
-                        }),
-                    };
-                    Some(AttestationStatement::Packed(packed))
-                }
+        match att_stmt_fmt {
+            Some(SupportedAttestationFormat::None) => {
+                response.att_stmt = Some(AttestationStatement::None(NoneAttestationStatement {}));
             }
-        } else {
-            None
-        };
+            Some(SupportedAttestationFormat::Packed) => {
+                self.build_packed_att_stmt(
+                    &serialized_auth_data,
+                    &signature,
+                    credential.algorithm(),
+                    response,
+                )?;
+            }
+            None => {}
+        }
+
+        // Truncate back so the response carries only authData (without cdh).
+        serialized_auth_data.truncate(auth_data_len);
 
         if !is_rk {
             syscall!(self.trussed.delete(key));
@@ -1951,7 +1948,6 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         response.auth_data = serialized_auth_data;
         response.signature = signature;
         response.number_of_credentials = num_credentials;
-        response.att_stmt = att_stmt;
 
         // User with empty IDs are ignored for compatibility
         if is_rk {
@@ -1979,6 +1975,43 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             }
         }
 
+        Ok(())
+    }
+
+    /// Build a `Packed` attestation statement for `get_assertion` and
+    /// write it into `response.att_stmt`. Outlined so its ~4.5 KB worth
+    /// of temporaries (`Bytes<MAX_PACKED_SIG_LENGTH>` re-sign output plus
+    /// the x5c cert clone) live here instead of inflating the caller's
+    /// preserved stack while libcrux_sign runs above us.
+    #[inline(never)]
+    fn build_packed_att_stmt(
+        &mut self,
+        message: &[u8],
+        fallback_sig: &Bytes<{ ctap_types::sizes::MAX_PACKED_SIG_LENGTH }>,
+        fallback_alg: i32,
+        response: &mut ctap2::get_assertion::Response,
+    ) -> Result<()> {
+        let (attestation_maybe, _) = self.state.identity.attestation(&mut self.trussed);
+        let (sig, alg) = if let Some(attestation) = attestation_maybe.as_ref() {
+            let signing_algorithm = SigningAlgorithm::P256;
+            let att_sig = signing_algorithm.sign(&mut self.trussed, attestation.0, message);
+            (
+                Bytes::try_from(&*att_sig).map_err(|_| Error::Other)?,
+                signing_algorithm.into(),
+            )
+        } else {
+            (fallback_sig.clone(), fallback_alg)
+        };
+        response.att_stmt = Some(AttestationStatement::Packed(PackedAttestationStatement {
+            alg,
+            sig,
+            x5c: attestation_maybe.as_ref().map(|attestation| {
+                let cert = attestation.1.clone();
+                let mut x5c = Vec::new();
+                x5c.push(cert).ok();
+                x5c
+            }),
+        }));
         Ok(())
     }
 

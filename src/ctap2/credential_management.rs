@@ -407,6 +407,13 @@ where
             SigningAlgorithm::Ed25519 => PublicKey::Ed25519Key(
                 ctap_types::serde::cbor_deserialize(&cose_public_key).unwrap(),
             ),
+            // `cosey::PublicKey` doesn't have an ML-DSA variant (yet); the
+            // credential itself works for GA, but `credentialManagement` can't
+            // serialise its public key via this path. Skip rather than crash —
+            // the platform will see `Err(InvalidCredential)` and can fall back
+            // to GA + signature verification to obtain the key.
+            #[cfg(feature = "mldsa44")]
+            SigningAlgorithm::MlDsa44 => return Err(Error::InvalidCredential),
         };
         let cred_protect = match credential.cred_protect {
             Some(x) => Some(x),

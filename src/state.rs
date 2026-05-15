@@ -326,9 +326,9 @@ impl PersistentState {
         // Trussed's read syscall conflates "file does not exist" and
         // "read failure" into a single `FilesystemReadFailure`. Either way,
         // this is a fresh authenticator from our perspective.
-        let data = match try_syscall!(trussed
-            .read_file(Location::Internal, PathBuf::from(Self::FILENAME)))
-        {
+        let data = match try_syscall!(
+            trussed.read_file(Location::Internal, PathBuf::from(Self::FILENAME))
+        ) {
             Ok(reply) => reply.data,
             Err(_) => return Ok(None),
         };
