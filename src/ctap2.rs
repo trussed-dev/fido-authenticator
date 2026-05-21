@@ -580,15 +580,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
     ) -> Result<()> {
         use ctap2::authenticator_config::Subcommand;
 
-        // CTAP 2.1 §6.11.4 step 5: a PIN/UV-auth token is required. We have no
-        // built-in UV (no biometrics), so this also implies a client PIN must
-        // be set.
-        if !self.state.persistent.pin_is_set() {
-            return Err(Error::PinNotSet);
-        }
+        let pin_auth = request.pin_auth.ok_or(Error::PinRequired)?;
         let pin_protocol = request.pin_protocol.ok_or(Error::MissingParameter)?;
         let pin_protocol = self.parse_pin_protocol(pin_protocol)?;
-        let pin_auth = request.pin_auth.ok_or(Error::MissingParameter)?;
 
         // pinUvAuthData = 0xff * 32 || 0x0d || subCommand || subCommandParams (CBOR)
         let mut data: Bytes<{ 32 + 2 + sizes::MAX_CREDENTIAL_ID_LENGTH }> = Bytes::new();
