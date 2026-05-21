@@ -409,7 +409,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
             extensions: {
                 if hmac_secret_requested.is_some() || cred_protect_requested.is_some() {
-                    let mut extensions = ctap2::make_credential::Extensions::default();
+                    let mut extensions = ctap2::make_credential::ExtensionsOutput::default();
                     extensions.cred_protect = parameters.extensions.as_ref().unwrap().cred_protect;
                     extensions.hmac_secret = parameters.extensions.as_ref().unwrap().hmac_secret;
                     Some(extensions)
