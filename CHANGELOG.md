@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update to `ctap-types` v0.6.0-rc.1.
 - Set `algorithms`, `firmware_version` and `remaining_discoverable_credentials` in `get_info` and add `firmware_version` to `Config`.
 - Implement the `credBlob` extension.
+- Implement the `authenticatorConfig` command without subcommands.
 - Load full credential from filesstem for getAssertion if an allow list is used with a discoverable credential.
 
 ## [v0.3.0](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.3.0) (2026-03-25)
