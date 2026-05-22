@@ -7,7 +7,7 @@ pub mod migrate;
 use core::num::NonZeroU32;
 
 use ctap_types::{
-    ctap2::AttestationFormatsPreference,
+    ctap2::{authenticator_config::MAX_MIN_PIN_LENGTH_RP_IDS, AttestationFormatsPreference},
     // 2022-02-27: 10 credentials
     sizes::MAX_CREDENTIAL_COUNT_IN_LIST, // U8 currently
     Error,
@@ -296,9 +296,6 @@ impl PersistentState {
 
     /// Default minimum PIN length (CTAP 2.1 §6.11.4: spec floor is 4).
     pub const DEFAULT_MIN_PIN_LENGTH: u8 = 4;
-    /// Maximum number of RP IDs that can be auto-receivers of the
-    /// `minPinLength` extension.
-    pub const MAX_MIN_PIN_LENGTH_RP_IDS: usize = 4;
 
     pub fn load<T: FilesystemClient>(trussed: &mut T) -> Result<Self> {
         // TODO: add "exists_file" method instead?
@@ -503,7 +500,7 @@ impl PersistentState {
     pub fn set_min_pin_length_rp_ids<T: FilesystemClient>(
         &mut self,
         trussed: &mut T,
-        rp_ids: heapless::Vec<heapless::String<256>, { Self::MAX_MIN_PIN_LENGTH_RP_IDS }>,
+        rp_ids: heapless::Vec<heapless::String<256>, MAX_MIN_PIN_LENGTH_RP_IDS>,
     ) -> Result<()> {
         self.min_pin_length_rp_ids = rp_ids;
         self.save(trussed)?;

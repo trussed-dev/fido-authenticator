@@ -3,9 +3,9 @@
 use credential_management::CredentialManagement;
 use ctap_types::{
     ctap2::{
-        self, client_pin::Permissions, AttestationFormatsPreference, AttestationStatement,
-        AttestationStatementFormat, Authenticator, NoneAttestationStatement,
-        PackedAttestationStatement, VendorOperation,
+        self, authenticator_config::MAX_MIN_PIN_LENGTH_RP_IDS, client_pin::Permissions,
+        AttestationFormatsPreference, AttestationStatement, AttestationStatementFormat,
+        Authenticator, NoneAttestationStatement, PackedAttestationStatement, VendorOperation,
     },
     heapless::{String, Vec},
     heapless_bytes::Bytes,
@@ -129,8 +129,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         response.max_cred_blob_length = Some(MAX_CRED_BLOB_LENGTH);
         response.min_pin_length = Some(self.state.persistent.min_pin_length().into());
         response.force_pin_change = Some(self.state.persistent.force_pin_change());
-        response.max_rpids_for_set_min_pin_length =
-            Some(state::PersistentState::MAX_MIN_PIN_LENGTH_RP_IDS);
+        response.max_rpids_for_set_min_pin_length = Some(MAX_MIN_PIN_LENGTH_RP_IDS);
         response.attestation_formats = Some(attestation_formats);
         response
     }
@@ -1146,7 +1145,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         }
 
         if let Some(rp_ids) = params.min_pin_length_rp_ids.as_ref() {
-            if rp_ids.len() > state::PersistentState::MAX_MIN_PIN_LENGTH_RP_IDS {
+            if rp_ids.len() > MAX_MIN_PIN_LENGTH_RP_IDS {
                 return Err(Error::PinPolicyViolation);
             }
             let mut owned = heapless::Vec::new();
