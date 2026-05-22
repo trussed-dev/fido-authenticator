@@ -214,7 +214,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let mut algorithm: Option<SigningAlgorithm> = None;
         for param in parameters.pub_key_cred_params.0.iter() {
             match param.alg {
-                -7 => {
+                -7 =>
+                {
+                    #[allow(clippy::collapsible_match)]
                     if algorithm.is_none() {
                         algorithm = Some(SigningAlgorithm::P256);
                     }
