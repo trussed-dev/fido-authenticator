@@ -127,7 +127,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         response.remaining_discoverable_credentials =
             remaining_discoverable_credentials.map(|count| count as usize);
         response.max_cred_blob_length = Some(MAX_CRED_BLOB_LENGTH);
-        response.min_pin_length = Some(self.state.persistent.min_pin_length() as usize);
+        response.min_pin_length = Some(self.state.persistent.min_pin_length().into());
         response.force_pin_change = Some(self.state.persistent.force_pin_change());
         response.max_rpids_for_set_min_pin_length =
             Some(state::PersistentState::MAX_MIN_PIN_LENGTH_RP_IDS);
@@ -1403,7 +1403,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         //           pin.len(), pin_length, &pin);
         // chop off null bytes
         let pin_length = pin.iter().position(|&b| b == b'\0').unwrap_or(pin.len());
-        let min_pin_length = self.state.persistent.min_pin_length() as usize;
+        let min_pin_length = self.state.persistent.min_pin_length().into();
         if pin_length < min_pin_length || pin_length >= 64 {
             return Err(Error::PinPolicyViolation);
         }
