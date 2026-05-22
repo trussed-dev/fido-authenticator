@@ -1160,13 +1160,36 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             // they probably meant to send None.
             if !allow_list.is_empty() {
                 for credential_id in allow_list {
-                    let credential = match Credential::try_from(self, rp_id_hash, credential_id) {
+                    let mut credential = match Credential::try_from(self, rp_id_hash, credential_id)
+                    {
                         Ok(credential) => credential,
                         _ => continue,
                     };
 
                     if !self.check_credential_applicable(&credential, true, uv_performed) {
                         continue;
+                    }
+
+                    // If this is an RK, we still need to load it from the filesystem to have access
+                    // to all metadata
+                    if let Credential::Stripped(stripped) = &credential {
+                        if matches!(stripped.key, Key::ResidentKey(_)) {
+                            let credential_id_hash = self.hash(credential_id.id);
+                            let rk_path = rk_path(rp_id_hash, &credential_id_hash);
+                            let credential_data = match try_syscall!(self
+                                .trussed
+                                .read_file(Location::Internal, rk_path))
+                            {
+                                Ok(reply) => reply.data,
+                                Err(_) => continue,
+                            };
+                            match FullCredential::deserialize(&credential_data) {
+                                Ok(full_credential) => {
+                                    credential = Credential::Full(full_credential);
+                                }
+                                Err(_) => continue,
+                            }
+                        }
                     }
 
                     return Ok(Some((credential, 1)));
