@@ -11,7 +11,6 @@ use std::{
 
 use ciborium::Value;
 use hex_literal::hex;
-use itertools::iproduct;
 use rand::RngCore as _;
 
 use fs::list_fs;
@@ -21,30 +20,8 @@ use webauthn::{
     Exhaustive, GetAssertion, GetAssertionExtensionsInput, GetAssertionOptions, GetInfo,
     GetNextAssertion, HmacSecretInput, KeyAgreementKey, MakeCredential,
     MakeCredentialExtensionsInput, MakeCredentialOptions, PinToken, PubKeyCredDescriptor,
-    PubKeyCredParam, PublicKey, Rp, SharedSecret, User,
+    PubKeyCredParam, PublicKey, Rp, SharedSecret, Test, User,
 };
-
-trait Test: Debug {
-    fn test(&self);
-
-    fn run(&self) {
-        println!("{}", "=".repeat(80));
-        println!("Running test:");
-        println!("{self:#?}");
-        println!();
-
-        self.test();
-    }
-
-    fn run_all()
-    where
-        Self: Exhaustive,
-    {
-        for test in Self::iter_exhaustive() {
-            test.run();
-        }
-    }
-}
 
 #[test]
 fn test_ping() {
@@ -749,14 +726,48 @@ fn test_make_credential() {
     TestMakeCredential::run_all();
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct ExhaustiveMakeCredentialExtensionsInput {
+    hmac_secret: Option<bool>,
+    third_party_payment: Option<bool>,
+    cred_blob: bool,
+}
+
+impl Exhaustive for ExhaustiveMakeCredentialExtensionsInput {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
+        exhaustive_struct! {
+            hmac_secret: Option<bool>,
+            third_party_payment: Option<bool>,
+            cred_blob: bool,
+        }
+    }
+}
+
+impl From<ExhaustiveMakeCredentialExtensionsInput> for MakeCredentialExtensionsInput {
+    fn from(input: ExhaustiveMakeCredentialExtensionsInput) -> Self {
+        Self {
+            hmac_secret: input.hmac_secret,
+            third_party_payment: input.third_party_payment,
+            cred_blob: if input.cred_blob {
+                let mut v = vec![0x00; 32];
+                rand::thread_rng().fill_bytes(&mut v);
+                Some(v)
+            } else {
+                None
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct TestGetAssertion {
     rk: bool,
     allow_list: bool,
     options: Option<GetAssertionOptions>,
-    mc_extensions: Option<MakeCredentialExtensionsInput>,
+    mc_extensions: Option<ExhaustiveMakeCredentialExtensionsInput>,
     ga_hmac_secret: bool,
     ga_third_party_payment: Option<bool>,
+    ga_cred_blob: bool,
 }
 
 impl TestGetAssertion {
@@ -798,7 +809,11 @@ impl Test for TestGetAssertion {
             if self.rk {
                 request.options = Some(MakeCredentialOptions::default().rk(true));
             }
-            request.extensions = self.mc_extensions;
+            request.extensions = self.mc_extensions.map(From::from);
+            let cred_blob = request
+                .extensions
+                .as_ref()
+                .and_then(|extensions| extensions.cred_blob.clone());
             let response = device.exec(request).unwrap();
             let credential = response.auth_data.credential.unwrap();
 
@@ -812,9 +827,10 @@ impl Test for TestGetAssertion {
                     credential.id.clone(),
                 )]);
             }
-            if self.ga_hmac_secret || self.ga_third_party_payment.is_some() {
+            if self.ga_hmac_secret || self.ga_third_party_payment.is_some() || self.ga_cred_blob {
                 let mut extensions = GetAssertionExtensionsInput {
                     third_party_payment: self.ga_third_party_payment,
+                    cred_blob: self.ga_cred_blob.then_some(true),
                     ..Default::default()
                 };
                 if self.ga_hmac_secret {
@@ -839,8 +855,9 @@ impl Test for TestGetAssertion {
                 assert_eq!(result, Err(Ctap2Error(error)));
                 return;
             }
-            let has_extensions =
-                self.ga_hmac_secret || self.ga_third_party_payment.unwrap_or_default();
+            let has_extensions = self.ga_hmac_secret
+                || self.ga_third_party_payment.unwrap_or_default()
+                || self.ga_cred_blob;
             let response = result.unwrap();
             assert_eq!(response.credential.ty, "public-key");
             assert_eq!(response.credential.id, credential.id);
@@ -851,7 +868,7 @@ impl Test for TestGetAssertion {
             );
             assert!(!response.auth_data.uv_flag());
             assert!(!response.auth_data.at_flag());
-            assert_eq!(response.auth_data.ed_flag(), has_extensions,);
+            assert_eq!(response.auth_data.ed_flag(), has_extensions);
             assert_eq!(response.number_of_credentials, None);
             credential.verify_assertion(&response.auth_data, client_data_hash, &response.signature);
             if has_extensions {
@@ -873,6 +890,15 @@ impl Test for TestGetAssertion {
                         Some(&Value::from(expected))
                     );
                 }
+
+                if self.ga_cred_blob {
+                    let cred_blob_expected = if self.rk { cred_blob.as_deref() } else { None };
+                    let cred_blob_response =
+                        extensions.get("credBlob").unwrap().as_bytes().unwrap();
+                    assert_eq!(cred_blob_response, cred_blob_expected.unwrap_or_default());
+                } else {
+                    assert!(!extensions.contains_key("credBlob"));
+                }
             } else {
                 assert!(response.auth_data.extensions.is_none());
             }
@@ -886,9 +912,10 @@ impl Exhaustive for TestGetAssertion {
             rk: bool,
             allow_list: bool,
             options: Option<GetAssertionOptions>,
-            mc_extensions: Option<MakeCredentialExtensionsInput>,
+            mc_extensions: Option<ExhaustiveMakeCredentialExtensionsInput>,
             ga_hmac_secret: bool,
             ga_third_party_payment: Option<bool>,
+            ga_cred_blob: bool,
         }
     }
 }

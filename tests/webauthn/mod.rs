@@ -1,9 +1,8 @@
-use std::{collections::BTreeMap, iter};
+use std::{collections::BTreeMap, fmt::Debug, iter};
 
 use ciborium::Value;
 use cipher::{BlockDecryptMut as _, BlockEncryptMut as _, KeyIvInit};
 use hmac::Mac;
-use itertools::iproduct;
 use p256::ecdsa::{signature::Verifier as _, DerSignature, VerifyingKey};
 use rand::RngCore as _;
 use serde::Deserialize;
@@ -26,7 +25,7 @@ impl<T: Exhaustive + Clone> Exhaustive for Option<T> {
 
 macro_rules! exhaustive_struct {
     ($($field:ident: $type:ty,)*) => {
-        iproduct!(
+        ::itertools::iproduct!(
             $(<$type as Exhaustive>::iter_exhaustive(),)*
         )
         .map(|($($field,)*)| Self { $($field,)* })
@@ -35,6 +34,28 @@ macro_rules! exhaustive_struct {
 
 #[allow(unused_imports)]
 pub(crate) use exhaustive_struct;
+
+pub trait Test: Debug {
+    fn test(&self);
+
+    fn run(&self) {
+        println!("{}", "=".repeat(80));
+        println!("Running test:");
+        println!("{self:#?}");
+        println!();
+
+        self.test();
+    }
+
+    fn run_all()
+    where
+        Self: Exhaustive,
+    {
+        for test in Self::iter_exhaustive() {
+            test.run();
+        }
+    }
+}
 
 pub struct KeyAgreementKey(p256::ecdh::EphemeralSecret);
 
@@ -432,24 +453,26 @@ impl From<MakeCredential> for Value {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct MakeCredentialExtensionsInput {
     pub hmac_secret: Option<bool>,
     pub third_party_payment: Option<bool>,
+    pub cred_blob: Option<Vec<u8>>,
 }
 
-impl Exhaustive for MakeCredentialExtensionsInput {
-    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
-        exhaustive_struct! {
-            hmac_secret: Option<bool>,
-            third_party_payment: Option<bool>,
-        }
+impl MakeCredentialExtensionsInput {
+    pub fn cred_blob(mut self, cred_blob: Vec<u8>) -> Self {
+        self.cred_blob = Some(cred_blob);
+        self
     }
 }
 
 impl From<MakeCredentialExtensionsInput> for Value {
     fn from(extensions: MakeCredentialExtensionsInput) -> Value {
         let mut map = Map::default();
+        if let Some(cred_blob) = extensions.cred_blob {
+            map.push("credBlob", cred_blob);
+        }
         if let Some(hmac_secret) = extensions.hmac_secret {
             map.push("hmac-secret", hmac_secret);
         }
@@ -661,11 +684,22 @@ impl Request for GetAssertion {
 pub struct GetAssertionExtensionsInput {
     pub third_party_payment: Option<bool>,
     pub hmac_secret: Option<HmacSecretInput>,
+    pub cred_blob: Option<bool>,
+}
+
+impl GetAssertionExtensionsInput {
+    pub fn cred_blob(mut self, cred_blob: bool) -> Self {
+        self.cred_blob = Some(cred_blob);
+        self
+    }
 }
 
 impl From<GetAssertionExtensionsInput> for Value {
     fn from(extensions: GetAssertionExtensionsInput) -> Value {
         let mut map = Map::default();
+        if let Some(cred_blob) = extensions.cred_blob {
+            map.push("credBlob", cred_blob);
+        }
         if let Some(hmac_secret) = extensions.hmac_secret {
             map.push("hmac-secret", hmac_secret);
         }
