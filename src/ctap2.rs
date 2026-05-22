@@ -127,7 +127,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         response.remaining_discoverable_credentials =
             remaining_discoverable_credentials.map(|count| count as usize);
         response.max_cred_blob_length = Some(MAX_CRED_BLOB_LENGTH);
-        response.min_pin_length = Some(self.state.persistent.min_pin_length().into());
+        response.min_pin_length = Some(self.state.persistent.min_pin_length());
         response.force_pin_change = Some(self.state.persistent.force_pin_change());
         response.max_rpids_for_set_min_pin_length = Some(MAX_MIN_PIN_LENGTH_RP_IDS);
         response.attestation_formats = Some(attestation_formats);
