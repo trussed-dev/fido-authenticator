@@ -772,8 +772,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 let pin_protocol = pin_protocol?;
 
                 // 2. is pin already set
+                // CTAP 2.1 §6.5.5.4 step 3: a setPin request against an
+                // already-provisioned authenticator returns PinAuthInvalid.
+                // (Older CTAP 2.0 implementations returned NotAllowed.)
                 if self.state.persistent.pin_is_set() {
-                    return Err(Error::NotAllowed);
+                    return Err(Error::PinAuthInvalid);
                 }
 
                 // 3. generate shared secret
@@ -862,8 +865,40 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
                 shared_secret.delete(&mut self.trussed);
 
-                // 9. store hashed PIN
-                self.hash_store_pin(&new_pin)?;
+                // 8b. CTAP 2.1 §6.5.5.6: "If the forcePINChange member ... is
+                // true and LEFT(SHA-256(newPin), 16) is equal to its internal
+                // stored LEFT(SHA-256(curPin), 16) then authenticator returns
+                // CTAP2_ERR_PIN_POLICY_VIOLATION." We compute the new hash up
+                // front so the comparison is constant-time on a fixed-size
+                // array, and only return the error when force_pin_change is
+                // set — same-PIN change with the flag clear is allowed.
+                let new_pin_hash_32 = syscall!(self.trussed.hash_sha256(&new_pin)).hash;
+                let new_pin_hash: [u8; 16] = new_pin_hash_32[..16].try_into().unwrap();
+                if self.state.persistent.force_pin_change()
+                    && self.state.persistent.pin_hash() == Some(new_pin_hash)
+                {
+                    return Err(Error::PinPolicyViolation);
+                }
+
+                // 9. store hashed PIN + PINCodePointLength
+                // (CTAP 2.1 §6.5.5.5 — "Save the PIN with derived hash
+                // and PINCodePointLength"). `new_pin` was UTF-8-validated
+                // in `decrypt_pin_check_length` above, so the from_utf8
+                // is infallible here; the unwrap_or is defensive.
+                let new_pin_code_point_length = core::str::from_utf8(&new_pin)
+                    .map(|s| s.chars().count())
+                    .unwrap_or(new_pin.len()) as u8;
+                self.state.persistent.set_pin_hash(
+                    &mut self.trussed,
+                    new_pin_hash,
+                    new_pin_code_point_length,
+                )?;
+
+                // CTAP 2.1 §6.5.5.6 step 9: clear forcePINChange after a
+                // successful changePin.
+                self.state
+                    .persistent
+                    .set_force_pin_change(&mut self.trussed, false)?;
 
                 self.pin_protocol(pin_protocol).reset_pin_tokens();
             }
@@ -913,7 +948,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 // 10. Reset PIN retries
                 self.state.reset_retries(&mut self.trussed)?;
 
-                // 11. Check forcePINChange -- skipped
+                // 11. CTAP 2.1 §6.5.5.7.1 step 11: while forcePINChange is
+                // set, getPinToken returns PIN_INVALID until a successful
+                // changePin clears the flag.
+                if self.state.persistent.force_pin_change() {
+                    return Err(Error::PinInvalid);
+                }
 
                 // 12. Reset all PIN tokens
                 // 13. Call beginUsingPinUvAuthToken
@@ -993,7 +1033,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 // 10. Reset PIN retries
                 self.state.reset_retries(&mut self.trussed)?;
 
-                // 11. Check forcePINChange -- skipped
+                // 11. CTAP 2.1 §6.5.5.7.3 step 11: while forcePINChange is
+                // set, this variant returns PIN_POLICY_VIOLATION (distinct
+                // from getPinToken's PIN_INVALID; see §6.5.5.7.1).
+                if self.state.persistent.force_pin_change() {
+                    return Err(Error::PinPolicyViolation);
+                }
 
                 // 12. Reset all PIN tokens
                 // 13. Call beginUsingPinUvAuthToken
@@ -1579,18 +1624,29 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             .decrypt(&mut self.trussed, pin_enc)
             .ok_or(Error::Other)?;
 
-        // // temp
-        // let pin_length = pin.iter().position(|&b| b == b'\0').unwrap_or(pin.len());
-        // info_now!("pin.len() = {}, pin_length = {}, = {:?}",
-        //           pin.len(), pin_length, &pin);
-        // chop off null bytes
-        let pin_length = pin.iter().position(|&b| b == b'\0').unwrap_or(pin.len());
-        let min_pin_length = self.state.persistent.min_pin_length().into();
-        if pin_length < min_pin_length || pin_length >= 64 {
+        // CTAP 2.1 §6.5.5.5 / §6.5.5.6: "The authenticator drops all
+        // **trailing** 0x00 bytes from paddedNewPin to produce newPin."
+        // Embedded nulls stay (they will fail UTF-8 validation if invalid).
+        let stripped_len = pin.iter().rposition(|&b| b != 0).map_or(0, |last| last + 1);
+
+        // CTAP 2.1 §6.5.5.3: "Maximum PIN Length: 63 bytes."
+        if stripped_len > ctap2::client_pin::MAX_PIN_LENGTH {
             return Err(Error::PinPolicyViolation);
         }
 
-        pin.resize_zero(pin_length).unwrap();
+        // Issue #43: minimum PIN length is measured in **Unicode code points**,
+        // not bytes. UTF-8-decode the stripped bytes and count `chars()`. A
+        // platform that sends non-UTF-8 bytes violates the spec; we reject
+        // with the same PIN_POLICY_VIOLATION code we use for length issues.
+        let s =
+            core::str::from_utf8(&pin[..stripped_len]).map_err(|_| Error::PinPolicyViolation)?;
+        let code_points = s.chars().count();
+        let min_pin_length = usize::from(self.state.persistent.min_pin_length());
+        if code_points < min_pin_length {
+            return Err(Error::PinPolicyViolation);
+        }
+
+        pin.resize_zero(stripped_len).unwrap();
 
         Ok(pin)
     }
@@ -1720,6 +1776,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         //
         // the idea is for multi-authnr scenario where platform
         // wants to enforce PIN and needs to figure out which authnrs support PIN
+        // (CTAP 2.1 §6.5.5.7 step 2 — was upstream PR #56; the older
+        // CTAP 2.0 reading was `PinAuthInvalid` for the "pin set" case.)
         if let Some(pin_auth) = pin_auth {
             if pin_auth.is_empty() {
                 self.up
@@ -1727,7 +1785,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                 if !self.state.persistent.pin_is_set() {
                     return Err(Error::PinNotSet);
                 } else {
-                    return Err(Error::PinAuthInvalid);
+                    return Err(Error::PinInvalid);
                 }
             }
         }

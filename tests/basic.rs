@@ -105,8 +105,10 @@ fn test_set_pin() {
 
         let shared_secret = get_shared_secret(&device, &key_agreement_key);
         let result = set_pin(&device, &key_agreement_key, &shared_secret, b"123456");
-        // TODO: review error code
-        assert_eq!(result, Err(Ctap2Error(0x30)));
+        // CTAP 2.1 §6.5.5.4: "If a PIN has already been set, authenticator
+        // returns CTAP2_ERR_PIN_AUTH_INVALID error." (0x33). Previously this
+        // expected 0x30 (NotAllowed), the CTAP 2.0 reading.
+        assert_eq!(result, Err(Ctap2Error(0x33)));
 
         let reply = device.exec(GetInfo).unwrap();
         let options = reply.options.unwrap();
@@ -1801,6 +1803,308 @@ fn test_always_uv_get_assertion_up_false_bypasses_uv_requirement() {
             "up=false GA must bypass alwaysUv UV requirement, got {:?}",
             result.err()
         );
+    })
+}
+
+// ----------------------------------------------------------------------------
+// PIN length validation (issue #43): count Unicode code points, not bytes
+// ----------------------------------------------------------------------------
+
+/// Multi-byte UTF-8 PIN with FEWER code points than minimum is rejected.
+/// "héé" = 5 bytes (h + é + é where é = 0xC3 0xA9), 3 code points. Default
+/// minimum is 4 → PIN_POLICY_VIOLATION.
+#[test]
+fn test_set_pin_short_codepoints_multibyte_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        // "héé" — 5 bytes, 3 code points. Pre-fix this would have passed
+        // because the BYTE length (5) >= 4. The fixed code rejects it.
+        let pin = "héé".as_bytes();
+        assert_eq!(pin.len(), 5);
+        assert_eq!(
+            pin.iter().filter(|&&b| !(0x80..0xC0).contains(&b)).count(),
+            3
+        );
+        let result = set_pin(&device, &key_agreement_key, &shared_secret, pin);
+        assert_eq!(result, Err(Ctap2Error(0x37)));
+    })
+}
+
+/// Multi-byte UTF-8 PIN with enough code points is accepted.
+/// "héllo" = 6 bytes, 5 code points. Default minimum is 4 → succeeds.
+#[test]
+fn test_set_pin_codepoints_multibyte_accepted() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let pin = "héllo".as_bytes();
+        assert_eq!(pin.len(), 6);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+    })
+}
+
+/// ASCII PIN at the lower bound: 4 bytes = 4 code points. Accepted.
+#[test]
+fn test_set_pin_four_byte_ascii_accepted() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, b"abcd").unwrap();
+    })
+}
+
+/// 3-byte ASCII PIN (3 code points) is rejected.
+#[test]
+fn test_set_pin_three_byte_ascii_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let result = set_pin(&device, &key_agreement_key, &shared_secret, b"abc");
+        assert_eq!(result, Err(Ctap2Error(0x37)));
+    })
+}
+
+/// Invalid UTF-8 in the PIN bytes is rejected (PIN_POLICY_VIOLATION). Platforms
+/// MUST send Normalized UTF-8 per CTAP 2.1 §6.5.5.5; bytes that don't decode
+/// fail the PIN policy check.
+#[test]
+fn test_set_pin_invalid_utf8_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        // 0xC3 is a UTF-8 lead byte that must be followed by a continuation
+        // byte in [0x80, 0xBF]. Trailing it with 'x' makes the sequence
+        // invalid UTF-8.
+        let pin = b"abc\xC3x";
+        let result = set_pin(&device, &key_agreement_key, &shared_secret, pin);
+        assert_eq!(result, Err(Ctap2Error(0x37)));
+    })
+}
+
+/// All-zero `paddedNewPin` strips to length 0 → 0 code points → reject.
+/// Verifies the empty-PIN edge case (no leading bytes, no trailing
+/// non-zero) is properly rejected against the spec floor of 4 cp.
+#[test]
+fn test_set_pin_empty_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let result = set_pin(&device, &key_agreement_key, &shared_secret, b"");
+        assert_eq!(result, Err(Ctap2Error(0x37)));
+    })
+}
+
+/// CTAP 2.1 §6.5.5.5 — UTF-8 representation of newPin MUST NOT exceed 63
+/// bytes. A 63-byte ASCII PIN (63 code points) sits exactly at the spec
+/// boundary and MUST be accepted.
+#[test]
+fn test_set_pin_at_byte_limit_accepted() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        // 63 ASCII chars → 63 bytes → 63 code points.
+        let pin = vec![b'a'; 63];
+        set_pin(&device, &key_agreement_key, &shared_secret, &pin).unwrap();
+    })
+}
+
+/// CTAP 2.1 §6.5.5.5: a 64-byte non-zero PIN fills `paddedNewPin`
+/// completely with no trailing 0x00 — the stripped length stays at 64
+/// which exceeds the spec's 63-byte UTF-8 cap, so the authenticator
+/// MUST reject with PIN_POLICY_VIOLATION.
+#[test]
+fn test_set_pin_over_byte_limit_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        // 64 ASCII chars → 64 bytes → no padding room left.
+        let pin = vec![b'a'; 64];
+        let result = set_pin(&device, &key_agreement_key, &shared_secret, &pin);
+        assert_eq!(result, Err(Ctap2Error(0x37)));
+    })
+}
+
+/// CTAP 2.1 §6.5.5.6 (changePIN) shares the same PIN-length validation
+/// pipeline as setPIN (§6.5.5.5). Verify the code-point check applies
+/// equally: a 3-byte ASCII new PIN under changePIN must be rejected
+/// with PIN_POLICY_VIOLATION.
+#[test]
+fn test_change_pin_short_codepoints_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let old_pin = b"123456";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, old_pin).unwrap();
+
+        // Attempt to change to a 3-cp PIN.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let result = change_pin(&device, &key_agreement_key, &shared_secret, old_pin, b"abc");
+        assert_eq!(result, Err(Ctap2Error(0x37)));
+    })
+}
+
+/// Multi-byte UTF-8 new PIN with too few code points is also rejected
+/// by changePIN (parallel to the setPin multi-byte test). "héé" =
+/// 5 bytes, 3 code points → reject.
+#[test]
+fn test_change_pin_short_codepoints_multibyte_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let old_pin = b"123456";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, old_pin).unwrap();
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let new_pin = "héé".as_bytes();
+        assert_eq!(new_pin.len(), 5);
+        let result = change_pin(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            old_pin,
+            new_pin,
+        );
+        assert_eq!(result, Err(Ctap2Error(0x37)));
+    })
+}
+
+/// CTAP 2.1 §6.5.5.6 changePIN: "If the forcePINChange member ... is true
+/// and LEFT(SHA-256(newPin), 16) is equal to its internal stored
+/// LEFT(SHA-256(curPin), 16) then authenticator returns
+/// CTAP2_ERR_PIN_POLICY_VIOLATION." This blocks the trivial "rotate to the
+/// same PIN" loophole when the platform is forcing a change.
+#[test]
+fn test_change_pin_same_pin_with_force_change_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        // Setup: set PIN, then mark forcePINChange via setMinPINLength.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        let params = AuthenticatorConfigParams {
+            force_change_pin: Some(true),
+            ..Default::default()
+        };
+        set_min_pin_length(&device, &pin_token, params).unwrap();
+        assert_eq!(device.exec(GetInfo).unwrap().force_pin_change, Some(true));
+
+        // Try to "change" to the same PIN — must be rejected.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let result = change_pin(&device, &key_agreement_key, &shared_secret, pin, pin);
+        assert_eq!(result, Err(Ctap2Error(0x37)));
+
+        // forcePINChange should still be true after the rejection.
+        assert_eq!(device.exec(GetInfo).unwrap().force_pin_change, Some(true));
+    })
+}
+
+/// Counterpart: when forcePINChange is **not** set, a same-PIN changePIN
+/// silently succeeds (spec doesn't reject this case, only when the flag is
+/// set). This documents the current behaviour and locks it in.
+#[test]
+fn test_change_pin_same_pin_without_force_change_allowed() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+        // forcePINChange is false by default.
+        assert_eq!(device.exec(GetInfo).unwrap().force_pin_change, Some(false));
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        change_pin(&device, &key_agreement_key, &shared_secret, pin, pin).unwrap();
+
+        // Still false.
+        assert_eq!(device.exec(GetInfo).unwrap().force_pin_change, Some(false));
+    })
+}
+
+/// Successful changePIN to a NEW pin while forcePINChange is set must clear
+/// the flag (CTAP 2.1 §6.5.5.6: "Authenticator sets the value of the
+/// forcePINChange member ... to false").
+#[test]
+fn test_change_pin_to_new_pin_clears_force_change() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin1 = b"123456";
+    let pin2 = b"654321";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin1).unwrap();
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin1,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        let params = AuthenticatorConfigParams {
+            force_change_pin: Some(true),
+            ..Default::default()
+        };
+        set_min_pin_length(&device, &pin_token, params).unwrap();
+        assert_eq!(device.exec(GetInfo).unwrap().force_pin_change, Some(true));
+
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        change_pin(&device, &key_agreement_key, &shared_secret, pin1, pin2).unwrap();
+
+        assert_eq!(device.exec(GetInfo).unwrap().force_pin_change, Some(false));
+    })
+}
+
+/// CTAP 2.1 §6.1.2 step 1 (and §6.5.5.7 step 2): when the platform sends
+/// a **zero-length** `pinUvAuthParam` (the CTAP 2.0 "is PIN supported?"
+/// probe), the authenticator MUST request UP and then return
+/// `CTAP2_ERR_PIN_INVALID` (0x31) if a PIN is set. The pre-audit code
+/// returned `PIN_AUTH_INVALID` (0x33), the CTAP 2.0 reading.
+#[test]
+fn test_make_credential_zero_length_pin_auth_returns_0x31_when_pin_set() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+
+        let mut mc = MakeCredential::new(
+            vec![0u8; 32],
+            Rp::new("example.com"),
+            User::new(vec![1u8; 16]),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        // Zero-length pinUvAuthParam — the §6.1.2 step 1 probe.
+        mc.pin_auth_raw = Some(Vec::new());
+        mc.pin_protocol = Some(2);
+        let result = device.exec(mc);
+        assert_eq!(result.err(), Some(Ctap2Error(0x31)));
+    })
+}
+
+/// Same probe, but with no PIN set on the device. CTAP 2.1 §6.1.2 step 1.3:
+/// "return CTAP2_ERR_PIN_NOT_SET" (0x35).
+#[test]
+fn test_make_credential_zero_length_pin_auth_returns_0x35_when_pin_not_set() {
+    virt::run_ctap2(|device| {
+        let mut mc = MakeCredential::new(
+            vec![0u8; 32],
+            Rp::new("example.com"),
+            User::new(vec![1u8; 16]),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        mc.pin_auth_raw = Some(Vec::new());
+        mc.pin_protocol = Some(2);
+        let result = device.exec(mc);
+        assert_eq!(result.err(), Some(Ctap2Error(0x35)));
     })
 }
 

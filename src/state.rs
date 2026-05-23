@@ -487,10 +487,21 @@ impl PersistentState {
         pin_hash: [u8; 16],
         pin_code_point_length: u8,
     ) -> Result<()> {
+        // Idempotent: if the same hash is being written and forcePINChange is
+        // already clear, skip the flash write. Also — and more importantly —
+        // if the platform "changes" the PIN to the same value, we must not
+        // clear `force_pin_change` (the user hasn't actually complied with
+        // the change request). The spec-mandated reject for "forcePINChange
+        // + new==old" lives in the changePIN handler; this check is a belt-
+        // and-braces against any other caller path.
+        if self.pin_hash == Some(pin_hash) {
+            return Ok(());
+        }
         self.pin_hash = Some(pin_hash);
         self.pin_code_point_length = pin_code_point_length;
         // Successfully (re)setting the PIN clears any pending forcePINChange
-        // request — the platform has just complied (CTAP 2.1 §6.5.5.7).
+        // request — the platform has just complied (CTAP 2.1 §6.5.5.6 /
+        // §6.5.5.7).
         self.force_pin_change = false;
         self.save(trussed)?;
         Ok(())
