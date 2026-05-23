@@ -19,7 +19,9 @@ use ctaphid::{
     HidDevice, HidDeviceInfo,
 };
 use ctaphid_dispatch::{Channel, Dispatch, Requester, DEFAULT_MESSAGE_SIZE};
-use fido_authenticator::{Authenticator, Config, Conforming};
+use fido_authenticator::{
+    Authenticator, Config, Conforming, Silent, TrussedRequirements, UserPresence,
+};
 use littlefs2::{object_safe::DynFilesystem, path, path::PathBuf};
 use rand::{
     distributions::{Distribution, Uniform},
@@ -65,19 +67,17 @@ where
     with_client(
         &files,
         |client| {
-            let mut authenticator = Authenticator::new(
-                client,
-                Conforming {},
-                Config {
-                    max_msg_size: 0,
-                    skip_up_timeout: None,
-                    max_resident_credential_count: options.max_resident_credential_count,
-                    large_blobs: None,
-                    nfc_transport: options.nfc_transport,
-                    ccid_transport: options.ccid_transport,
-                    firmware_version: Some(0),
-                },
-            );
+            let config = Config {
+                max_msg_size: 0,
+                skip_up_timeout: None,
+                max_resident_credential_count: options.max_resident_credential_count,
+                large_blobs: None,
+                nfc_transport: options.nfc_transport,
+                ccid_transport: options.ccid_transport,
+                firmware_version: Some(0),
+            };
+            let mut authenticator =
+                Authenticator::new(client, TestUp::new(options.silent_up), config);
 
             let channel = Channel::new();
             let (rq, rp) = channel.split().unwrap();
@@ -137,7 +137,57 @@ pub struct Options {
     pub max_resident_credential_count: Option<u32>,
     pub nfc_transport: bool,
     pub ccid_transport: bool,
+    /// When true, the authenticator is constructed with `Silent` user
+    /// presence — every UP check (including `user_present_strong` for
+    /// authenticatorReset, CTAP 2.3 §7.7) auto-grants. Needed by tests
+    /// that exercise paths that would otherwise stall on the virt UI's
+    /// default `Level::Normal` (which doesn't satisfy `Level::Strong`).
+    pub silent_up: bool,
     pub inspect_ifs: Option<InspectFsFn>,
+}
+
+/// Either `Conforming` (default — goes through trussed's user_present
+/// syscall) or `Silent` (auto-grants every UP request). The wrapper lets the
+/// test runner pick between them at runtime without leaking the choice into
+/// the surrounding generics.
+#[derive(Copy, Clone)]
+pub enum TestUp {
+    Conforming,
+    Silent,
+}
+
+impl TestUp {
+    fn new(silent: bool) -> Self {
+        if silent {
+            Self::Silent
+        } else {
+            Self::Conforming
+        }
+    }
+}
+
+impl UserPresence for TestUp {
+    fn user_present<T: TrussedRequirements>(
+        self,
+        trussed: &mut T,
+        timeout_milliseconds: u32,
+    ) -> Result<(), ctap_types::Error> {
+        match self {
+            Self::Conforming => Conforming {}.user_present(trussed, timeout_milliseconds),
+            Self::Silent => Silent {}.user_present(trussed, timeout_milliseconds),
+        }
+    }
+
+    fn user_present_strong<T: TrussedRequirements>(
+        self,
+        trussed: &mut T,
+        timeout_milliseconds: u32,
+    ) -> Result<(), ctap_types::Error> {
+        match self {
+            Self::Conforming => Conforming {}.user_present_strong(trussed, timeout_milliseconds),
+            Self::Silent => Silent {}.user_present_strong(trussed, timeout_milliseconds),
+        }
+    }
 }
 
 pub struct Ctap2<'a>(ctaphid::Device<Device<'a>>);

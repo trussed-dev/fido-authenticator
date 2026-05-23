@@ -360,11 +360,20 @@ impl PersistentState {
         self.consecutive_pin_mismatches = 0;
         self.pin_hash = None;
         self.timestamp = 0;
-        // CTAP 2.1 §6.7 authenticatorReset: "Always Require User Verification"
-        // is explicitly listed as a feature that MUST be reset. Other §6.7
-        // feature flags (min_pin_length / min_pin_length_rp_ids /
-        // force_pin_change) are left for a follow-up — see AUDIT.md.
+        // CTAP 2.1 §6.7 authenticatorReset MUST reset the following features:
+        //   - "Always Require User Verification" (alwaysUv)
+        //   - "Set Minimum PIN Length" — its three pieces of state:
+        //       * `minPINLength` → back to default (the `Default` impl
+        //         leaves the raw field at 0, which our `min_pin_length()`
+        //         getter reads as DEFAULT_MIN_PIN_LENGTH)
+        //       * `minPinLengthRPIDs` → empty
+        //       * `forcePINChange` → false
+        //   - Enterprise attestation (we don't support it, so no state to
+        //     clear).
         self.always_uv = false;
+        self.min_pin_length = 0;
+        self.min_pin_length_rp_ids = heapless::Vec::new();
+        self.force_pin_change = false;
         self.save(trussed)
     }
 
@@ -637,6 +646,21 @@ impl RuntimeState {
         syscall!(trussed.delete_all(Location::Volatile));
         self.clear_credential_cache();
         self.active_get_assertion = None;
+
+        // Clear any in-flight credMgmt enumeration cursors. Otherwise a
+        // `next_relying_party`/`next_credential` call straight after
+        // `authenticatorReset` succeeds with stale data instead of
+        // returning `NotAllowed` (caught by fido2-tests
+        // test_rpnext_without_rpbegin).
+        self.cached_rp = None;
+        self.cached_rk = None;
+
+        // The per-power-cycle pinAuthFailedAttempts counter is runtime
+        // state and lives here. `authenticatorReset` removes the PIN
+        // entirely (caller resets the persistent retries counter via
+        // `PersistentState::reset`), so the per-power-cycle counter
+        // should drop with it.
+        self.consecutive_pin_mismatches = 0;
 
         if let Some(pin_protocol) = self.pin_protocol.take() {
             pin_protocol.reset(trussed);

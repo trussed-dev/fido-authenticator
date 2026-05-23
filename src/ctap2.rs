@@ -159,6 +159,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         response.min_pin_length = Some(self.state.persistent.min_pin_length());
         response.force_pin_change = Some(self.state.persistent.force_pin_change());
         response.max_rpids_for_set_min_pin_length = Some(MAX_MIN_PIN_LENGTH_RP_IDS);
+        // CTAP 2.3 §6.4 0x18: long-touch is the only reset gesture we support,
+        // and it is hard-wired on. Always advertise as "supported & enabled".
+        response.long_touch_for_reset = Some(true);
         response.attestation_formats = Some(attestation_formats);
         // CTAP 2.3 §6.4 0x1F: supported authenticatorConfig sub-command IDs.
         //   0x02 toggleAlwaysUv         (CTAP 2.1 §6.11.2)
@@ -696,18 +699,13 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
     #[inline(never)]
     fn reset(&mut self) -> Result<()> {
-        // 1. >10s after bootup -> NotAllowed
-        let uptime = syscall!(self.trussed.uptime()).uptime;
-        debug_now!("uptime: {:?}", uptime);
-        if uptime.as_secs() > 10 {
-            #[cfg(not(feature = "disable-reset-time-window"))]
-            return Err(Error::NotAllowed);
-        }
-        // 2. check for user presence
-        // denied -> OperationDenied
-        // timeout -> UserActionTimeout
+        // CTAP 2.3 §7.7: replace the legacy 10-second boot window with a
+        // continuous ≥5 s "long touch". The runner is responsible for timing
+        // the press and surfacing `consent::Level::Strong` here when the user
+        // holds the button long enough; anything weaker results in
+        // `OperationDenied`.
         self.up
-            .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
+            .user_present_strong(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
 
         // Delete resident keys
         syscall!(self.trussed.delete_all(Location::Internal));
@@ -748,10 +746,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         // 2. If the authenticator does not support the subcommand being
         // invoked, per subCommand's value, return CTAP1_ERR_INVALID_PARAMETER.
-        // EnableLongTouchForReset lands with the long-touch reset commit.
         // EnterpriseAttestation / VendorPrototype are not supported.
         match request.sub_command {
-            Subcommand::SetMinPINLength | Subcommand::ToggleAlwaysUv => {}
+            Subcommand::SetMinPINLength
+            | Subcommand::ToggleAlwaysUv
+            | Subcommand::EnableLongTouchForReset => {}
             _ => return Err(Error::InvalidParameter),
         }
 
@@ -828,6 +827,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         match request.sub_command {
             Subcommand::SetMinPINLength => self.config_set_min_pin_length(request),
             Subcommand::ToggleAlwaysUv => self.state.persistent.toggle_always_uv(&mut self.trussed),
+            // CTAP 2.3 §6.11.5: long-touch is the only reset gesture we
+            // support, hard-wired on. The subcommand is therefore a no-op
+            // — already enabled, just acknowledge.
+            Subcommand::EnableLongTouchForReset => Ok(()),
             // Step 2 filtered every other variant. `Subcommand` is
             // `#[non_exhaustive]` so the catch-all is still required.
             _ => Err(Error::InvalidParameter),
