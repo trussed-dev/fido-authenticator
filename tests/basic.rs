@@ -12,6 +12,7 @@ use std::{
 use ciborium::Value;
 use hex_literal::hex;
 use rand::RngCore as _;
+use trussed::platform::consent::Level;
 
 use fs::list_fs;
 use virt::{Ctap2, Ctap2Error, Options};
@@ -20,7 +21,8 @@ use webauthn::{
     ClientPin, CredentialManagement, CredentialManagementParams, Exhaustive, GetAssertion,
     GetAssertionExtensionsInput, GetAssertionOptions, GetInfo, GetNextAssertion, HmacSecretInput,
     KeyAgreementKey, MakeCredential, MakeCredentialExtensionsInput, MakeCredentialOptions,
-    PinToken, PubKeyCredDescriptor, PubKeyCredParam, PublicKey, Rp, SharedSecret, Test, User,
+    PinToken, PubKeyCredDescriptor, PubKeyCredParam, PublicKey, Reset, Rp, SharedSecret, Test,
+    User,
 };
 
 macro_rules! run_tests {
@@ -2016,6 +2018,232 @@ fn test_always_uv_get_assertion_up_false_bypasses_uv_requirement() {
 }
 
 // ----------------------------------------------------------------------------
+// authenticatorReset clears all §6.7 feature flags
+// ----------------------------------------------------------------------------
+
+/// CTAP 2.1 §6.7: `authenticatorReset` MUST reset every feature listed under
+/// "Resets those features that are denoted as being subject to reset" — in
+/// particular Always Require User Verification, Set Minimum PIN Length
+/// (including `minPinLength`, `minPinLengthRPIDs`, and the `forcePINChange`
+/// flag), and Enterprise Attestation. Set up the device with all of these
+/// dirtied, then Reset, then assert defaults.
+#[test]
+fn test_reset_clears_section_6_7_feature_flags() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"12345678"; // 8 chars so we can tighten the floor to 6
+    let rp_id_for_min_pin = "rp.example.com";
+    let options = Options {
+        user_presence: Level::Strong,
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        // 1) Set PIN.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+
+        // 2) Toggle alwaysUv on.
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        let mut tog = AuthenticatorConfig::new(0x02);
+        tog.pin_protocol = Some(2);
+        tog.pin_auth = Some(pin_token.authenticate(&tog.pin_uv_auth_data()));
+        device.exec(tog).unwrap();
+
+        // 3) Tighten minPINLength to 6, set RP-IDs allowlist, and request
+        //    forceChangePin.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        let params = AuthenticatorConfigParams {
+            new_min_pin_length: Some(6),
+            min_pin_length_rp_ids: Some(vec![rp_id_for_min_pin.to_owned()]),
+            force_change_pin: Some(true),
+        };
+        set_min_pin_length(&device, &pin_token, params).unwrap();
+
+        // Sanity-check: every dirty bit is visible before reset.
+        let reply = device.exec(GetInfo).unwrap();
+        let opts = reply.options.clone().unwrap();
+        assert_eq!(opts.get("alwaysUv"), Some(&Value::from(true)));
+        assert_eq!(opts.get("clientPin"), Some(&Value::from(true)));
+        assert_eq!(reply.force_pin_change, Some(true));
+        assert_eq!(reply.min_pin_length, Some(6));
+
+        // 4) Reset.
+        device.exec(Reset).unwrap();
+
+        // 5) All §6.7 flags back to defaults.
+        let reply = device.exec(GetInfo).unwrap();
+        let opts = reply.options.unwrap();
+        // alwaysUv default = false; couples makeCredUvNotRqd back to true.
+        assert_eq!(opts.get("alwaysUv"), Some(&Value::from(false)));
+        assert_eq!(opts.get("makeCredUvNotRqd"), Some(&Value::from(true)));
+        // PIN cleared.
+        assert_eq!(opts.get("clientPin"), Some(&Value::from(false)));
+        // forcePINChange cleared.
+        assert_eq!(reply.force_pin_change, Some(false));
+        // minPINLength back to the spec floor (default 4).
+        assert_eq!(reply.min_pin_length, Some(4));
+    })
+}
+
+/// CTAP 2.1 §6.6 authenticatorReset — comprehensive companion to
+/// `test_reset_clears_section_6_7_feature_flags`. Verifies the
+/// non-§6.7 reset effects:
+///
+/// - Resident credentials erased (GA with the prior credential id →
+///   `CTAP2_ERR_NO_CREDENTIALS`).
+/// - clientPin flag flipped back to false in `authenticatorGetInfo`.
+/// - PIN retry counter restored to its maximum (8 here, the
+///   factory state).
+/// - `pinUvAuthToken` invalidated — a token grabbed before reset cannot
+///   be used after.
+///
+/// Not covered here (different setup): U2F credentials erased (CTAP1
+/// flow, exercised by `tests/ctap1.rs`), large-blob array reset (needs
+/// `large_blobs::Config` wired into `Options`).
+#[test]
+fn test_reset_clears_all_state() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    let wrong_pin = b"000000";
+    let rp_id = "example.com";
+    let options = Options {
+        user_presence: Level::Strong,
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        // ----- Setup: RK + PIN + pinUvAuthToken + dirty retry counter -----
+
+        // 1. Create a resident credential (no PIN yet, MC needs no pin_auth).
+        let client_data_hash = vec![0u8; 32];
+        let mut mc = MakeCredential::new(
+            client_data_hash.clone(),
+            Rp::new(rp_id),
+            User::new(vec![1; 16]),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        mc.options = Some(MakeCredentialOptions::default().rk(true));
+        let mc_reply = device.exec(mc).unwrap();
+        let credential = mc_reply.auth_data.credential.unwrap();
+
+        // 2. Set a PIN.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+        // clientPin = true after setPin.
+        assert_eq!(
+            device
+                .exec(GetInfo)
+                .unwrap()
+                .options
+                .unwrap()
+                .get("clientPin"),
+            Some(&Value::from(true))
+        );
+
+        // 3. Decrement the PIN retry counter with one wrong attempt.
+        let bad_secret = get_shared_secret(&device, &key_agreement_key);
+        let _ = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &bad_secret,
+            wrong_pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        );
+        assert_eq!(
+            get_pin_retries(&device),
+            7,
+            "retries should have decreased by one after a wrong PIN"
+        );
+
+        // 4. Obtain a pinUvAuthToken (mc permission = 0x01, scoped to rp_id).
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let pin_token_before_reset = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            0x01,
+            Some(rp_id.to_owned()),
+        )
+        .unwrap();
+
+        // ----- Reset -----
+        device.exec(Reset).unwrap();
+
+        // ----- Assertions -----
+
+        // (a) PIN cleared.
+        assert_eq!(
+            device
+                .exec(GetInfo)
+                .unwrap()
+                .options
+                .unwrap()
+                .get("clientPin"),
+            Some(&Value::from(false))
+        );
+
+        // (b) PIN retries restored to the maximum (8 in this build).
+        assert_eq!(
+            get_pin_retries(&device),
+            8,
+            "PIN retries must be restored to the post-reset default"
+        );
+
+        // (c) Discoverable credential erased — GA with the prior credential
+        //     id should not find it.
+        let mut ga = GetAssertion::new(rp_id.to_owned(), client_data_hash.clone());
+        ga.allow_list = Some(vec![PubKeyCredDescriptor::new(
+            "public-key",
+            credential.id.clone(),
+        )]);
+        let result = device.exec(ga);
+        assert_eq!(
+            result.err(),
+            Some(Ctap2Error(0x2E)), // CTAP2_ERR_NO_CREDENTIALS
+            "RK must be erased by reset"
+        );
+
+        // (d) The previously-obtained pinUvAuthToken is invalidated by the
+        //     reset (the device-side token-state and pin_token_key are
+        //     regenerated). To verify, we have to first re-close the
+        //     §6.11 step-4 gate by setting a new PIN — in factory-default
+        //     state the gate is open and the token would simply be
+        //     ignored. After setPin, presenting the *old* token must fail
+        //     verification with CTAP2_ERR_PIN_AUTH_INVALID (0x33).
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+
+        let mut cfg = AuthenticatorConfig::new(0x02); // ToggleAlwaysUv
+        cfg.pin_protocol = Some(2);
+        cfg.pin_auth = Some(pin_token_before_reset.authenticate(&cfg.pin_uv_auth_data()));
+        let result = device.exec(cfg).err();
+        assert_eq!(
+            result,
+            Some(Ctap2Error(0x33)),
+            "stale pinUvAuthToken must not authenticate against the post-reset state, got {:?}",
+            result
+        );
+    })
+}
+
+// ----------------------------------------------------------------------------
 // PIN length validation (issue #43): count Unicode code points, not bytes
 // ----------------------------------------------------------------------------
 
@@ -3037,5 +3265,175 @@ fn test_signature_counter() {
         assert!(delta3 <= 256);
 
         assert!(delta1 + delta2 + delta3 > 3);
+    })
+}
+
+// ----------------------------------------------------------------------------
+// Long-touch reset (CTAP 2.3 §6.4 0x18, §6.11.5, §7.7)
+// ----------------------------------------------------------------------------
+
+/// GetInfo advertises `longTouchForReset = true` (member 0x18). The runtime
+/// configuration is hard-wired on — `EnableLongTouchForReset` (below) is a
+/// no-op.
+#[test]
+fn test_long_touch_for_reset_advertised() {
+    for long_touch_for_reset in [true, false] {
+        let options = Options {
+            long_touch_for_reset,
+            ..Default::default()
+        };
+        virt::run_ctap2_with_options(options, |device| {
+            let reply = device.exec(GetInfo).unwrap();
+            assert_eq!(reply.long_touch_for_reset, Some(long_touch_for_reset));
+        })
+    }
+}
+
+#[test]
+fn test_enable_long_touch_for_reset_invalid_parameter() {
+    let options = Options {
+        long_touch_for_reset: false,
+        ..Default::default()
+    };
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2_with_options(options, |device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+
+        // EnableLongTouchForReset = subcommand 0x04.
+        let mut request = AuthenticatorConfig::new(0x04);
+        request.pin_protocol = Some(2);
+        request.pin_auth = Some(pin_token.authenticate(&request.pin_uv_auth_data()));
+        let result = device.exec(request);
+        assert_eq!(result.err(), Some(Ctap2Error(0x02)));
+    })
+}
+
+/// CTAP 2.3 §6.11.5: `EnableLongTouchForReset` subcommand. If the feature is enabled,
+/// the request must return `Ok(())` without changing state.
+#[test]
+fn test_enable_long_touch_for_reset_is_noop() {
+    let options = Options {
+        long_touch_for_reset: true,
+        ..Default::default()
+    };
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2_with_options(options, |device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+
+        // EnableLongTouchForReset = subcommand 0x04.
+        let mut request = AuthenticatorConfig::new(0x04);
+        request.pin_protocol = Some(2);
+        request.pin_auth = Some(pin_token.authenticate(&request.pin_uv_auth_data()));
+        device.exec(request).unwrap();
+
+        // GetInfo still reports the flag set.
+        let reply = device.exec(GetInfo).unwrap();
+        assert_eq!(reply.long_touch_for_reset, Some(true));
+    })
+}
+
+// ============================================================================
+// authenticatorReset long-touch gating (CTAP 2.3 §6.6 / §7.7, Config option)
+// ============================================================================
+
+/// With `long_touch_for_reset = true` (the recommended default), a normal
+/// short touch (`Level::Normal`) must NOT authorize `authenticatorReset`; the
+/// authenticator demands a long touch (`Level::Strong`). By default the test UI
+/// grants Normal but denies Strong, so Reset is rejected with
+/// `CTAP2_ERR_USER_ACTION_TIMEOUT` (0x2F).
+#[test]
+fn test_reset_long_touch_rejects_short_touch() {
+    let options = Options {
+        long_touch_for_reset: true,
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        // `ResetReply` is a unit reply with no Debug/PartialEq, so map the Ok
+        // arm to `()` before comparing.
+        let result = device.exec(Reset).map(|_| ());
+        assert_eq!(result, Err(Ctap2Error(0x2F)));
+    })
+}
+
+/// With `long_touch_for_reset = true` and a UI that grants `Level::Strong`,
+/// `authenticatorReset` succeeds.
+#[test]
+fn test_reset_long_touch_accepts_strong_touch() {
+    let options = Options {
+        long_touch_for_reset: true,
+        user_presence: Level::Strong,
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        device.exec(Reset).unwrap();
+    })
+}
+
+/// With `long_touch_for_reset = false` (a runner that opted out), a normal
+/// short touch is sufficient and the strong check is never invoked. By default
+/// the test UI grants Normal and denies Strong, so success here proves `reset()` took the
+/// short-touch path rather than `user_present_strong`.
+#[test]
+fn test_reset_short_touch_accepts_short_touch() {
+    let options = Options {
+        long_touch_for_reset: false,
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        device.exec(Reset).unwrap();
+    })
+}
+
+// ============================================================================
+// Empty rp.id / rpId rejected (CTAP 2.1 §6.1.1.2 / §6.2.1.2)
+// ============================================================================
+
+/// MakeCredential with an empty `rp.id` is rejected before any user presence
+/// check with `CTAP2_ERR_MISSING_PARAMETER` (0x14).
+#[test]
+fn test_make_credential_empty_rp_id_rejected() {
+    let client_data_hash = &[0; 32];
+    virt::run_ctap2(|device| {
+        let user = User::new(b"id123")
+            .name("john.doe")
+            .display_name("John Doe");
+        let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+        let request = MakeCredential::new(client_data_hash, Rp::new(""), user, pub_key_cred_params);
+        let result = device.exec(request);
+        assert_eq!(result, Err(Ctap2Error(0x14)));
+    })
+}
+
+/// GetAssertion with an empty `rpId` is rejected before any user presence
+/// check with `CTAP2_ERR_MISSING_PARAMETER` (0x14).
+#[test]
+fn test_get_assertion_empty_rp_id_rejected() {
+    let client_data_hash = &[0; 32];
+    virt::run_ctap2(|device| {
+        let request = GetAssertion::new("", client_data_hash);
+        let result = device.exec(request);
+        assert_eq!(result, Err(Ctap2Error(0x14)));
     })
 }

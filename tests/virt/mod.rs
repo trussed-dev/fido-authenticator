@@ -27,7 +27,7 @@ use rand::{
 };
 use trussed::{
     backend::BackendId,
-    platform::Platform as _,
+    platform::{consent::Level, reboot::To, ui::Status, Platform as _, UserInterface},
     store::Store as _,
     virt::{self, StoreConfig},
 };
@@ -64,21 +64,21 @@ where
     files.push((path!("fido/sec/00").into(), ATTESTATION_KEY.into()));
     with_client(
         &files,
+        options.user_presence,
         |client| {
-            let mut authenticator = Authenticator::new(
-                client,
-                Conforming {},
-                Config {
-                    max_msg_size: 0,
-                    skip_up_timeout: None,
-                    max_resident_credential_count: options.max_resident_credential_count,
-                    large_blobs: None,
-                    nfc_transport: options.nfc_transport,
-                    ccid_transport: options.ccid_transport,
-                    firmware_version: Some(0.into()),
-                    credential_id_version: None,
-                },
-            );
+            let config = Config {
+                max_msg_size: 0,
+                skip_up_timeout: None,
+                max_resident_credential_count: options.max_resident_credential_count,
+                large_blobs: None,
+                nfc_transport: options.nfc_transport,
+                ccid_transport: options.ccid_transport,
+                firmware_version: Some(0.into()),
+                credential_id_version: None,
+                long_touch_for_reset: options.long_touch_for_reset,
+                fido2_up_timeout: Some(100),
+            };
+            let mut authenticator = Authenticator::new(client, Conforming {}, config);
 
             let channel = Channel::new();
             let (rq, rp) = channel.split().unwrap();
@@ -132,13 +132,58 @@ where
 
 pub type InspectFsFn = Box<dyn Fn(&dyn DynFilesystem)>;
 
-#[derive(Default)]
 pub struct Options {
     pub files: Vec<(PathBuf, Vec<u8>)>,
     pub max_resident_credential_count: Option<u32>,
     pub nfc_transport: bool,
     pub ccid_transport: bool,
+    /// The value to return from the `UserInterface` implementation for user presence checks
+    /// (default: `Level::Normal`).
+    pub user_presence: Level,
+    /// Sets `Config::long_touch_for_reset` (default `true`).
+    pub long_touch_for_reset: bool,
     pub inspect_ifs: Option<InspectFsFn>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            files: Vec::new(),
+            max_resident_credential_count: None,
+            nfc_transport: false,
+            ccid_transport: false,
+            user_presence: Level::Normal,
+            long_touch_for_reset: true,
+            inspect_ifs: None,
+        }
+    }
+}
+
+/// User interface that returns a static value for the user presence check.
+struct TestUI {
+    user_presence: Level,
+}
+
+impl UserInterface for TestUI {
+    fn check_user_presence(&mut self) -> Level {
+        self.user_presence
+    }
+
+    fn set_status(&mut self, _status: Status) {}
+
+    fn refresh(&mut self) {}
+
+    fn uptime(&mut self) -> Duration {
+        unimplemented!();
+    }
+
+    fn reboot(&mut self, _to: To) -> ! {
+        unimplemented!();
+    }
+
+    fn wink(&mut self, _duration: Duration) {
+        unimplemented!();
+    }
 }
 
 pub struct Ctap2<'a>(ctaphid::Device<Device<'a>>);
@@ -268,12 +313,19 @@ impl HidDevice for Device<'_> {
     }
 }
 
-fn with_client<F, F2, T>(files: &[(PathBuf, Vec<u8>)], f: F, inspect_ifs: F2) -> T
+fn with_client<F, F2, T>(
+    files: &[(PathBuf, Vec<u8>)],
+    user_presence: Level,
+    f: F,
+    inspect_ifs: F2,
+) -> T
 where
     F: FnOnce(Client) -> T,
     F2: FnOnce(&dyn DynFilesystem),
 {
     virt::with_platform(StoreConfig::ram(), |mut platform| {
+        let ui: Box<dyn UserInterface + Send + Sync + 'static> = Box::new(TestUI { user_presence });
+        platform.user_interface().set_inner(ui);
         // virt always uses the same seed -- request some random bytes to reach a somewhat random
         // state
         let uniform = Uniform::from(0..64);

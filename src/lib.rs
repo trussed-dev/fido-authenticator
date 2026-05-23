@@ -139,6 +139,20 @@ pub struct Config {
     /// To avoid invalidating existing credentials, this value is only used if the state is clean,
     /// i. e. on the first start or after a reset. Otherwise, `V1` is used.
     pub credential_id_version: Option<credential::CredentialIdVersion>,
+    /// Whether `authenticatorReset` requires a long touch (a continuous ≥5 s
+    /// press) rather than a normal short touch (CTAP 2.3 §6.6 / §7.7).
+    ///
+    /// Recommended value: `true`. When `true`, reset requires
+    /// [`UserPresence::user_present_strong`] and `authenticatorGetInfo`
+    /// advertises `longTouchForReset = true`. A runner whose button backend
+    /// cannot detect a long press must explicitly opt out by setting this to
+    /// `false`, which restores the normal short-touch presence check. The
+    /// button/hardware backend is untouched either way.
+    pub long_touch_for_reset: bool,
+    /// The timeout for user presence requests in FIDO2/CTAP2 in milliseconds.
+    ///
+    /// The default is [`constants::FIDO2_UP_TIMEOUT`][].  The spec requires at least 10 s.
+    pub fido2_up_timeout: Option<u32>,
 }
 
 impl Config {
@@ -152,11 +166,17 @@ impl Config {
             ccid_transport: false,
             firmware_version: None,
             credential_id_version: None,
+            long_touch_for_reset: false,
+            fido2_up_timeout: None,
         }
     }
 
     pub fn supports_large_blobs(&self) -> bool {
         self.large_blobs.is_some()
+    }
+
+    pub fn fido2_up_timeout(&self) -> u32 {
+        self.fido2_up_timeout.unwrap_or(constants::FIDO2_UP_TIMEOUT)
     }
 }
 
@@ -353,6 +373,18 @@ pub trait UserPresence: Copy {
         trussed: &mut T,
         timeout_milliseconds: u32,
     ) -> Result<()>;
+
+    /// Strong user-presence check (CTAP 2.3 §7.7 long-touch reset). Default
+    /// falls back to a normal user-presence check; runners that can detect a
+    /// continuous ≥5 s touch should override this and ask trussed for
+    /// `consent::Level::Strong`.
+    fn user_present_strong<T: TrussedRequirements>(
+        self,
+        trussed: &mut T,
+        timeout_milliseconds: u32,
+    ) -> Result<()> {
+        self.user_present(trussed, timeout_milliseconds)
+    }
 }
 
 #[deprecated(note = "use `Silent` directly`")]
@@ -384,6 +416,22 @@ impl UserPresence for Conforming {
         timeout_milliseconds: u32,
     ) -> Result<()> {
         let result = syscall!(trussed.confirm_user_present(timeout_milliseconds)).result;
+        result.map_err(|err| match err {
+            trussed_core::types::consent::Error::TimedOut => Error::UserActionTimeout,
+            trussed_core::types::consent::Error::Interrupted => Error::KeepaliveCancel,
+            _ => Error::OperationDenied,
+        })
+    }
+
+    fn user_present_strong<T: TrussedRequirements>(
+        self,
+        trussed: &mut T,
+        timeout_milliseconds: u32,
+    ) -> Result<()> {
+        use trussed_core::types::consent::Level;
+        let result =
+            syscall!(trussed.confirm_user_present_with_level(Level::Strong, timeout_milliseconds))
+                .result;
         result.map_err(|err| match err {
             trussed_core::types::consent::Error::TimedOut => Error::UserActionTimeout,
             trussed_core::types::consent::Error::Interrupted => Error::KeepaliveCancel,

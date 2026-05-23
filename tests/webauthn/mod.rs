@@ -1013,6 +1013,30 @@ impl Request for GetInfo {
     type Reply = GetInfoReply;
 }
 
+/// `authenticatorReset` (CTAP 2.1 §6.7), command 0x07. No body, no reply
+/// body — just a status byte.
+pub struct Reset;
+
+impl From<Reset> for Value {
+    fn from(_: Reset) -> Self {
+        Self::Null
+    }
+}
+
+impl Request for Reset {
+    const COMMAND: u8 = 0x07;
+
+    type Reply = ResetReply;
+}
+
+pub struct ResetReply;
+
+impl From<Value> for ResetReply {
+    fn from(_: Value) -> Self {
+        Self
+    }
+}
+
 pub struct GetInfoReply {
     pub versions: Vec<String>,
     pub extensions: Option<Vec<String>>,
@@ -1023,6 +1047,7 @@ pub struct GetInfoReply {
     pub force_pin_change: Option<bool>,
     pub min_pin_length: Option<u32>,
     pub attestation_formats: Option<Vec<String>>,
+    pub long_touch_for_reset: Option<bool>,
 }
 
 impl From<Value> for GetInfoReply {
@@ -1042,6 +1067,8 @@ impl From<Value> for GetInfoReply {
             // 0x0D: minPINLength (CTAP 2.1)
             min_pin_length: map.remove(&0x0D).map(|value| value.deserialized().unwrap()),
             attestation_formats: map.remove(&0x16).map(|value| value.deserialized().unwrap()),
+            // 0x18: longTouchForReset (CTAP 2.3)
+            long_touch_for_reset: map.remove(&0x18).map(|value| value.deserialized().unwrap()),
         }
     }
 }

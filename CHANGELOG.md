@@ -6,7 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
--
+- Add `long_touch_for_reset` to `Config` and, if set, implement the `enableLongTouchForReset` subcommand for `config` and always require a long touch for a reset.
+- Add `fido2_up_timeout` to `Config`.
 
 ## [v0.4.0-rc.3](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.4.0-rc.3) (2026-06-01)
 

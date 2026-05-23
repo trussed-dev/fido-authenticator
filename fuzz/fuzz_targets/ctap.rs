@@ -25,6 +25,8 @@ fuzz_target!(|requests: Vec<Request<'_>>| {
                 ccid_transport: false,
                 firmware_version: Some(0.into()),
                 credential_id_version: None,
+                long_touch_for_reset: true,
+                fido2_up_timeout: None,
             },
         );
 

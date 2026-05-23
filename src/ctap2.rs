@@ -28,7 +28,7 @@ use trussed_core::{
 };
 
 use crate::{
-    constants::{self, MAX_RESIDENT_CREDENTIALS_GUESSTIMATE},
+    constants::MAX_RESIDENT_CREDENTIALS_GUESSTIMATE,
     credential::{self, Credential, FullCredential, Key, StrippedCredential},
     format_hex, state, Result, SigningAlgorithm, TrussedRequirements, UserPresence,
 };
@@ -163,13 +163,18 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         response.min_pin_length = Some(self.state.persistent.min_pin_length());
         response.force_pin_change = Some(self.state.persistent.force_pin_change());
         response.max_rpids_for_set_min_pin_length = Some(MAX_MIN_PIN_LENGTH_RP_IDS);
+        response.long_touch_for_reset = Some(self.config.long_touch_for_reset);
         response.attestation_formats = Some(attestation_formats);
         // CTAP 2.3 §6.4 0x1F: supported authenticatorConfig sub-command IDs.
-        //   0x02 toggleAlwaysUv         (CTAP 2.1 §6.11.2)
-        //   0x03 setMinPINLength        (CTAP 2.1 §6.11.3)
+        //   0x02 toggleAlwaysUv          (CTAP 2.3 §6.11.2)
+        //   0x03 setMinPINLength         (CTAP 2.3 §6.11.4)
+        //   0x04 enableLongTouchForReset (CTAP 2.3 §6.11.5)
         let mut cfg_cmds = Vec::new();
         cfg_cmds.push(0x02).unwrap();
         cfg_cmds.push(0x03).unwrap();
+        if self.config.long_touch_for_reset {
+            cfg_cmds.push(0x04).unwrap();
+        }
         response.authenticator_config_commands = Some(cfg_cmds);
         response
     }
@@ -216,6 +221,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         parameters: &ctap2::make_credential::Request,
         response: &mut ctap2::make_credential::Response,
     ) -> Result<()> {
+        // CTAP 2.1 §6.1.1.2: rp.id must be present and non-empty.
+        if parameters.rp.id.is_empty() {
+            return Err(Error::MissingParameter);
+        }
         let rp_id_hash = self.hash(parameters.rp.id.as_ref());
 
         // 1-4.
@@ -254,7 +263,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     {
                         info_now!("Excluded!");
                         self.up
-                            .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
+                            .user_present(&mut self.trussed, self.config.fido2_up_timeout())?;
                         return Err(Error::CredentialExcluded);
                     }
                 }
@@ -382,7 +391,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         // 10. get UP, if denied error OperationDenied
         self.up
-            .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
+            .user_present(&mut self.trussed, self.config.fido2_up_timeout())?;
 
         // 11. generate credential keypair
         let location = match rk_requested {
@@ -635,11 +644,18 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             #[cfg(not(feature = "disable-reset-time-window"))]
             return Err(Error::NotAllowed);
         }
-        // 2. check for user presence
-        // denied -> OperationDenied
-        // timeout -> UserActionTimeout
-        self.up
-            .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
+        // 2. check for user presence (denied -> OperationDenied, timeout ->
+        //    UserActionTimeout). Short touch by default (pre-2.3 behavior);
+        //    when `long_touch_for_reset` is enabled we require a continuous
+        //    ≥5 s "long touch" (CTAP 2.3 §6.6 / §7.7) via `Level::Strong`.
+        //    The button/hardware backend is untouched.
+        if self.config.long_touch_for_reset {
+            self.up
+                .user_present_strong(&mut self.trussed, self.config.fido2_up_timeout())?;
+        } else {
+            self.up
+                .user_present(&mut self.trussed, self.config.fido2_up_timeout())?;
+        }
 
         // Delete resident keys
         syscall!(self.trussed.delete_all(Location::Internal));
@@ -663,7 +679,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
     fn selection(&mut self) -> Result<()> {
         self.up
-            .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)
+            .user_present(&mut self.trussed, self.config.fido2_up_timeout())
     }
 
     // https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#authenticatorConfig
@@ -682,10 +698,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         // 2. If the authenticator does not support the subcommand being
         // invoked, per subCommand's value, return CTAP1_ERR_INVALID_PARAMETER.
-        // EnableLongTouchForReset lands with the long-touch reset commit.
         // EnterpriseAttestation / VendorPrototype are not supported.
         match request.sub_command {
             Subcommand::SetMinPINLength | Subcommand::ToggleAlwaysUv => {}
+            Subcommand::EnableLongTouchForReset if self.config.long_touch_for_reset => {}
             _ => return Err(Error::InvalidParameter),
         }
 
@@ -762,6 +778,15 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         match request.sub_command {
             Subcommand::SetMinPINLength => self.config_set_min_pin_length(request),
             Subcommand::ToggleAlwaysUv => self.state.persistent.toggle_always_uv(&mut self.trussed),
+            // CTAP 2.3 §6.11.5: governed by the `long_touch_for_reset` config
+            // option. Acknowledge when enabled; otherwise it is unavailable.
+            Subcommand::EnableLongTouchForReset => {
+                if self.config.long_touch_for_reset {
+                    Ok(())
+                } else {
+                    Err(Error::InvalidParameter)
+                }
+            }
             // Step 2 filtered every other variant. `Subcommand` is
             // `#[non_exhaustive]` so the catch-all is still required.
             _ => Err(Error::InvalidParameter),
@@ -1214,6 +1239,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
     ) -> Result<()> {
         debug_now!("remaining stack size: {} bytes", msp() - 0x2000_0000);
 
+        // CTAP 2.1 §6.2.1.2: rpId must be present and non-empty.
+        if parameters.rp_id.is_empty() {
+            return Err(Error::MissingParameter);
+        }
         let rp_id_hash = self.hash(parameters.rp_id.as_ref());
 
         // 1-4.
@@ -1278,7 +1307,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             if !self.skip_up_check() {
                 info_now!("asking for up");
                 self.up
-                    .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
+                    .user_present(&mut self.trussed, self.config.fido2_up_timeout())?;
             }
             true
         } else {
@@ -1843,7 +1872,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         if let Some(pin_auth) = pin_auth {
             if pin_auth.is_empty() {
                 self.up
-                    .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)?;
+                    .user_present(&mut self.trussed, self.config.fido2_up_timeout())?;
                 if !self.state.persistent.pin_is_set() {
                     return Err(Error::PinNotSet);
                 } else {
