@@ -391,6 +391,12 @@ pub struct MakeCredential {
     pub extensions: Option<MakeCredentialExtensionsInput>,
     pub options: Option<MakeCredentialOptions>,
     pub pin_auth: Option<[u8; 32]>,
+    /// Variable-length override for `pin_auth`, used by tests that exercise
+    /// the zero-length `pinUvAuthParam` path (CTAP 2.1 §6.1.2 step 1 +
+    /// §6.5.5.7 step 2 — "CTAP 2.0 backwards-compat" — where the platform
+    /// sends a 0-byte param to probe whether the authenticator has a PIN).
+    /// When `Some(_)`, this field is serialised instead of `pin_auth`.
+    pub pin_auth_raw: Option<Vec<u8>>,
     pub pin_protocol: Option<u8>,
     pub attestation_formats_preference: Option<Vec<&'static str>>,
 }
@@ -410,6 +416,7 @@ impl MakeCredential {
             extensions: None,
             options: None,
             pin_auth: None,
+            pin_auth_raw: None,
             pin_protocol: None,
             attestation_formats_preference: None,
         }
@@ -436,7 +443,13 @@ impl From<MakeCredential> for Value {
         if let Some(options) = request.options {
             map.push(7, options);
         }
-        if let Some(pin_auth) = request.pin_auth {
+        // `pin_auth_raw` takes precedence over the fixed-size `pin_auth` —
+        // tests that need a variable-length (e.g. zero-length) pinUvAuthParam
+        // use the raw field. The mutual-exclusion is a soft contract; the
+        // serializer just prefers raw when both are set.
+        if let Some(pin_auth_raw) = request.pin_auth_raw.as_ref() {
+            map.push(8, pin_auth_raw.as_slice());
+        } else if let Some(pin_auth) = request.pin_auth {
             map.push(8, pin_auth.as_slice());
         }
         if let Some(pin_protocol) = request.pin_protocol {
