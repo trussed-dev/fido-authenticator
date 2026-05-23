@@ -7,7 +7,10 @@ pub mod migrate;
 use core::num::NonZeroU32;
 
 use ctap_types::{
-    ctap2::{config::MAX_MIN_PIN_LENGTH_RP_IDS, AttestationFormatsPreference},
+    ctap2::{
+        config::{DEFAULT_MIN_PIN_LENGTH, MAX_MIN_PIN_LENGTH_RP_IDS, MAX_RP_ID_LENGTH},
+        AttestationFormatsPreference,
+    },
     // 2022-02-27: 10 credentials
     sizes::MAX_CREDENTIAL_COUNT_IN_LIST, // U8 currently
     Error,
@@ -268,6 +271,13 @@ pub struct PersistentState {
     consecutive_pin_mismatches: u8,
     #[serde(with = "serde_bytes")]
     pin_hash: Option<[u8; 16]>,
+    /// Code-point length of the PIN whose hash sits in `pin_hash`
+    /// (CTAP 2.1 §6.5.5.5 / §6.11.4 step 2.5 — "PINCodePointLength").
+    /// Captured at setPIN/changePIN time; `0` when no PIN is set or when
+    /// the field was added in a migration (treated as "unknown", forcing
+    /// a PIN change on the next `setMinPINLength` with a non-zero floor).
+    #[serde(default)]
+    pin_code_point_length: u8,
     // Ideally, we'd dogfood a "Monotonic Counter" from trussed.
     // TODO: Add per-key counters for resident keys.
     // counter: Option<CounterId>,
@@ -281,7 +291,8 @@ pub struct PersistentState {
     /// RP IDs that should automatically receive the `minPinLength` extension
     /// output without explicit request (CTAP 2.1 `setMinPINLength`).
     #[serde(default)]
-    min_pin_length_rp_ids: heapless::Vec<heapless::String<256>, 4>,
+    min_pin_length_rp_ids:
+        heapless::Vec<heapless::String<MAX_RP_ID_LENGTH>, MAX_MIN_PIN_LENGTH_RP_IDS>,
 
     /// `forcePINChange` (CTAP 2.1 §6.4 0x0C). When `true`, the authenticator
     /// rejects every operation that requires `clientPin` until the platform
@@ -293,9 +304,6 @@ pub struct PersistentState {
 impl PersistentState {
     const RESET_RETRIES: u8 = 8;
     const FILENAME: &'static Path = path!("persistent-state.cbor");
-
-    /// Default minimum PIN length (CTAP 2.1 §6.11.4: spec floor is 4).
-    pub const DEFAULT_MIN_PIN_LENGTH: u8 = 4;
 
     pub fn load<T: FilesystemClient>(trussed: &mut T) -> Result<Self> {
         // TODO: add "exists_file" method instead?
@@ -454,12 +462,22 @@ impl PersistentState {
         self.pin_hash
     }
 
+    /// PINCodePointLength of the currently-stored PIN (CTAP 2.1 §6.5.5.5),
+    /// captured at setPIN/changePIN time. Returns `0` when no PIN is set
+    /// — step 2.5 of §6.11.4 still consults it, and `0 < any non-zero
+    /// newMinPINLength` correctly forces a change.
+    pub fn pin_code_point_length(&self) -> u8 {
+        self.pin_code_point_length
+    }
+
     pub fn set_pin_hash<T: FilesystemClient>(
         &mut self,
         trussed: &mut T,
         pin_hash: [u8; 16],
+        pin_code_point_length: u8,
     ) -> Result<()> {
         self.pin_hash = Some(pin_hash);
+        self.pin_code_point_length = pin_code_point_length;
         // Successfully (re)setting the PIN clears any pending forcePINChange
         // request — the platform has just complied (CTAP 2.1 §6.5.5.7).
         self.force_pin_change = false;
@@ -469,7 +487,7 @@ impl PersistentState {
 
     /// Configured minimum PIN length, never less than the CTAP 2.1 floor.
     pub fn min_pin_length(&self) -> u8 {
-        core::cmp::max(self.min_pin_length, Self::DEFAULT_MIN_PIN_LENGTH)
+        core::cmp::max(self.min_pin_length, DEFAULT_MIN_PIN_LENGTH)
     }
 
     pub fn set_min_pin_length<T: FilesystemClient>(
@@ -478,29 +496,28 @@ impl PersistentState {
         new_value: u8,
     ) -> Result<()> {
         // Spec: setMinPINLength may only raise the value, never lower it.
-        if new_value <= self.min_pin_length() {
+        let cur = self.min_pin_length();
+        if new_value < cur {
             return Err(Error::PinPolicyViolation);
         }
-        self.min_pin_length = new_value;
-        // Spec §6.11.4 step 7: if the existing PIN is shorter than the new
-        // floor, force the platform to change it. We can't measure the
-        // existing PIN length here (only its hash is stored), so we set the
-        // flag unconditionally on any tightening.
-        if self.pin_hash.is_some() {
-            self.force_pin_change = true;
+
+        if new_value == cur {
+            return Ok(());
         }
+
+        self.min_pin_length = new_value;
         self.save(trussed)?;
         Ok(())
     }
 
-    pub fn min_pin_length_rp_ids(&self) -> &[heapless::String<256>] {
+    pub fn min_pin_length_rp_ids(&self) -> &[heapless::String<MAX_RP_ID_LENGTH>] {
         &self.min_pin_length_rp_ids
     }
 
     pub fn set_min_pin_length_rp_ids<T: FilesystemClient>(
         &mut self,
         trussed: &mut T,
-        rp_ids: heapless::Vec<heapless::String<256>, MAX_MIN_PIN_LENGTH_RP_IDS>,
+        rp_ids: heapless::Vec<heapless::String<MAX_RP_ID_LENGTH>, MAX_MIN_PIN_LENGTH_RP_IDS>,
     ) -> Result<()> {
         self.min_pin_length_rp_ids = rp_ids;
         self.save(trussed)?;
@@ -509,6 +526,21 @@ impl PersistentState {
 
     pub fn force_pin_change(&self) -> bool {
         self.force_pin_change
+    }
+
+    /// Set the persistent `forcePINChange` flag. Idempotent — no save if the
+    /// flag is already at the requested value.
+    pub fn set_force_pin_change<T: FilesystemClient>(
+        &mut self,
+        trussed: &mut T,
+        value: bool,
+    ) -> Result<()> {
+        if self.force_pin_change == value {
+            return Ok(());
+        }
+        self.force_pin_change = value;
+        self.save(trussed)?;
+        Ok(())
     }
 }
 

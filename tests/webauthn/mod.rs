@@ -458,11 +458,17 @@ pub struct MakeCredentialExtensionsInput {
     pub hmac_secret: Option<bool>,
     pub third_party_payment: Option<bool>,
     pub cred_blob: Option<Vec<u8>>,
+    pub min_pin_length: Option<bool>,
 }
 
 impl MakeCredentialExtensionsInput {
     pub fn cred_blob(mut self, cred_blob: Vec<u8>) -> Self {
         self.cred_blob = Some(cred_blob);
+        self
+    }
+
+    pub fn min_pin_length(mut self, min_pin_length: bool) -> Self {
+        self.min_pin_length = Some(min_pin_length);
         self
     }
 }
@@ -475,6 +481,9 @@ impl From<MakeCredentialExtensionsInput> for Value {
         }
         if let Some(hmac_secret) = extensions.hmac_secret {
             map.push("hmac-secret", hmac_secret);
+        }
+        if let Some(min_pin_length) = extensions.min_pin_length {
+            map.push("minPinLength", min_pin_length);
         }
         if let Some(third_party_payment) = extensions.third_party_payment {
             map.push("thirdPartyPayment", third_party_payment);
@@ -942,6 +951,8 @@ pub struct GetInfoReply {
     pub aaguid: Value,
     pub options: Option<BTreeMap<String, Value>>,
     pub pin_protocols: Option<Vec<u8>>,
+    pub force_pin_change: Option<bool>,
+    pub min_pin_length: Option<u32>,
     pub attestation_formats: Option<Vec<String>>,
 }
 
@@ -953,6 +964,10 @@ impl From<Value> for GetInfoReply {
             aaguid: map.remove(&3).unwrap().deserialized().unwrap(),
             options: map.remove(&4).map(|value| value.deserialized().unwrap()),
             pin_protocols: map.remove(&6).map(|value| value.deserialized().unwrap()),
+            // 0x0C: forcePINChange (CTAP 2.1)
+            force_pin_change: map.remove(&0x0C).map(|value| value.deserialized().unwrap()),
+            // 0x0D: minPINLength (CTAP 2.1)
+            min_pin_length: map.remove(&0x0D).map(|value| value.deserialized().unwrap()),
             attestation_formats: map.remove(&0x16).map(|value| value.deserialized().unwrap()),
         }
     }
@@ -1060,5 +1075,103 @@ impl From<Value> for CredentialManagementReply {
             total_credentials: map.remove(&9).map(|value| value.deserialized().unwrap()),
             third_party_payment: map.remove(&0x0c).map(|value| value.deserialized().unwrap()),
         }
+    }
+}
+
+// ============================================================================
+// authenticatorConfig (CTAP 2.1 §6.11)
+// ============================================================================
+
+/// `authenticatorConfig` (CTAP 2.1 §6.11), command 0x0D.
+pub struct AuthenticatorConfig {
+    pub subcommand: u8,
+    pub subcommand_params: Option<AuthenticatorConfigParams>,
+    pub pin_protocol: Option<u8>,
+    pub pin_auth: Option<[u8; 32]>,
+}
+
+impl AuthenticatorConfig {
+    pub fn new(subcommand: u8) -> Self {
+        Self {
+            subcommand,
+            subcommand_params: None,
+            pin_protocol: None,
+            pin_auth: None,
+        }
+    }
+
+    /// CTAP 2.1 §6.11.4 step 3.a: `pinUvAuthData = 32×0xff || 0x0d ||
+    /// uint8(subCommand) || subCommandParams (CBOR)`. The platform HMACs this
+    /// exact byte string with the pin-uv-auth token.
+    pub fn pin_uv_auth_data(&self) -> Vec<u8> {
+        let mut data = vec![0xff; 32];
+        data.push(0x0d);
+        data.push(self.subcommand);
+        if let Some(params) = &self.subcommand_params {
+            let mut buf = Vec::new();
+            ciborium::into_writer(&Value::from(params.clone()), &mut buf).unwrap();
+            data.extend_from_slice(&buf);
+        }
+        data
+    }
+}
+
+impl From<AuthenticatorConfig> for Value {
+    fn from(request: AuthenticatorConfig) -> Value {
+        let mut map = Map::default();
+        map.push(1, request.subcommand);
+        if let Some(params) = request.subcommand_params {
+            map.push(2, params);
+        }
+        if let Some(pin_protocol) = request.pin_protocol {
+            map.push(3, pin_protocol);
+        }
+        if let Some(pin_auth) = request.pin_auth {
+            map.push(4, pin_auth.as_slice());
+        }
+        map.into()
+    }
+}
+
+impl Request for AuthenticatorConfig {
+    const COMMAND: u8 = 0x0D;
+
+    type Reply = AuthenticatorConfigReply;
+}
+
+/// `authenticatorConfig` response — the spec defines no body, just a status
+/// byte. We keep an empty marker so the `Request` trait is satisfied.
+pub struct AuthenticatorConfigReply;
+
+impl From<Value> for AuthenticatorConfigReply {
+    fn from(_value: Value) -> Self {
+        Self
+    }
+}
+
+/// `SubcommandParameters` for `authenticatorConfig`. Mirrors
+/// `ctap_types::ctap2::authenticator_config::SubcommandParameters` but with
+/// owned values for ergonomics.
+#[derive(Clone, Default)]
+pub struct AuthenticatorConfigParams {
+    pub new_min_pin_length: Option<u8>,
+    pub min_pin_length_rp_ids: Option<Vec<String>>,
+    pub force_change_pin: Option<bool>,
+}
+
+impl From<AuthenticatorConfigParams> for Value {
+    fn from(params: AuthenticatorConfigParams) -> Value {
+        let mut map = Map::default();
+        if let Some(v) = params.new_min_pin_length {
+            map.push(1, v);
+        }
+        if let Some(ids) = params.min_pin_length_rp_ids {
+            let values: Vec<Value> = ids.into_iter().map(Value::from).collect();
+            map.push(2, Value::Array(values));
+        }
+        if let Some(force) = params.force_change_pin {
+            map.push(3, force);
+        }
+        map.into()
     }
 }

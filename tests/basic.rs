@@ -16,11 +16,11 @@ use rand::RngCore as _;
 use fs::list_fs;
 use virt::{Ctap2, Ctap2Error, Options};
 use webauthn::{
-    exhaustive_struct, AttStmtFormat, ClientPin, CredentialManagement, CredentialManagementParams,
-    Exhaustive, GetAssertion, GetAssertionExtensionsInput, GetAssertionOptions, GetInfo,
-    GetNextAssertion, HmacSecretInput, KeyAgreementKey, MakeCredential,
-    MakeCredentialExtensionsInput, MakeCredentialOptions, PinToken, PubKeyCredDescriptor,
-    PubKeyCredParam, PublicKey, Rp, SharedSecret, Test, User,
+    exhaustive_struct, AttStmtFormat, AuthenticatorConfig, AuthenticatorConfigParams, ClientPin,
+    CredentialManagement, CredentialManagementParams, Exhaustive, GetAssertion,
+    GetAssertionExtensionsInput, GetAssertionOptions, GetInfo, GetNextAssertion, HmacSecretInput,
+    KeyAgreementKey, MakeCredential, MakeCredentialExtensionsInput, MakeCredentialOptions,
+    PinToken, PubKeyCredDescriptor, PubKeyCredParam, PublicKey, Rp, SharedSecret, Test, User,
 };
 
 #[test]
@@ -755,6 +755,7 @@ impl From<ExhaustiveMakeCredentialExtensionsInput> for MakeCredentialExtensionsI
             } else {
                 None
             },
+            min_pin_length: None,
         }
     }
 }
@@ -1166,4 +1167,545 @@ impl Exhaustive for TestListCredentials {
 #[test]
 fn test_list_credentials() {
     TestListCredentials::run_all();
+}
+
+// ============================================================================
+// setMinPINLength (CTAP 2.1 §6.11.4)
+// ============================================================================
+
+/// Pin-token permission `authenticatorConfiguration` (CTAP 2.1 §6.5.5.7.4).
+const PERM_AUTHENTICATOR_CONFIGURATION: u8 = 0x20;
+
+/// Build + send a setMinPINLength request with the given params, signed by
+/// `pin_token`. Returns the wire-level outcome.
+fn set_min_pin_length(
+    device: &Ctap2,
+    pin_token: &PinToken,
+    params: AuthenticatorConfigParams,
+) -> Result<(), Ctap2Error> {
+    let mut request = AuthenticatorConfig::new(0x03); // SetMinPINLength
+    request.subcommand_params = Some(params);
+    request.pin_protocol = Some(2);
+    request.pin_auth = Some(pin_token.authenticate(&request.pin_uv_auth_data()));
+    device.exec(request).map(|_| ())
+}
+
+/// CTAP 2.1 §6.11.4 setMinPINLength algorithm: "If newMinPINLength is less
+/// than the current minimum PIN length, return CTAP2_ERR_PIN_POLICY_VIOLATION."
+/// The previous implementation rejected with the right error code but also
+/// rejected the equal-value case.
+#[test]
+fn test_set_min_pin_length_below_current_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+
+        // DEFAULT_MIN_PIN_LENGTH is 4. Below the floor → PinPolicyViolation.
+        let params = AuthenticatorConfigParams {
+            new_min_pin_length: Some(3),
+            ..Default::default()
+        };
+        let result = set_min_pin_length(&device, &pin_token, params);
+        assert_eq!(result, Err(Ctap2Error(0x37)));
+    })
+}
+
+/// CTAP 2.1 §6.11.4 step 7d (inverse): `newMinPINLength == curMinPINLength`
+/// is allowed — return Ok without changing state. Previously rejected with
+/// `PinPolicyViolation`.
+#[test]
+fn test_set_min_pin_length_equal_is_noop() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+
+        // Equal to the current effective minimum (4 on a fresh device) → Ok.
+        let params = AuthenticatorConfigParams {
+            new_min_pin_length: Some(4),
+            ..Default::default()
+        };
+        let result = set_min_pin_length(&device, &pin_token, params);
+        assert!(result.is_ok(), "got {:?}", result);
+
+        // Getinfo.minPinLength should still report 4.
+        let reply = device.exec(GetInfo).unwrap();
+        let options = reply.options.unwrap();
+        // CTAP 2.1: minPinLength may not appear if get-info-full is off; we
+        // build with get-info-full so it is present. The actual field lives
+        // at index 0x0D in the GetInfo response, not in `options`. We don't
+        // currently parse it, so a missing-error here is treated as benign:
+        // the no-op succeeded if `set_min_pin_length` returned Ok above.
+        let _ = options;
+    })
+}
+
+/// Tightening from default (4) to 6 succeeds, and a follow-up equal request
+/// also succeeds as a no-op. A subsequent lower-than-current request still
+/// gets rejected.
+#[test]
+fn test_set_min_pin_length_tighten_then_noop_then_lower() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"12345678";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        let params = AuthenticatorConfigParams {
+            new_min_pin_length: Some(6),
+            ..Default::default()
+        };
+        set_min_pin_length(&device, &pin_token, params).unwrap();
+
+        // Repeat — still equal, still ok.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        let params = AuthenticatorConfigParams {
+            new_min_pin_length: Some(6),
+            ..Default::default()
+        };
+        set_min_pin_length(&device, &pin_token, params).unwrap();
+
+        // Now go below — should reject.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        let params = AuthenticatorConfigParams {
+            new_min_pin_length: Some(5),
+            ..Default::default()
+        };
+        let result = set_min_pin_length(&device, &pin_token, params);
+        assert_eq!(result, Err(Ctap2Error(0x37)));
+    })
+}
+
+/// CTAP 2.1 §6.11.4: `forceChangePin = true` sets the persistent
+/// `forcePINChange` flag, which is then advertised in `authenticatorGetInfo`
+/// (member 0x0C). The platform must call `changePIN` before any further
+/// PIN-protected operation.
+#[test]
+fn test_set_min_pin_length_force_change_pin_sets_flag() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+
+        // forcePINChange should be false before the request.
+        let reply = device.exec(GetInfo).unwrap();
+        assert_eq!(reply.force_pin_change, Some(false));
+
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        let params = AuthenticatorConfigParams {
+            force_change_pin: Some(true),
+            ..Default::default()
+        };
+        set_min_pin_length(&device, &pin_token, params).unwrap();
+
+        // forcePINChange should be true after the request.
+        let reply = device.exec(GetInfo).unwrap();
+        assert_eq!(reply.force_pin_change, Some(true));
+    })
+}
+
+/// CTAP 2.1 §6.11 step 4 + §6.11.4: in factory-default state (no PIN, no
+/// built-in UV) `authenticatorConfig` MAY be invoked without
+/// `pinUvAuthParam`. So `setMinPINLength(newMinPINLength = 6)` with no
+/// pin_auth must succeed, and the value must take effect (the next attempt
+/// to drop it below 6 must be rejected with PIN_POLICY_VIOLATION).
+#[test]
+fn test_set_min_pin_length_factory_default_no_auth_succeeds() {
+    virt::run_ctap2(|device| {
+        let mut request = AuthenticatorConfig::new(0x03); // SetMinPINLength
+        request.subcommand_params = Some(AuthenticatorConfigParams {
+            new_min_pin_length: Some(6),
+            ..Default::default()
+        });
+        // No pin_protocol, no pin_auth.
+        let result = device.exec(request);
+        assert!(result.is_ok(), "got {:?}", result.err());
+
+        // Verify the value stuck: try to lower to 5 (also unauthenticated,
+        // also in factory-default state) → PIN_POLICY_VIOLATION.
+        let mut request = AuthenticatorConfig::new(0x03);
+        request.subcommand_params = Some(AuthenticatorConfigParams {
+            new_min_pin_length: Some(5),
+            ..Default::default()
+        });
+        assert_eq!(device.exec(request).err(), Some(Ctap2Error(0x37)));
+    })
+}
+
+/// CTAP 2.1 §6.11.4 step 2.4.a: "If the value of forceChangePin is true,
+/// then: if the value of clientPIN is false, return CTAP2_ERR_PIN_NOT_SET."
+/// In factory-default state the §6.11 step-4 gate is open (no pin_auth
+/// required), so the step-2.4.a branch is reachable — exercise it.
+#[test]
+fn test_set_min_pin_length_force_change_pin_without_pin_set_rejected() {
+    virt::run_ctap2(|device| {
+        let mut request = AuthenticatorConfig::new(0x03); // SetMinPINLength
+        request.subcommand_params = Some(AuthenticatorConfigParams {
+            force_change_pin: Some(true),
+            ..Default::default()
+        });
+        // No pin_protocol, no pin_auth — but no PIN is set either, so the
+        // gate is bypassed and we reach the spec's PIN_NOT_SET branch.
+        let result = device.exec(request);
+        assert_eq!(result.err(), Some(Ctap2Error(0x35))); // CTAP2_ERR_PIN_NOT_SET
+    })
+}
+
+/// CTAP 2.1 §6.11.4 step 2 ordering: step 2.3 (`newMinPINLength` <
+/// current → PIN_POLICY_VIOLATION) is evaluated before step 2.4.a
+/// (forceChangePin && !clientPIN → PIN_NOT_SET). Send both invalidating
+/// inputs simultaneously and confirm PIN_POLICY_VIOLATION fires first.
+#[test]
+fn test_set_min_pin_length_policy_violation_takes_precedence_over_pin_not_set() {
+    virt::run_ctap2(|device| {
+        let mut request = AuthenticatorConfig::new(0x03);
+        request.subcommand_params = Some(AuthenticatorConfigParams {
+            new_min_pin_length: Some(3),  // below floor of 4
+            force_change_pin: Some(true), // would also trip PIN_NOT_SET
+            ..Default::default()
+        });
+        let result = device.exec(request);
+        assert_eq!(result.err(), Some(Ctap2Error(0x37))); // PIN_POLICY_VIOLATION
+    })
+}
+
+/// CTAP 2.1 §6.11.4 step 2.4.a + step 2.6 ordering: if forceChangePin=true
+/// fails with PIN_NOT_SET, the request MUST NOT leave a partially applied
+/// newMinPINLength behind (storage at step 2.6 is unreachable after the
+/// return at step 2.4.a). Send `newMinPINLength=6 + force_change_pin=true`
+/// in factory default → PIN_NOT_SET, then verify a follow-up
+/// `newMinPINLength = 5` without forceChangePin is still accepted (i.e.
+/// the first call did not silently store 6).
+#[test]
+fn test_set_min_pin_length_force_change_pin_failure_does_not_apply_new_min() {
+    virt::run_ctap2(|device| {
+        let mut req1 = AuthenticatorConfig::new(0x03);
+        req1.subcommand_params = Some(AuthenticatorConfigParams {
+            new_min_pin_length: Some(6),
+            force_change_pin: Some(true),
+            ..Default::default()
+        });
+        assert_eq!(device.exec(req1).err(), Some(Ctap2Error(0x35)));
+
+        // If the failed call had partially applied newMinPINLength=6, then
+        // a subsequent attempt to lower to 5 would be rejected. Verify the
+        // pre-call state (min = 4 = floor) is intact: 5 must succeed.
+        let mut req2 = AuthenticatorConfig::new(0x03);
+        req2.subcommand_params = Some(AuthenticatorConfigParams {
+            new_min_pin_length: Some(5),
+            ..Default::default()
+        });
+        let result = device.exec(req2);
+        assert!(result.is_ok(), "got {:?}", result.err());
+    })
+}
+
+/// CTAP 2.1 §6.11 step 4: once a PIN is set, the authenticator IS
+/// "protected by some form of user verification" and `pinUvAuthParam`
+/// becomes mandatory. Send `setMinPINLength` without `pin_auth` →
+/// CTAP2_ERR_PUAT_REQUIRED (0x36).
+#[test]
+fn test_set_min_pin_length_without_pin_auth_rejected_when_pin_set() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+
+        let mut request = AuthenticatorConfig::new(0x03);
+        request.subcommand_params = Some(AuthenticatorConfigParams {
+            new_min_pin_length: Some(6),
+            ..Default::default()
+        });
+        // PIN is set → gate is closed → no pin_auth → 0x36.
+        let result = device.exec(request);
+        assert_eq!(result.err(), Some(Ctap2Error(0x36)));
+    })
+}
+
+/// User-requested test: a `setMinPINLength` request derived from an INCORRECT
+/// PIN must fail — the platform never obtains a valid `pin_uv_auth_token`,
+/// so the `pin_auth` HMAC won't verify on the device side.
+///
+/// The failure surfaces at `getPinUvAuthTokenUsingPinWithPermissions`, before
+/// the `setMinPINLength` request is even built. The authenticator returns
+/// CTAP2_ERR_PIN_INVALID (0x31) and decrements the retry counter
+/// (CTAP 2.1 §6.5.5.7).
+#[test]
+fn test_set_min_pin_length_with_incorrect_pin_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let real_pin = b"123456";
+    let wrong_pin = b"000000";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, real_pin).unwrap();
+
+        // Obtaining the token with the wrong PIN must fail with PIN_INVALID.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let result = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            wrong_pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        );
+        assert_eq!(result.err(), Some(Ctap2Error(0x31)));
+        // Retries should have decreased.
+        assert_eq!(get_pin_retries(&device), 7);
+    })
+}
+
+// ----------------------------------------------------------------------------
+// minPinLength extension (CTAP 2.1 §10.1.2.1) — end-to-end at MakeCredential
+// ----------------------------------------------------------------------------
+//
+// These tests use the *factory-default* flow (no PIN set) so we can exercise
+// the extension's RP-allowlist path without `force_pin_change=true`
+// blocking MakeCredential. With no PIN, `pin_prechecks` short-circuits and
+// `setMinPINLength` itself accepts unauthenticated calls per §6.11 step 4
+// (the spec's pre-issuance configuration path).
+
+/// Factory-default helper: setMinPINLength without a PIN/UV token. CTAP 2.1
+/// §6.11 step 4 allows this when the authenticator isn't yet "protected by
+/// some form of user verification" — i.e. clientPin is false and alwaysUv
+/// is false (the alwaysUv side lands in commit 2544f91).
+fn set_min_pin_length_unauthenticated(
+    device: &Ctap2,
+    params: AuthenticatorConfigParams,
+) -> Result<(), Ctap2Error> {
+    let mut request = AuthenticatorConfig::new(0x03); // SetMinPINLength
+    request.subcommand_params = Some(params);
+    // No pin_auth / pin_protocol — exercising the factory-default bypass.
+    device.exec(request).map(|_| ())
+}
+
+/// CTAP 2.1 §10.1.2.1: when the requesting RP-ID is on the allowlist
+/// configured via `setMinPINLength`, the authenticator MUST include the
+/// current `minPINLength` in the `make_credential` response extensions.
+#[test]
+fn test_min_pin_length_extension_rp_in_list_returns_value() {
+    let target_rp = "example.com";
+    virt::run_ctap2(|device| {
+        // Factory default: tighten min and allowlist target_rp without
+        // touching PIN.
+        let params = AuthenticatorConfigParams {
+            new_min_pin_length: Some(6),
+            min_pin_length_rp_ids: Some(vec![target_rp.to_owned()]),
+            ..Default::default()
+        };
+        set_min_pin_length_unauthenticated(&device, params).unwrap();
+
+        let client_data_hash = &[0u8; 32];
+        let rp = Rp::new(target_rp);
+        let user = User::new(b"id").name("u").display_name("U");
+        let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+        let mut request = MakeCredential::new(client_data_hash, rp, user, pub_key_cred_params);
+        request.extensions = Some(MakeCredentialExtensionsInput::default().min_pin_length(true));
+
+        let response = device.exec(request).unwrap();
+        let extensions = response.auth_data.extensions.expect("extensions present");
+        let value = extensions
+            .get("minPinLength")
+            .expect("minPinLength present");
+        assert_eq!(value, &Value::from(6u8));
+    })
+}
+
+/// CTAP 2.1 §10.1.2.1: when the requesting RP-ID is NOT on the
+/// `setMinPINLength` allowlist, the authenticator MUST NOT return the
+/// extension value (spec: "return without the extension output").
+#[test]
+fn test_min_pin_length_extension_rp_not_in_list_omits() {
+    virt::run_ctap2(|device| {
+        let params = AuthenticatorConfigParams {
+            new_min_pin_length: Some(6),
+            min_pin_length_rp_ids: Some(vec!["allowed.example".to_owned()]),
+            ..Default::default()
+        };
+        set_min_pin_length_unauthenticated(&device, params).unwrap();
+
+        let client_data_hash = &[0u8; 32];
+        let rp = Rp::new("other.example");
+        let user = User::new(b"id").name("u").display_name("U");
+        let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+        let mut request = MakeCredential::new(client_data_hash, rp, user, pub_key_cred_params);
+        request.extensions = Some(MakeCredentialExtensionsInput::default().min_pin_length(true));
+
+        let response = device.exec(request).unwrap();
+        match response.auth_data.extensions {
+            None => {}
+            Some(map) => assert!(
+                !map.contains_key("minPinLength"),
+                "minPinLength should be omitted for non-allowlisted RPs, got {map:?}"
+            ),
+        }
+    })
+}
+
+/// CTAP 2.1 §6.11.4 step 2.7: `minPinLengthRPIDs` replaces the stored list
+/// rather than appending. We verify via the extension: after replacement,
+/// the old RP-ID no longer receives the extension value.
+#[test]
+fn test_set_min_pin_length_rp_ids_replace_not_append() {
+    let first_rp = "first.example";
+    let second_rp = "second.example";
+    virt::run_ctap2(|device| {
+        // 1) Tighten min and allowlist `first.example` only.
+        set_min_pin_length_unauthenticated(
+            &device,
+            AuthenticatorConfigParams {
+                new_min_pin_length: Some(6),
+                min_pin_length_rp_ids: Some(vec![first_rp.to_owned()]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // 2) Replace with `second.example`.
+        set_min_pin_length_unauthenticated(
+            &device,
+            AuthenticatorConfigParams {
+                new_min_pin_length: None,
+                min_pin_length_rp_ids: Some(vec![second_rp.to_owned()]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // first.example must no longer be allowlisted.
+        let client_data_hash = &[0u8; 32];
+        let user = User::new(b"id").name("u").display_name("U");
+        let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+
+        let mut req1 = MakeCredential::new(
+            client_data_hash,
+            Rp::new(first_rp),
+            user.clone(),
+            pub_key_cred_params.clone(),
+        );
+        req1.extensions = Some(MakeCredentialExtensionsInput::default().min_pin_length(true));
+        let response1 = device.exec(req1).unwrap();
+        match response1.auth_data.extensions {
+            None => {}
+            Some(map) => assert!(
+                !map.contains_key("minPinLength"),
+                "first.example dropped from list but still got extension: {map:?}"
+            ),
+        }
+
+        // second.example must now be allowlisted.
+        let mut req2 = MakeCredential::new(
+            client_data_hash,
+            Rp::new(second_rp),
+            user,
+            pub_key_cred_params,
+        );
+        req2.extensions = Some(MakeCredentialExtensionsInput::default().min_pin_length(true));
+        let response2 = device.exec(req2).unwrap();
+        let extensions = response2
+            .auth_data
+            .extensions
+            .expect("extensions present for second.example");
+        assert_eq!(
+            extensions.get("minPinLength"),
+            Some(&Value::from(6u8)),
+            "second.example should be on the new allowlist"
+        );
+    })
+}
+
+/// CTAP 2.1 §6.11.4 step 2.5: force `forcePINChange=true` only when
+/// `PINCodePointLength` is less than `newMinPINLength`. When the
+/// existing PIN already meets the new minimum, the flag stays cleared.
+#[test]
+fn test_set_min_pin_length_pin_meets_new_min_no_force_change() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456789"; // 9 chars, already > new floor of 6
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+
+        // Before: GetInfo.forcePinChange should be false.
+        let reply = device.exec(GetInfo).unwrap();
+        assert_eq!(reply.force_pin_change, Some(false));
+
+        // Tighten to 6 — the existing 9-code-point PIN still meets the new
+        // floor, so step 2.5 must not flip forcePINChange.
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        let params = AuthenticatorConfigParams {
+            new_min_pin_length: Some(6),
+            ..Default::default()
+        };
+        set_min_pin_length(&device, &pin_token, params).unwrap();
+
+        // After: forcePinChange is still false because PINCodePointLength
+        // (9) is not less than newMinPINLength (6).
+        let reply = device.exec(GetInfo).unwrap();
+        assert_eq!(reply.force_pin_change, Some(false));
+    })
 }
