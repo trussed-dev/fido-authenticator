@@ -52,7 +52,14 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         debug_now!("remaining stack size: {} bytes", msp() - 0x2000_0000);
 
         let mut versions = Vec::new();
-        versions.push(Version::U2fV2).unwrap();
+        // CTAP 2.1 §7.2.4: when alwaysUv is enabled the authenticator MUST
+        // disable CTAP1/U2F unless it has a built-in UV method (we don't).
+        // Step 1 of that section says "U2F_V2 MUST NOT appear in versions".
+        // The matching dispatch-level reject (SW_COMMAND_NOT_ALLOWED on
+        // U2F_REGISTER / U2F_AUTHENTICATE) lives in `src/ctap1.rs`.
+        if !self.state.persistent.always_uv() {
+            versions.push(Version::U2fV2).unwrap();
+        }
         versions.push(Version::Fido2_0).unwrap();
         versions.push(Version::Fido2_1).unwrap();
 
@@ -82,9 +89,16 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         };
         options.large_blobs = Some(self.config.supports_large_blobs());
         options.pin_uv_auth_token = Some(true);
-        options.make_cred_uv_not_rqd = Some(true);
+        // CTAP 2.1 §6.11.2 toggleAlwaysUv: when alwaysUv is enabled, the
+        // authenticator MUST report makeCredUvNotRqd as false. We couple the
+        // two here so the toggle subcommand doesn't have to update two pieces
+        // of state. The authenticator's "default" for makeCredUvNotRqd (when
+        // alwaysUv is disabled) is true — non-discoverable MC without UV is
+        // allowed by this authenticator.
+        options.make_cred_uv_not_rqd = Some(!self.state.persistent.always_uv());
         options.authnr_cfg = Some(true);
         options.set_min_pin_length = Some(true);
+        options.always_uv = Some(self.state.persistent.always_uv());
 
         let mut transports = Vec::new();
         if self.config.nfc_transport {
@@ -619,11 +633,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         // 2. If the authenticator does not support the subcommand being
         // invoked, per subCommand's value, return CTAP1_ERR_INVALID_PARAMETER.
-        // ToggleAlwaysUv lands with the alwaysUv audit2 commit;
         // EnableLongTouchForReset lands with the long-touch reset commit.
         // EnterpriseAttestation / VendorPrototype are not supported.
         match request.sub_command {
-            Subcommand::SetMinPINLength => {}
+            Subcommand::SetMinPINLength | Subcommand::ToggleAlwaysUv => {}
             _ => return Err(Error::InvalidParameter),
         }
 
@@ -634,18 +647,26 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         //    then go to Step 5.
         //    Note: This allows for initial configuration of authenticators
         //    that have the Always UV feature enabled by default.
-        // (Not reachable here: toggleAlwaysUv is filtered out by step 2
-        // until the alwaysUv audit2 commit lands.)
+        // We have no built-in UV, so "protected by some form of UV"
+        // reduces to clientPin being set. This bypass is the platform's
+        // exit hatch when alwaysUv was pre-flashed and no PIN has been
+        // configured yet — it lets the user clear alwaysUv without
+        // first being forced through PIN setup.
+        let toggle_always_uv_bypass = matches!(request.sub_command, Subcommand::ToggleAlwaysUv)
+            && !self.state.persistent.pin_is_set()
+            && self.state.persistent.always_uv();
 
         // 4. If the authenticator is protected by some form of user
         // verification or the alwaysUv option ID is present and true:
-        // We have no built-in UV here, and alwaysUv lands in a follow-up
-        // audit2 commit, so "protected by some form of UV" reduces to
-        // clientPin being set. In factory-default state (no PIN) the
-        // block is skipped per the note after step 6: "authenticatorConfig
-        // can be invoked without user verification if user verification
-        // is not configured, and the Always UV feature is disabled."
-        if self.state.persistent.pin_is_set() {
+        // We have no built-in UV, so "protected by some form of UV"
+        // reduces to clientPin being set. In factory-default state
+        // (no PIN, alwaysUv off) the block is skipped per the note
+        // after step 6: "authenticatorConfig can be invoked without user
+        // verification if user verification is not configured, and the
+        // Always UV feature is disabled."
+        if !toggle_always_uv_bypass
+            && (self.state.persistent.pin_is_set() || self.state.persistent.always_uv())
+        {
             // 4.1. If pinUvAuthParam is absent from the input map, then
             //      end the operation by returning CTAP2_ERR_PUAT_REQUIRED.
             let pin_auth = request.pin_auth.ok_or(Error::PinRequired)?;
@@ -691,6 +712,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         //    as defined in each subcommand subsection below.
         match request.sub_command {
             Subcommand::SetMinPINLength => self.config_set_min_pin_length(request),
+            Subcommand::ToggleAlwaysUv => self.state.persistent.toggle_always_uv(&mut self.trussed),
             // Step 2 filtered every other variant. `Subcommand` is
             // `#[non_exhaustive]` so the catch-all is still required.
             _ => Err(Error::InvalidParameter),
@@ -1110,7 +1132,18 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         ) {
             Ok(b) => b,
             Err(Error::PinRequired) => {
-                // UV is optional for get_assertion
+                // UV is optional for `getAssertion` by default — pin_prechecks
+                // raises PinRequired for the "RK + clientPin set + no pin_auth"
+                // case, and the spec lets GA proceed without UV. The
+                // alwaysUv branch (CTAP 2.1 §6.2.2 step 5) is already
+                // enforced inside pin_prechecks — it inspects the
+                // permissions parameter and the request's `up` option to
+                // honour the "up must be true" condition, so any
+                // alwaysUv-driven `PinRequired` reaching us here has
+                // already been adjudicated and we just propagate it.
+                if self.state.persistent.always_uv() {
+                    return Err(Error::PinRequired);
+                }
                 false
             }
             Err(err) => return Err(err),
@@ -1663,6 +1696,23 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         // platform calls `clientPin.changePIN`.
         if self.state.persistent.force_pin_change() {
             return Err(Error::PinPolicyViolation);
+        }
+
+        // 0b. CTAP 2.1 §6.1.2 step 6 / §6.2.2 step 5: when alwaysUv is
+        // enabled, both MC and GA must reject a missing pinUvAuthParam with
+        // CTAP2_ERR_PUAT_REQUIRED (wire 0x36 — `Error::PinRequired` is
+        // ctap-types' legacy name). Subtle difference: §6.2.2 step 5 only
+        // applies when the "up" option is true (the default), so an
+        // explicit `up=false` GA (a silent pre-flight check) bypasses the
+        // alwaysUv UV requirement per spec. MC has no such carve-out —
+        // `up=Some(false)` is rejected upstream with INVALID_OPTION, so we
+        // only need to skip the up check for non-GA permissions.
+        if self.state.persistent.always_uv() && pin_auth.is_none() {
+            let is_ga = permissions == Permissions::GET_ASSERTION;
+            let up_true = !is_ga || options.as_ref().and_then(|o| o.up).unwrap_or(true);
+            if up_true {
+                return Err(Error::PinRequired);
+            }
         }
 
         // 1. pinAuth zero length -> wait for user touch, then

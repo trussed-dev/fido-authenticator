@@ -11,7 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implement these new extensions:
   - `credBlob`
   - `minPinLength`
+- Implement the `alwaysUv` feature.
 - Implement the `config` command with these subcommands:
+  - `toggleAlwaysUv`
   - `setMinPINLength`
 - Load full credential from filesstem for getAssertion if an allow list is used with a discoverable credential.
 

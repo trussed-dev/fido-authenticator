@@ -299,6 +299,12 @@ pub struct PersistentState {
     /// successfully calls `clientPin.changePIN`.
     #[serde(default)]
     force_pin_change: bool,
+
+    /// `alwaysUv` (CTAP 2.1 §6.11.3). When `true`, every MakeCredential and
+    /// GetAssertion must carry a valid `pinUvAuthParam`; ops without UV are
+    /// rejected with `PinRequired`.
+    #[serde(default)]
+    always_uv: bool,
 }
 
 impl PersistentState {
@@ -354,6 +360,11 @@ impl PersistentState {
         self.consecutive_pin_mismatches = 0;
         self.pin_hash = None;
         self.timestamp = 0;
+        // CTAP 2.1 §6.7 authenticatorReset: "Always Require User Verification"
+        // is explicitly listed as a feature that MUST be reset. Other §6.7
+        // feature flags (min_pin_length / min_pin_length_rp_ids /
+        // force_pin_change) are left for a follow-up — see AUDIT.md.
+        self.always_uv = false;
         self.save(trussed)
     }
 
@@ -541,6 +552,15 @@ impl PersistentState {
         self.force_pin_change = value;
         self.save(trussed)?;
         Ok(())
+    }
+
+    pub fn always_uv(&self) -> bool {
+        self.always_uv
+    }
+
+    pub fn toggle_always_uv<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<()> {
+        self.always_uv = !self.always_uv;
+        self.save(trussed)
     }
 }
 
