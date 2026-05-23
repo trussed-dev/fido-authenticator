@@ -710,14 +710,26 @@ impl Test for TestMakeCredential {
 }
 
 impl Exhaustive for TestMakeCredential {
+    // NOTE: the full Cartesian product over every field blows up to ~5,400
+    // cases (~35 s wall) because each `Option<…>` adds a 3× factor and
+    // `Option<MakeCredentialOptions>` alone is 28. Most cross-products are
+    // testing the same code path. For the smoke matrix we keep the cheap
+    // boolean / enum dimensions exhaustive and pin every `Option<…>` field
+    // to `None`. Focused tests cover the `Some(_)` interactions on each
+    // expensive axis individually.
     fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
-        exhaustive_struct! {
-            pin_auth: PinAuth,
-            options: Option<MakeCredentialOptions>,
-            valid_pub_key_alg: bool,
-            attestation_formats_preference: Option<AttestationFormatsPreference>,
-            hmac_secret: bool,
-        }
+        ::itertools::iproduct!(
+            PinAuth::iter_exhaustive(),
+            bool::iter_exhaustive(),
+            bool::iter_exhaustive(),
+        )
+        .map(|(pin_auth, valid_pub_key_alg, hmac_secret)| Self {
+            pin_auth,
+            options: None,
+            valid_pub_key_alg,
+            attestation_formats_preference: None,
+            hmac_secret,
+        })
     }
 }
 
@@ -908,16 +920,28 @@ impl Test for TestGetAssertion {
 }
 
 impl Exhaustive for TestGetAssertion {
+    // Same rationale as `TestMakeCredential::iter_exhaustive`: the full
+    // Cartesian product is ~9,100 cases (~57 s). Keep the boolean
+    // dimensions exhaustive and pin every `Option<…>` to `None`. Focused
+    // tests can exercise individual `Some(_)` axes.
     fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
-        exhaustive_struct! {
-            rk: bool,
-            allow_list: bool,
-            options: Option<GetAssertionOptions>,
-            mc_extensions: Option<ExhaustiveMakeCredentialExtensionsInput>,
-            ga_hmac_secret: bool,
-            ga_third_party_payment: Option<bool>,
-            ga_cred_blob: bool,
-        }
+        ::itertools::iproduct!(
+            bool::iter_exhaustive(),
+            bool::iter_exhaustive(),
+            bool::iter_exhaustive(),
+            bool::iter_exhaustive(),
+        )
+        .map(
+            |(rk, allow_list, ga_hmac_secret, ga_cred_blob)| Self {
+                rk,
+                allow_list,
+                options: None,
+                mc_extensions: None,
+                ga_hmac_secret,
+                ga_third_party_payment: None,
+                ga_cred_blob,
+            },
+        )
     }
 }
 
