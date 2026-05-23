@@ -3,7 +3,9 @@
 use credential_management::CredentialManagement;
 use ctap_types::{
     ctap2::{
-        self, client_pin::Permissions, config::MAX_MIN_PIN_LENGTH_RP_IDS,
+        self,
+        client_pin::Permissions,
+        config::{MAX_MIN_PIN_LENGTH_RP_IDS, MAX_RP_ID_LENGTH},
         AttestationFormatsPreference, AttestationStatement, AttestationStatementFormat,
         Authenticator, NoneAttestationStatement, PackedAttestationStatement, VendorOperation,
     },
@@ -263,6 +265,13 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let mut third_party_payment_requested = false;
         let mut cred_blob_to_store: Option<Bytes<MAX_CRED_BLOB_LENGTH>> = None;
         let mut cred_blob_requested = false;
+        // CTAP 2.1 §10.1.2.1 minPinLength extension: return the current
+        // `minPINLength` to RPs the platform has allowlisted via
+        // `authenticatorConfig.setMinPINLength`. When requested but the RP is
+        // out of scope, the spec says "return without the extension output" —
+        // we leave `min_pin_length_to_emit = None` and skip the extension
+        // block entirely (no EXTENSION_DATA flag, no map entry).
+        let mut min_pin_length_to_emit: Option<u8> = None;
         if let Some(extensions) = &parameters.extensions {
             hmac_secret_requested = extensions.hmac_secret;
 
@@ -299,6 +308,19 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 // MC output extensions.
                 if rk_requested && blob.len() <= MAX_CRED_BLOB_LENGTH {
                     cred_blob_to_store = Some(Bytes::try_from(&**blob).expect("len bounded above"));
+                }
+            }
+
+            if extensions.min_pin_length == Some(true) {
+                let rp_id: &str = parameters.rp.id.as_ref();
+                if self
+                    .state
+                    .persistent
+                    .min_pin_length_rp_ids()
+                    .iter()
+                    .any(|allowed| allowed.as_str() == rp_id)
+                {
+                    min_pin_length_to_emit = Some(self.state.persistent.min_pin_length());
                 }
             }
         }
@@ -436,6 +458,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 if hmac_secret_requested.is_some()
                     || cred_protect_requested.is_some()
                     || cred_blob_requested
+                    || min_pin_length_to_emit.is_some()
                 {
                     flags |= Flags::EXTENSION_DATA;
                 }
@@ -459,6 +482,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 if hmac_secret_requested.is_some()
                     || cred_protect_requested.is_some()
                     || cred_blob_requested
+                    || min_pin_length_to_emit.is_some()
                 {
                     let mut extensions = ctap2::make_credential::ExtensionsOutput::default();
                     extensions.cred_protect = parameters.extensions.as_ref().unwrap().cred_protect;
@@ -469,6 +493,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                         // otherwise (CTAP 2.1 §11.1).
                         extensions.cred_blob = Some(cred_blob_to_store.is_some());
                     }
+                    extensions.min_pin_length = min_pin_length_to_emit;
                     Some(extensions)
                 } else {
                     None
@@ -578,40 +603,97 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             .user_present(&mut self.trussed, constants::FIDO2_UP_TIMEOUT)
     }
 
+    // https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#authenticatorConfig
     #[inline(never)]
     fn config(&mut self, request: &ctap2::config::Request<'_>) -> Result<()> {
         use ctap2::config::Subcommand;
 
-        let pin_auth = request.pin_auth.ok_or(Error::PinRequired)?;
-        let pin_protocol = request.pin_protocol.ok_or(Error::MissingParameter)?;
-        let pin_protocol = self.parse_pin_protocol(pin_protocol)?;
+        // CTAP 2.1 §6.11 — authenticatorConfig algorithm.
 
-        // pinUvAuthData = 0xff * 32 || 0x0d || subCommand || subCommandParams (CBOR)
-        let mut data: Bytes<{ 32 + 2 + sizes::MAX_CREDENTIAL_ID_LENGTH }> = Bytes::new();
-        data.resize(32, 0xff).map_err(|_| Error::Other)?;
-        data.push(0x0d).map_err(|_| Error::Other)?;
-        data.push(request.sub_command as u8)
-            .map_err(|_| Error::Other)?;
-        if let Some(params) = request.sub_command_params.as_ref() {
-            cbor_smol::cbor_serialize_to(params, &mut data).map_err(|_| Error::Other)?;
+        // 1. If subCommand is not present in the input map, return
+        // CTAP2_ERR_MISSING_PARAMETER.
+        // (ctap-types' DeserializeIndexed enforces presence at the wire
+        // layer — `sub_command` is non-optional on `Request`, so absence
+        // surfaces as `SerdeMissingField` → `MissingParameter` before
+        // we get here.)
+
+        // 2. If the authenticator does not support the subcommand being
+        // invoked, per subCommand's value, return CTAP1_ERR_INVALID_PARAMETER.
+        // ToggleAlwaysUv lands with the alwaysUv audit2 commit;
+        // EnableLongTouchForReset lands with the long-touch reset commit.
+        // EnterpriseAttestation / VendorPrototype are not supported.
+        match request.sub_command {
+            Subcommand::SetMinPINLength => {}
+            _ => return Err(Error::InvalidParameter),
         }
 
-        let mut pin_protocol_impl = self.pin_protocol(pin_protocol);
-        let pin_token = pin_protocol_impl.verify_pin_token(&data, pin_auth)?;
-        pin_token.require_permissions(Permissions::AUTHENTICATOR_CONFIGURATION)?;
+        // 3. If the following statements are all true:
+        //      - subCommand value is toggleAlwaysUv (0x02).
+        //      - The authenticator is not protected by some form of user verification.
+        //      - The alwaysUv option ID is present and true.
+        //    then go to Step 5.
+        //    Note: This allows for initial configuration of authenticators
+        //    that have the Always UV feature enabled by default.
+        // (Not reachable here: toggleAlwaysUv is filtered out by step 2
+        // until the alwaysUv audit2 commit lands.)
 
+        // 4. If the authenticator is protected by some form of user
+        // verification or the alwaysUv option ID is present and true:
+        // We have no built-in UV here, and alwaysUv lands in a follow-up
+        // audit2 commit, so "protected by some form of UV" reduces to
+        // clientPin being set. In factory-default state (no PIN) the
+        // block is skipped per the note after step 6: "authenticatorConfig
+        // can be invoked without user verification if user verification
+        // is not configured, and the Always UV feature is disabled."
+        if self.state.persistent.pin_is_set() {
+            // 4.1. If pinUvAuthParam is absent from the input map, then
+            //      end the operation by returning CTAP2_ERR_PUAT_REQUIRED.
+            let pin_auth = request.pin_auth.ok_or(Error::PinRequired)?;
+
+            // 4.2. If pinUvAuthProtocol is absent from the input map,
+            //      then end the operation by returning
+            //      CTAP2_ERR_MISSING_PARAMETER.
+            let pin_protocol = request.pin_protocol.ok_or(Error::MissingParameter)?;
+
+            // 4.3. If pinUvAuthProtocol is not supported, return
+            //      CTAP1_ERR_INVALID_PARAMETER.
+            let pin_protocol = self.parse_pin_protocol(pin_protocol)?;
+
+            // 4.4. Call verify(pinUvAuthToken,
+            //      32×0xff || 0x0d || uint8(subCommand) || subCommandParams,
+            //      pinUvAuthParam).
+            //      If the verification fails, return CTAP2_ERR_PIN_AUTH_INVALID.
+            // Buffer sizing: 32 bytes of 0xff padding + 1 byte cmd (0x0d)
+            // + 1 byte subCommand + worst-case CBOR of SubcommandParameters
+            // (`MAX_SUBCOMMAND_PARAMS_CBOR_LEN`, ctap-types). Oversized
+            // params surface as `InvalidLength` (CTAP1 0x03).
+            let mut data: Bytes<{ 32 + 2 + ctap2::config::MAX_SUBCOMMAND_PARAMS_CBOR_LEN }> =
+                Bytes::new();
+            data.resize(32, 0xff).map_err(|_| Error::Other)?;
+            data.push(0x0d).map_err(|_| Error::Other)?;
+            data.push(request.sub_command as u8)
+                .map_err(|_| Error::Other)?;
+            if let Some(params) = request.sub_command_params.as_ref() {
+                cbor_smol::cbor_serialize_to(params, &mut data)
+                    .map_err(|_| Error::InvalidLength)?;
+            }
+            let mut pin_protocol_impl = self.pin_protocol(pin_protocol);
+            let pin_token = pin_protocol_impl.verify_pin_token(&data, pin_auth)?;
+
+            // 4.5. Check whether the pinUvAuthToken has the acfg
+            //      permission. If not, return CTAP2_ERR_PIN_AUTH_INVALID.
+            pin_token.require_permissions(Permissions::AUTHENTICATOR_CONFIGURATION)?;
+        }
+
+        // 5. Invoke subCommand (see below subsections for each defined
+        //    subcommand), passing it the subCommandParams map.
+        // 6. Return the resulting status code as produced by subCommand,
+        //    as defined in each subcommand subsection below.
         match request.sub_command {
             Subcommand::SetMinPINLength => self.config_set_min_pin_length(request),
-            // C5 wires `ToggleAlwaysUv`, C11 wires `EnableLongTouchForReset`.
-            // EnterpriseAttestation / VendorPrototype are deliberately not
-            // supported on this device.
-            Subcommand::EnableEnterpriseAttestation
-            | Subcommand::ToggleAlwaysUv
-            | Subcommand::EnableLongTouchForReset
-            | Subcommand::VendorPrototype => Err(Error::InvalidSubcommand),
-            // `Subcommand` is `#[non_exhaustive]`; refuse anything we did not
-            // explicitly enumerate above.
-            _ => Err(Error::InvalidSubcommand),
+            // Step 2 filtered every other variant. `Subcommand` is
+            // `#[non_exhaustive]` so the catch-all is still required.
+            _ => Err(Error::InvalidParameter),
         }
     }
 
@@ -852,13 +934,16 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                     return Err(Error::InvalidParameter);
                 }
 
-                // 4. Check that all requested permissions are supported
+                // 4. Check that all requested permissions are supported. We
+                // support `authenticatorConfiguration` (CTAP 2.1 §6.11) — it
+                // was previously listed as unauthorized, which made
+                // `setMinPINLength` impossible to invoke since no platform
+                // could obtain a token with that permission.
                 let mut unauthorized_permissions = Permissions::empty();
                 unauthorized_permissions.insert(Permissions::BIO_ENROLLMENT);
                 if !self.config.supports_large_blobs() {
                     unauthorized_permissions.insert(Permissions::LARGE_BLOB_WRITE);
                 }
-                unauthorized_permissions.insert(Permissions::AUTHENTICATOR_CONFIGURATION);
                 if permissions.intersects(unauthorized_permissions) {
                     return Err(Error::UnauthorizedPermission);
                 }
@@ -1126,33 +1211,96 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
 // impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenticator<UP, T>
 impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
+    // https://fidoalliance.org/specs/fido-v2.1-ps-20210615/fido-client-to-authenticator-protocol-v2.1-ps-20210615.html#setMinPINLength
     fn config_set_min_pin_length(&mut self, request: &ctap2::config::Request<'_>) -> Result<()> {
         let params = request
             .sub_command_params
             .as_ref()
             .ok_or(Error::MissingParameter)?;
 
-        if let Some(new_value) = params.new_min_pin_length {
-            self.state
-                .persistent
-                .set_min_pin_length(&mut self.trussed, new_value)?;
+        // 2.1. If newMinPINLength is absent, then let newMinPINLength be present
+        // with the value of current minimum PIN length.
+        let new_min_pin_length = params
+            .new_min_pin_length
+            .unwrap_or(self.state.persistent.min_pin_length());
+
+        // 2.2. If minPinLengthRPIDs is present and the authenticator does not
+        // support the minPinLength extension, return CTAP1_ERR_INVALID_PARAMETER.
+        // NOTHING TO DO HERE
+
+        // 2.3. If newMinPINLength is less than the current minimum PIN length,
+        // return CTAP2_ERR_PIN_POLICY_VIOLATION.
+        if new_min_pin_length < self.state.persistent.min_pin_length() {
+            return Err(Error::PinPolicyViolation);
         }
 
-        if let Some(rp_ids) = params.min_pin_length_rp_ids.as_ref() {
-            if rp_ids.len() > MAX_MIN_PIN_LENGTH_RP_IDS {
-                return Err(Error::PinPolicyViolation);
+        // 2.4. If the value of forceChangePin is true, then:
+        if params.force_change_pin == Some(true) {
+            // 2.4.1. If the value of clientPIN is false, then return CTAP2_ERR_PIN_NOT_SET.
+            if !self.state.persistent.pin_is_set() {
+                return Err(Error::PinNotSet);
             }
-            let mut owned = heapless::Vec::new();
+            // 2.4.2. Let the value of the forcePINChange authenticatorGetInfo response member be true.
+            self.state
+                .persistent
+                .set_force_pin_change(&mut self.trussed, true)?;
+        }
+
+        // 2.5. If the value of PINCodePointLength is less than newMinPINLength
+        // and the value of clientPIN is true then let the value of the
+        // forcePINChange member of the authenticatorGetInfo response be true.
+        if self.state.persistent.pin_code_point_length() < new_min_pin_length
+            && self.state.persistent.pin_is_set()
+        {
+            self.state
+                .persistent
+                .set_force_pin_change(&mut self.trussed, true)?;
+        }
+
+        // 2.6. Authenticator stores newMinPINLength as minPINLength.
+        self.state
+            .persistent
+            .set_min_pin_length(&mut self.trussed, new_min_pin_length)?;
+
+        // 2.7. If minPinLengthRPIDs is present and contains at least one string, then:
+        if let Some(rp_ids) = params
+            .min_pin_length_rp_ids
+            .as_ref()
+            .filter(|v| !v.is_empty())
+        {
+            // If the authenticator does not have a pre-configured list of
+            // RP IDs authorized to receive the current minimum PIN length
+            // value, the authenticator stores the minPinLengthRPIDs
+            // parameter's list as the entire list of RP IDs authorized to
+            // receive the current minimum PIN length value.
+            //
+            // Otherwise, if the authenticator has a pre-configured list of
+            // RP IDs authorized to receive the current minimum PIN length
+            // value, it adds the minPinLengthRPIDs parameter's list to the
+            // immutable pre-configured list. Any previously added RP IDs
+            // are overwritten.
+            //
+            // Note: How the authenticator "adds" the minPinLengthRPIDs
+            // parameter's list to the pre-configured list is an
+            // implementation detail.
+            //
+            // If the authenticator cannot store or add the minPinLengthRPIDs,
+            // it returns CTAP2_ERR_KEY_STORE_FULL.
+            let mut owned: heapless::Vec<
+                heapless::String<MAX_RP_ID_LENGTH>,
+                MAX_MIN_PIN_LENGTH_RP_IDS,
+            > = heapless::Vec::new();
             for id in rp_ids {
-                owned
-                    .push(heapless::String::try_from(*id).map_err(|_| Error::PinPolicyViolation)?)
-                    .map_err(|_| Error::PinPolicyViolation)?;
+                let stored = heapless::String::try_from(*id).map_err(|_| Error::KeyStoreFull)?;
+                owned.push(stored).map_err(|_| Error::KeyStoreFull)?;
             }
             self.state
                 .persistent
-                .set_min_pin_length_rp_ids(&mut self.trussed, owned)?;
+                .set_min_pin_length_rp_ids(&mut self.trussed, owned)
+                .map_err(|_| Error::KeyStoreFull)?;
         }
 
+        // 2.8. Authenticator returns CTAP2_OK.
         Ok(())
     }
 
@@ -1367,9 +1515,17 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
     fn hash_store_pin(&mut self, pin: &Message) -> Result<()> {
         let pin_hash_32 = syscall!(self.trussed.hash_sha256(pin)).hash;
         let pin_hash: [u8; 16] = pin_hash_32[..16].try_into().unwrap();
+        // CTAP 2.1 §6.5.5.5: persist PINCodePointLength alongside the hash so
+        // §6.11.4 step 2.5 can compare it against newMinPINLength later. We
+        // count code points best-effort here (full UTF-8 validation is the
+        // §6.5.5 PIN-audit commit's job); on non-UTF-8 input we fall back to
+        // byte count, a safe upper bound for the step-2.5 check.
+        let pin_code_point_length = core::str::from_utf8(pin)
+            .map(|s| s.chars().count())
+            .unwrap_or(pin.len()) as u8;
         self.state
             .persistent
-            .set_pin_hash(&mut self.trussed, pin_hash)
+            .set_pin_hash(&mut self.trussed, pin_hash, pin_code_point_length)
             .unwrap();
 
         Ok(())
