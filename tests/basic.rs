@@ -1504,6 +1504,318 @@ fn test_set_min_pin_length_without_pin_auth_rejected_when_pin_set() {
     })
 }
 
+// ----------------------------------------------------------------------------
+// alwaysUv + toggleAlwaysUv (CTAP 2.1 §6.4, §6.11.2, §6.1.2 / §6.2.2)
+// ----------------------------------------------------------------------------
+
+fn toggle_always_uv(device: &Ctap2, pin_token: &PinToken) -> Result<(), Ctap2Error> {
+    let mut request = AuthenticatorConfig::new(0x02); // ToggleAlwaysUv
+    request.pin_protocol = Some(2);
+    request.pin_auth = Some(pin_token.authenticate(&request.pin_uv_auth_data()));
+    device.exec(request).map(|_| ())
+}
+
+/// GetInfo on a fresh device advertises `alwaysUv=false` and the coupled
+/// `makeCredUvNotRqd=true` (CTAP 2.1 §6.4 + §6.11.2 coupling).
+#[test]
+fn test_always_uv_default() {
+    virt::run_ctap2(|device| {
+        let reply = device.exec(GetInfo).unwrap();
+        let options = reply.options.unwrap();
+        assert_eq!(options.get("alwaysUv"), Some(&Value::from(false)));
+        assert_eq!(options.get("makeCredUvNotRqd"), Some(&Value::from(true)));
+    })
+}
+
+/// toggleAlwaysUv flips `alwaysUv` true and forces `makeCredUvNotRqd` false
+/// in the same GetInfo (CTAP 2.1 §6.11.2 mandates the coupling). A second
+/// toggle restores both.
+#[test]
+fn test_always_uv_toggle_couples_make_cred_uv_not_rqd() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        toggle_always_uv(&device, &pin_token).unwrap();
+
+        let reply = device.exec(GetInfo).unwrap();
+        let options = reply.options.unwrap();
+        assert_eq!(options.get("alwaysUv"), Some(&Value::from(true)));
+        assert_eq!(options.get("makeCredUvNotRqd"), Some(&Value::from(false)));
+
+        // Toggle OFF.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        toggle_always_uv(&device, &pin_token).unwrap();
+
+        let reply = device.exec(GetInfo).unwrap();
+        let options = reply.options.unwrap();
+        assert_eq!(options.get("alwaysUv"), Some(&Value::from(false)));
+        assert_eq!(options.get("makeCredUvNotRqd"), Some(&Value::from(true)));
+    })
+}
+
+/// With `alwaysUv` enabled, `makeCredential` without a `pinUvAuthParam` MUST
+/// be rejected with CTAP2_ERR_PUAT_REQUIRED (0x36) per CTAP 2.1 §6.1.2.
+#[test]
+fn test_always_uv_make_credential_without_pin_auth_is_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        toggle_always_uv(&device, &pin_token).unwrap();
+
+        let request = MakeCredential::new(
+            vec![0; 32],
+            Rp::new("example.com"),
+            User::new(vec![1; 16]),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        let result = device.exec(request);
+        assert_eq!(result.err(), Some(Ctap2Error(0x36)));
+    })
+}
+
+/// Same as above but for `getAssertion` (CTAP 2.1 §6.2.2).
+///
+/// Setup: make an RK (no PIN yet, so MC needs no pin_auth), then set the PIN,
+/// then toggle alwaysUv. Now GA without pin_auth should be rejected. This
+/// order avoids the more complex pin-auth-on-MC path.
+#[test]
+fn test_always_uv_get_assertion_without_pin_auth_is_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    let rp_id = "example.com";
+    virt::run_ctap2(|device| {
+        // Make an RK first (no PIN set; MC needs no pin_auth in this state).
+        let client_data_hash = vec![0u8; 32];
+        let mut mc = MakeCredential::new(
+            client_data_hash.clone(),
+            Rp::new(rp_id),
+            User::new(vec![1; 16]),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        mc.options = Some(MakeCredentialOptions::default().rk(true));
+        device.exec(mc).unwrap();
+
+        // Set the PIN and enable alwaysUv.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        toggle_always_uv(&device, &pin_token).unwrap();
+
+        // GA without pin_auth must fail with PUAT_REQUIRED.
+        let ga = GetAssertion::new(rp_id.to_owned(), client_data_hash);
+        let result = device.exec(ga);
+        assert_eq!(result.err(), Some(Ctap2Error(0x36)));
+    })
+}
+
+/// CTAP 2.1 §7.2.4 step 1: when `alwaysUv` is enabled the authenticator
+/// MUST NOT include `"U2F_V2"` in its `getInfo.versions` array (it is
+/// effectively required to disable CTAP1/U2F because we don't ship a
+/// built-in UV method). Verify the version is present pre-toggle and
+/// removed post-toggle.
+#[test]
+fn test_always_uv_u2f_v2_dropped_from_versions() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        // Pre-toggle: U2F_V2 must be advertised.
+        let reply = device.exec(GetInfo).unwrap();
+        assert!(
+            reply.versions.contains(&"U2F_V2".to_owned()),
+            "fresh device must advertise U2F_V2, got versions={:?}",
+            reply.versions
+        );
+
+        // Enable alwaysUv.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        toggle_always_uv(&device, &pin_token).unwrap();
+
+        // Post-toggle: U2F_V2 MUST be absent.
+        let reply = device.exec(GetInfo).unwrap();
+        assert!(
+            !reply.versions.contains(&"U2F_V2".to_owned()),
+            "U2F_V2 must be removed once alwaysUv is true, got versions={:?}",
+            reply.versions
+        );
+        // The CTAP2 versions must still be present.
+        assert!(reply.versions.contains(&"FIDO_2_0".to_owned()));
+        assert!(reply.versions.contains(&"FIDO_2_1".to_owned()));
+    })
+}
+
+/// CTAP 2.1 §7.2.4 step 2: when alwaysUv is enabled, U2F_REGISTER MUST
+/// fail with SW_COMMAND_NOT_ALLOWED (0x6986).
+#[test]
+fn test_always_uv_u2f_register_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        // Enable alwaysUv.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        toggle_always_uv(&device, &pin_token).unwrap();
+
+        // U2F_REGISTER APDU (extended length):
+        //   CLA=00 INS=01 P1=00 P2=00 | extended Lc=00 0040 | 64-byte data
+        //   | extended Le=0000
+        let mut apdu: Vec<u8> = vec![0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x40];
+        apdu.extend_from_slice(&[0u8; 64]); // challenge ‖ app_id (zeros are fine — we reject before parsing)
+        apdu.extend_from_slice(&[0x00, 0x00]);
+        let status = device.ctap1(&apdu).expect_err("U2F_REGISTER must fail when alwaysUv is enabled");
+        assert_eq!(status, 0x6986, "expected SW_COMMAND_NOT_ALLOWED, got {:#x}", status);
+    })
+}
+
+/// CTAP 2.1 §7.2.4 step 2: same for U2F_AUTHENTICATE.
+#[test]
+fn test_always_uv_u2f_authenticate_rejected() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        // Enable alwaysUv.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        toggle_always_uv(&device, &pin_token).unwrap();
+
+        // U2F_AUTHENTICATE APDU (extended length, control byte = 0x03
+        // EnforceUserPresenceAndSign):
+        //   CLA=00 INS=02 P1=03 P2=00 | extended Lc=00 0041 |
+        //   challenge(32) ‖ app_id(32) ‖ kh_len(1=0) | extended Le=0000
+        let mut apdu: Vec<u8> = vec![0x00, 0x02, 0x03, 0x00, 0x00, 0x00, 0x41];
+        apdu.extend_from_slice(&[0u8; 64]); // challenge ‖ app_id
+        apdu.push(0x00); // kh_len = 0 (no keyhandle); we reject before reading it
+        apdu.extend_from_slice(&[0x00, 0x00]);
+        let status = device.ctap1(&apdu).expect_err("U2F_AUTHENTICATE must fail when alwaysUv is enabled");
+        assert_eq!(status, 0x6986, "expected SW_COMMAND_NOT_ALLOWED, got {:#x}", status);
+    })
+}
+
+/// CTAP 2.1 §6.2.2 step 5 carve-out: when `alwaysUv=true` and the
+/// platform sends `up=Some(false)` (a silent pre-flight check), the
+/// alwaysUv UV requirement is bypassed per the spec ("If the alwaysUv
+/// option ID is present and true and the 'up' option is present and
+/// true then …"). Verify that GA with `up=false` does not get a
+/// PUAT_REQUIRED back even though no pinUvAuthParam is sent.
+#[test]
+fn test_always_uv_get_assertion_up_false_bypasses_uv_requirement() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    let rp_id = "example.com";
+    virt::run_ctap2(|device| {
+        // Make an RK first (no PIN yet so MC needs no pin_auth).
+        let client_data_hash = vec![0u8; 32];
+        let mut mc = MakeCredential::new(
+            client_data_hash.clone(),
+            Rp::new(rp_id),
+            User::new(vec![1; 16]),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        mc.options = Some(MakeCredentialOptions::default().rk(true));
+        let mc_reply = device.exec(mc).unwrap();
+        let credential = mc_reply.auth_data.credential.unwrap();
+
+        // Set PIN and enable alwaysUv.
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        toggle_always_uv(&device, &pin_token).unwrap();
+
+        // GA with up=Some(false) and no pin_auth — alwaysUv check must
+        // be bypassed (spec §6.2.2 step 5 only applies when up=true).
+        let mut ga = GetAssertion::new(rp_id.to_owned(), client_data_hash);
+        ga.options = Some(GetAssertionOptions {
+            up: Some(false),
+            uv: None,
+        });
+        ga.allow_list = Some(vec![PubKeyCredDescriptor::new(
+            "public-key",
+            credential.id.clone(),
+        )]);
+        let result = device.exec(ga);
+        assert!(
+            result.is_ok(),
+            "up=false GA must bypass alwaysUv UV requirement, got {:?}",
+            result.err()
+        );
+    })
+}
+
 /// User-requested test: a `setMinPINLength` request derived from an INCORRECT
 /// PIN must fail — the platform never obtains a valid `pin_uv_auth_token`,
 /// so the `pin_auth` HMAC won't verify on the device side.

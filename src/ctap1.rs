@@ -33,6 +33,15 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
     /// Also note that CTAP1 credentials should be assertable over CTAP2. I believe this is
     /// currently not the case.
     fn register(&mut self, reg: &register::Request) -> Result<register::Response> {
+        // CTAP 2.1 §7.2.4 step 2: when alwaysUv is enabled, U2F_REGISTER and
+        // U2F_AUTHENTICATE MUST immediately fail with SW_COMMAND_NOT_ALLOWED
+        // (0x6986). Our device has no built-in UV, so alwaysUv unconditionally
+        // disables CTAP1/U2F. The matching `getInfo` change (drop "U2F_V2"
+        // from `versions`) lives in `src/ctap2.rs`.
+        if self.state.persistent.always_uv() {
+            return Err(Error::CommandNotAllowedNoEf);
+        }
+
         self.up
             .user_present(&mut self.trussed, constants::U2F_UP_TIMEOUT)
             .map_err(|_| Error::ConditionsOfUseNotSatisfied)?;
@@ -149,6 +158,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
     }
 
     fn authenticate(&mut self, auth: &authenticate::Request) -> Result<authenticate::Response> {
+        // CTAP 2.1 §7.2.4 step 2: see `register` above.
+        if self.state.persistent.always_uv() {
+            return Err(Error::CommandNotAllowedNoEf);
+        }
+
         let cred = Credential::try_from_bytes(self, auth.app_id, auth.key_handle);
 
         let user_presence_byte = match auth.control_byte {

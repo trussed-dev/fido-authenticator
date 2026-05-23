@@ -140,6 +140,23 @@ pub struct Options {
 pub struct Ctap2<'a>(ctaphid::Device<Device<'a>>);
 
 impl Ctap2<'_> {
+    /// Send a raw CTAP1 (U2F) APDU and return the response body / SW
+    /// status. Used by tests that need to verify CTAP1-level behaviour
+    /// from within a CTAP2 test setup (e.g. the `alwaysUv` § 7.2.4
+    /// "disable U2F" path, where toggling `alwaysUv` requires CTAP2 but
+    /// the side effect is observable on the U2F dispatch).
+    pub fn ctap1(&self, apdu: &[u8]) -> Result<Vec<u8>, u16> {
+        let mut response = self.0.ctap1(apdu).unwrap();
+        let low = response.pop().unwrap();
+        let high = response.pop().unwrap();
+        let status = u16::from_be_bytes([high, low]);
+        if status == 0x9000 {
+            Ok(response)
+        } else {
+            Err(status)
+        }
+    }
+
     pub fn exec<R: Request>(&self, request: R) -> Result<R::Reply, Ctap2Error> {
         let operation = Operation::try_from(R::COMMAND)
             .map(|op| format!("{op:?}"))
