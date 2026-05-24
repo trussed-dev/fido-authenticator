@@ -7,7 +7,7 @@ pub mod migrate;
 use core::num::NonZeroU32;
 
 use ctap_types::{
-    ctap2::{authenticator_config::MAX_MIN_PIN_LENGTH_RP_IDS, AttestationFormatsPreference},
+    ctap2::{config::MAX_MIN_PIN_LENGTH_RP_IDS, AttestationFormatsPreference},
     // 2022-02-27: 10 credentials
     sizes::MAX_CREDENTIAL_COUNT_IN_LIST, // U8 currently
     Error,

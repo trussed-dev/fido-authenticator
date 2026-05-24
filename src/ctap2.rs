@@ -3,7 +3,7 @@
 use credential_management::CredentialManagement;
 use ctap_types::{
     ctap2::{
-        self, authenticator_config::MAX_MIN_PIN_LENGTH_RP_IDS, client_pin::Permissions,
+        self, config::MAX_MIN_PIN_LENGTH_RP_IDS, client_pin::Permissions,
         AttestationFormatsPreference, AttestationStatement, AttestationStatementFormat,
         Authenticator, NoneAttestationStatement, PackedAttestationStatement, VendorOperation,
     },
@@ -579,11 +579,11 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
     }
 
     #[inline(never)]
-    fn authenticator_config(
+    fn config(
         &mut self,
-        request: &ctap2::authenticator_config::Request<'_>,
+        request: &ctap2::config::Request<'_>,
     ) -> Result<()> {
-        use ctap2::authenticator_config::Subcommand;
+        use ctap2::config::Subcommand;
 
         let pin_auth = request.pin_auth.ok_or(Error::PinRequired)?;
         let pin_protocol = request.pin_protocol.ok_or(Error::MissingParameter)?;
@@ -1131,7 +1131,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
     fn config_set_min_pin_length(
         &mut self,
-        request: &ctap2::authenticator_config::Request<'_>,
+        request: &ctap2::config::Request<'_>,
     ) -> Result<()> {
         let params = request
             .sub_command_params
