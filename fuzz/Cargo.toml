@@ -26,3 +26,4 @@ bench = false
 [patch.crates-io]
 trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "0f8df68be879acdde1f8cf428c11e5d29692a47b" }
 trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.4.0" }
+ctap-types = { git = "https://github.com/0x0ece/ctap-types.git", rev = "385e066ee63baeb8a43e78c737853141d0aaebc7" }
