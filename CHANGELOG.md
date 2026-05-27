@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Indicate support for `FIDO_2_3` in `get_info`.
 - Load full credential from filesstem for getAssertion if an allow list is used with a discoverable credential.
 - Use UTF-8 code points instead of bytes when checking the minimum length for PINs.
+- Accept `up = true` in makeCredential.
+- Fix PIN verification in `large_blobs_set`.
 
 ## [v0.3.0](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.3.0) (2026-03-25)
 

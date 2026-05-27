@@ -214,8 +214,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         // 1-4.
         if let Some(options) = parameters.options.as_ref() {
-            // up option is not valid for make_credential
-            if options.up.is_some() {
+            // CTAP 2.1 §6.1.2: MakeCredential allows `up` only with value
+            // true (UP is implicit and required); `up=false` is invalid.
+            if options.up == Some(false) {
                 return Err(Error::InvalidOption);
             }
         }
@@ -2427,15 +2428,10 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             let Some(pin_uv_auth_protocol) = request.pin_uv_auth_protocol else {
                 return Err(Error::PinRequired);
             };
-            if pin_uv_auth_protocol != 1 {
-                return Err(Error::PinAuthInvalid);
-            }
             let pin_protocol = self.parse_pin_protocol(pin_uv_auth_protocol)?;
-            // TODO: check pinUvAuthToken
-            let pin_auth: [u8; 16] = pin_uv_auth_param
-                .as_ref()
-                .try_into()
-                .map_err(|_| Error::PinAuthInvalid)?;
+            // verify_pin_token truncates per protocol (16 B for v1, 32 B
+            // for v2), so pass the full param.
+            let pin_auth: &[u8] = pin_uv_auth_param.as_ref();
 
             let mut auth_data: Bytes<70> = Bytes::new();
             // 32x 0xff
@@ -2451,7 +2447,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             auth_data.extend_from_slice(&Sha256::digest(data)).unwrap();
 
             let mut pin_protocol = self.pin_protocol(pin_protocol);
-            let pin_token = pin_protocol.verify_pin_token(&pin_auth, &auth_data)?;
+            let pin_token = pin_protocol.verify_pin_token(&auth_data, pin_auth)?;
             pin_token.require_permissions(Permissions::LARGE_BLOB_WRITE)?;
         }
 

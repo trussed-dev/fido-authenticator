@@ -571,8 +571,7 @@ struct TestMakeCredential {
 impl TestMakeCredential {
     fn expected_error(&self) -> Option<u8> {
         if let Some(options) = self.options {
-            // TODO: this is the current implementation, but the spec allows Some(true)
-            if options.up.is_some() {
+            if options.up == Some(false) {
                 return Some(0x2c);
             }
             if !matches!(self.pin_auth, PinAuth::PinToken(_)) && options.uv == Some(true) {
