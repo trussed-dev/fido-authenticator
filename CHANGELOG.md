@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+-
+
+## [v0.4.0-rc.1](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.4.0-rc.1) (2026-05-29)
+
 - Update to `ctap-types` v0.6.0-rc.2.
 - Set `algorithms`, `authenticator_config_commands`, `firmware_version`, `max_serialized_large_blob_array` and `remaining_discoverable_credentials` in `get_info` and add `firmware_version` to `Config`.
 - Implement these new extensions:
