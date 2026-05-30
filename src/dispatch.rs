@@ -103,7 +103,7 @@ where
     authenticator
         .state
         .persistent
-        .load_if_not_initialised(&mut authenticator.trussed);
+        .load_if_not_initialised(&mut authenticator.trussed, &authenticator.config);
 
     // let command = apdu_dispatch::Command::try_from(data)
     //     .map_err(|_| Status::IncorrectDataParameter)?;
@@ -138,7 +138,7 @@ where
     authenticator
         .state
         .persistent
-        .load_if_not_initialised(&mut authenticator.trussed);
+        .load_if_not_initialised(&mut authenticator.trussed, &authenticator.config);
 
     debug!(
         "try_handle CTAP2: remaining stack: {} bytes",
@@ -169,7 +169,7 @@ where
     authenticator
         .state
         .persistent
-        .load_if_not_initialised(&mut authenticator.trussed);
+        .load_if_not_initialised(&mut authenticator.trussed, &authenticator.config);
 
     debug!(
         "try_get CTAP2: remaining stack: {} bytes",

@@ -648,7 +648,9 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         large_blobs::reset(&mut self.trussed);
 
         // b. delete persistent state
-        self.state.persistent.reset(&mut self.trussed)?;
+        self.state
+            .persistent
+            .reset(&mut self.trussed, &self.config)?;
 
         // c. Reset runtime state
         self.state.runtime.reset(&mut self.trussed);

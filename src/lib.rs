@@ -134,9 +134,27 @@ pub struct Config {
     ///
     /// The runner is expected to plumb its own version constant in here.
     pub firmware_version: Option<usize>,
+    /// The credential ID format to use for new credentials.
+    ///
+    /// To avoid invalidating existing credentials, this value is only used if the state is clean,
+    /// i. e. on the first start or after a reset. Otherwise, `V1` is used.
+    pub credential_id_version: Option<credential::CredentialIdVersion>,
 }
 
 impl Config {
+    pub fn new(max_msg_size: usize) -> Self {
+        Self {
+            max_msg_size,
+            skip_up_timeout: None,
+            max_resident_credential_count: None,
+            large_blobs: None,
+            nfc_transport: false,
+            ccid_transport: false,
+            firmware_version: None,
+            credential_id_version: None,
+        }
+    }
+
     pub fn supports_large_blobs(&self) -> bool {
         self.large_blobs.is_some()
     }

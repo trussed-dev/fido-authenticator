@@ -32,7 +32,7 @@ use heapless::{
 use crate::{
     credential::{CredentialIdVersion, FullCredential, KeyEncryptionKey, KeyWrappingKey},
     ctap2::{self, pin::PinProtocolState},
-    Result,
+    Config, Result,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -313,12 +313,12 @@ impl PersistentState {
     const FILENAME: &'static Path = path!("persistent-state.cbor");
 
     /// The default value for the state if it is initialized for the first time or reset.
-    fn reset_value() -> Self {
+    fn reset_value(config: &Config) -> Self {
         Self {
             initialised: false,
             key_encryption_key: None,
             key_wrapping_key: None,
-            credential_id_version: None,
+            credential_id_version: config.credential_id_version,
             consecutive_pin_mismatches: 0,
             pin_hash: None,
             pin_code_point_length: 0,
@@ -369,19 +369,27 @@ impl PersistentState {
         Ok(())
     }
 
-    pub fn reset<T: CryptoClient + FilesystemClient>(&mut self, trussed: &mut T) -> Result<()> {
+    pub fn reset<T: CryptoClient + FilesystemClient>(
+        &mut self,
+        trussed: &mut T,
+        config: &Config,
+    ) -> Result<()> {
         if let Some(key) = self.key_encryption_key {
             syscall!(trussed.delete(key));
         }
         if let Some(key) = self.key_wrapping_key {
             syscall!(trussed.delete(key));
         }
-        *self = Self::reset_value();
+        *self = Self::reset_value(config);
         self.initialised = true;
         self.save(trussed)
     }
 
-    pub fn load_if_not_initialised<T: FilesystemClient>(&mut self, trussed: &mut T) {
+    pub fn load_if_not_initialised<T: FilesystemClient>(
+        &mut self,
+        trussed: &mut T,
+        config: &Config,
+    ) {
         if !self.initialised {
             match Self::load(trussed) {
                 Ok(previous_self) => {
@@ -389,8 +397,9 @@ impl PersistentState {
                     *self = previous_self
                 }
                 Err(_err) => {
+                    // if the state is missing or corrupted, start fresh with a clean state
                     info!("error with previous state! {:?}", _err);
-                    *self = Self::reset_value();
+                    *self = Self::reset_value(config);
                 }
             }
             self.initialised = true;
@@ -466,7 +475,6 @@ impl PersistentState {
         &mut self,
         trussed: &mut T,
     ) -> Result<KeyWrappingKey> {
-        self.load_if_not_initialised(trussed);
         if let Some(key) = self.key_wrapping_key {
             syscall!(trussed.delete(key));
         }
@@ -705,6 +713,7 @@ impl RuntimeState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Config;
     use hex_literal::hex;
     use trussed::{
         backend::BackendId,
@@ -728,6 +737,7 @@ mod tests {
 
     #[test]
     fn test_signature_counter() {
+        let config = Config::new(0);
         virt::with_platform(StoreConfig::ram(), |platform| {
             platform.run_client_with_backends(
                 "fido",
@@ -738,7 +748,7 @@ mod tests {
                 ],
                 |mut client| {
                     let mut state = PersistentState::default();
-                    state.load_if_not_initialised(&mut client);
+                    state.load_if_not_initialised(&mut client, &config);
 
                     let counter1 = state.signature_counter(&mut client).unwrap();
                     let counter2 = state.signature_counter(&mut client).unwrap();

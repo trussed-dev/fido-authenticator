@@ -76,6 +76,7 @@ where
                     nfc_transport: options.nfc_transport,
                     ccid_transport: options.ccid_transport,
                     firmware_version: Some(0),
+                    credential_id_version: None,
                 },
             );
 
