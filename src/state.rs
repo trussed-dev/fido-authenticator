@@ -18,7 +18,7 @@ use ctap_types::{
 };
 use littlefs2_core::{path, Path};
 use trussed_core::{
-    mechanisms::{Chacha8Poly1305, P256},
+    mechanisms::P256,
     syscall, try_syscall,
     types::{KeyId, Location, Mechanism, Message, PathBuf},
     CertificateClient, CryptoClient, FilesystemClient,
@@ -30,7 +30,7 @@ use heapless::{
 };
 
 use crate::{
-    credential::FullCredential,
+    credential::{CredentialIdVersion, FullCredential, KeyEncryptionKey, KeyWrappingKey},
     ctap2::{self, pin::PinProtocolState},
     Result,
 };
@@ -269,6 +269,7 @@ pub struct PersistentState {
     // We could alternatively make all methods take a TrussedClient as parameter
     initialised: bool,
 
+    credential_id_version: Option<CredentialIdVersion>,
     key_encryption_key: Option<KeyId>,
     key_wrapping_key: Option<KeyId>,
     consecutive_pin_mismatches: u8,
@@ -317,6 +318,7 @@ impl PersistentState {
             initialised: false,
             key_encryption_key: None,
             key_wrapping_key: None,
+            credential_id_version: None,
             consecutive_pin_mismatches: 0,
             pin_hash: None,
             pin_code_point_length: 0,
@@ -420,49 +422,58 @@ impl PersistentState {
         Ok(now)
     }
 
-    pub fn key_encryption_key<T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
+    pub fn credential_id_version(&self) -> CredentialIdVersion {
+        self.credential_id_version
+            .unwrap_or(CredentialIdVersion::V1)
+    }
+
+    pub fn key_encryption_key<T: CryptoClient + FilesystemClient>(
         &mut self,
         trussed: &mut T,
-    ) -> Result<KeyId> {
+    ) -> Result<KeyEncryptionKey> {
         match self.key_encryption_key {
-            Some(key) => Ok(key),
+            Some(key) => Ok(KeyEncryptionKey(key)),
             None => self.rotate_key_encryption_key(trussed),
         }
     }
 
-    pub fn rotate_key_encryption_key<T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
+    pub fn rotate_key_encryption_key<T: CryptoClient + FilesystemClient>(
         &mut self,
         trussed: &mut T,
-    ) -> Result<KeyId> {
+    ) -> Result<KeyEncryptionKey> {
         if let Some(key) = self.key_encryption_key {
             syscall!(trussed.delete(key));
         }
-        let key = syscall!(trussed.generate_chacha8poly1305_key(Location::Internal)).key;
-        self.key_encryption_key = Some(key);
+        let key = self
+            .credential_id_version()
+            .generate_key_encryption_key(trussed);
+        self.key_encryption_key = Some(key.0);
         self.save(trussed)?;
         Ok(key)
     }
 
-    pub fn key_wrapping_key<T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
+    pub fn key_wrapping_key<T: CryptoClient + FilesystemClient>(
         &mut self,
         trussed: &mut T,
-    ) -> Result<KeyId> {
+    ) -> Result<KeyWrappingKey> {
         match self.key_wrapping_key {
-            Some(key) => Ok(key),
+            Some(key) => Ok(KeyWrappingKey(key)),
             None => self.rotate_key_wrapping_key(trussed),
         }
     }
 
-    pub fn rotate_key_wrapping_key<T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
+    pub fn rotate_key_wrapping_key<T: CryptoClient + FilesystemClient>(
         &mut self,
         trussed: &mut T,
-    ) -> Result<KeyId> {
+    ) -> Result<KeyWrappingKey> {
         self.load_if_not_initialised(trussed);
         if let Some(key) = self.key_wrapping_key {
             syscall!(trussed.delete(key));
         }
-        let key = syscall!(trussed.generate_chacha8poly1305_key(Location::Internal)).key;
-        self.key_wrapping_key = Some(key);
+        let key = self
+            .credential_id_version()
+            .generate_key_wrapping_key(trussed);
+        self.key_wrapping_key = Some(key.0);
         self.save(trussed)?;
         Ok(key)
     }

@@ -383,12 +383,13 @@ where
 
         // why these contortions to get kek. sheesh
         let authnr = &mut self.authnr;
+        let credential_id_version = authnr.state.persistent.credential_id_version();
         let kek = authnr
             .state
             .persistent
             .key_encryption_key(&mut authnr.trussed)?;
 
-        let credential_id = credential.id(&mut self.trussed, kek, None)?;
+        let credential_id = credential.id(&mut self.trussed, credential_id_version, kek, None)?;
 
         use crate::credential::Key;
         let private_key = match credential.key {

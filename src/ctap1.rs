@@ -68,18 +68,13 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             .map_err(|_| Error::UnspecifiedCheckingError)?;
         // debug!("wrapping u2f private key");
 
-        let wrapped_key =
-            syscall!(self
-                .trussed
-                .wrap_key_chacha8poly1305(wrapping_key, private_key, &[], None))
-            .wrapped_key;
-        // debug!("wrapped_key = {:?}", &wrapped_key);
+        let credential_id_version = self.state.persistent.credential_id_version();
+        let key = credential_id_version
+            .wrap_key(&mut self.trussed, wrapping_key, private_key)
+            .map_err(|_| Error::UnspecifiedCheckingError)?;
 
         syscall!(self.trussed.delete(private_key));
 
-        let key = Key::WrappedKey(
-            Bytes::try_from(&*wrapped_key).map_err(|_| Error::UnspecifiedCheckingError)?,
-        );
         let nonce = ByteArray::new(self.nonce());
 
         let credential = StrippedCredential {
@@ -108,7 +103,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             .key_encryption_key(&mut self.trussed)
             .map_err(|_| Error::NotEnoughMemory)?;
         let credential_id = credential
-            .id(&mut self.trussed, kek, reg.app_id)
+            .id(&mut self.trussed, credential_id_version, kek, reg.app_id)
             .map_err(|_| Error::NotEnoughMemory)?;
 
         let mut commitment = Commitment::new();
@@ -191,18 +186,14 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let key = match cred.key() {
             Key::WrappedKey(bytes) => {
+                let credential_id_version = self.state.persistent.credential_id_version();
                 let wrapping_key = self
                     .state
                     .persistent
                     .key_wrapping_key(&mut self.trussed)
                     .map_err(|_| Error::IncorrectDataParameter)?;
-                let key_result = syscall!(self.trussed.unwrap_key_chacha8poly1305(
-                    wrapping_key,
-                    bytes,
-                    &[],
-                    Location::Volatile,
-                ))
-                .key;
+                let key_result =
+                    credential_id_version.unwrap_key(&mut self.trussed, wrapping_key, bytes);
                 match key_result {
                     Some(key) => {
                         info!("loaded u2f key!");

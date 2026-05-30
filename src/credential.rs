@@ -6,9 +6,9 @@ use ctap_types::sizes::MAX_CRED_BLOB_LENGTH;
 use serde::Serialize;
 use serde_bytes::ByteArray;
 use trussed_core::{
-    mechanisms::{Chacha8Poly1305, Sha256},
+    mechanisms::Sha256,
     syscall, try_syscall,
-    types::{EncryptedData, KeyId},
+    types::{EncryptedData, KeyId, Location, Mechanism, StorageAttributes},
     CryptoClient, FilesystemClient,
 };
 
@@ -36,29 +36,63 @@ pub enum CtapVersion {
     Fido21Pre,
 }
 
-/// External ID of a credential, commonly known as "keyhandle".
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
-pub struct CredentialId(pub Bytes<MAX_CREDENTIAL_ID_LENGTH>);
+/// Format version for the credential ID.
+///
+/// The version is stored with the persistent state so that it is only changed if a reset is
+/// performed and thus old credentials are invalidated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub enum CredentialIdVersion {
+    /// Private keys for non-resident credentials are wrapped using Chacha8Poly1305, serialized
+    /// credential is encrypted using Chacha8Poly1305.
+    V1,
+}
 
-impl CredentialId {
-    fn new<T: Chacha8Poly1305, C: Serialize>(
+impl CredentialIdVersion {
+    fn mechanism(self) -> Mechanism {
+        match self {
+            Self::V1 => Mechanism::Chacha8Poly1305,
+        }
+    }
+
+    fn generate_key<T: CryptoClient>(&self, trussed: &mut T) -> KeyId {
+        syscall!(trussed.generate_key(
+            self.mechanism(),
+            StorageAttributes::new().set_persistence(Location::Internal)
+        ))
+        .key
+    }
+
+    pub fn generate_key_encryption_key<T: CryptoClient>(
+        &self,
+        trussed: &mut T,
+    ) -> KeyEncryptionKey {
+        KeyEncryptionKey(self.generate_key(trussed))
+    }
+
+    pub fn generate_key_wrapping_key<T: CryptoClient>(&self, trussed: &mut T) -> KeyWrappingKey {
+        KeyWrappingKey(self.generate_key(trussed))
+    }
+
+    pub fn id<T: CryptoClient, C: Serialize>(
+        &self,
         trussed: &mut T,
         credential: &C,
-        key_encryption_key: KeyId,
+        key_encryption_key: KeyEncryptionKey,
         rp_id_hash: &[u8; 32],
         nonce: &[u8; 12],
-    ) -> Result<Self> {
+    ) -> Result<CredentialId> {
         let mut serialized_credential = SerializedCredential::new();
         cbor_smol::cbor_serialize_to(credential, &mut serialized_credential)
             .map_err(|_| Error::Other)?;
         let message = &serialized_credential;
         // info!("serialized cred = {:?}", message).ok();
         let associated_data = &rp_id_hash[..];
-        let encrypted_serialized_credential = syscall!(trussed.encrypt_chacha8poly1305(
-            key_encryption_key,
+        let encrypted_serialized_credential = syscall!(trussed.encrypt(
+            self.mechanism(),
+            key_encryption_key.0,
             message,
             associated_data,
-            Some(nonce)
+            Some(nonce.into()),
         ));
         let mut credential_id = Bytes::new();
         cbor_smol::cbor_serialize_to(
@@ -66,9 +100,79 @@ impl CredentialId {
             &mut credential_id,
         )
         .map_err(|_| Error::RequestTooLarge)?;
-        Ok(Self(credential_id))
+        Ok(CredentialId(credential_id))
+    }
+
+    pub fn credential<T: CryptoClient>(
+        &self,
+        trussed: &mut T,
+        key_encryption_key: KeyEncryptionKey,
+        rp_id_hash: &[u8; 32],
+        id: &[u8],
+    ) -> Result<Credential> {
+        let encrypted_serialized = CredentialIdRef(id).deserialize()?;
+
+        let serialized = try_syscall!(trussed.decrypt(
+            self.mechanism(),
+            key_encryption_key.0,
+            &encrypted_serialized.ciphertext,
+            &rp_id_hash[..],
+            &encrypted_serialized.nonce,
+            &encrypted_serialized.tag,
+        ))
+        .map_err(|_| Error::InvalidCredential)?
+        .plaintext
+        .ok_or(Error::InvalidCredential)?;
+
+        // In older versions of this app, we serialized the full credential.  Now we only serialize
+        // the stripped credential.  For compatibility, we have to try both.
+        FullCredential::deserialize(&serialized)
+            .map(Credential::Full)
+            .or_else(|_| StrippedCredential::deserialize(&serialized).map(Credential::Stripped))
+            .map_err(|_| Error::InvalidCredential)
+    }
+
+    pub fn wrap_key<T: CryptoClient>(
+        &self,
+        trussed: &mut T,
+        key_wrapping_key: KeyWrappingKey,
+        key: KeyId,
+    ) -> Result<Key> {
+        let wrapped_key =
+            syscall!(trussed.wrap_key(self.mechanism(), key_wrapping_key.0, key, &[], None))
+                .wrapped_key;
+        Ok(Key::WrappedKey(
+            Bytes::try_from(wrapped_key.as_slice()).map_err(|_| Error::Other)?,
+        ))
+    }
+
+    pub fn unwrap_key<T: CryptoClient>(
+        &self,
+        trussed: &mut T,
+        key_wrapping_key: KeyWrappingKey,
+        key: &Bytes<128>,
+    ) -> Option<KeyId> {
+        syscall!(trussed.unwrap_key(
+            self.mechanism(),
+            key_wrapping_key.0,
+            key.increase_capacity(),
+            &[],
+            &[],
+            StorageAttributes::new().set_persistence(Location::Volatile),
+        ))
+        .key
     }
 }
+
+#[derive(Clone, Copy, Debug)]
+pub struct KeyEncryptionKey(pub KeyId);
+
+#[derive(Clone, Copy, Debug)]
+pub struct KeyWrappingKey(pub KeyId);
+
+/// External ID of a credential, commonly known as "keyhandle".
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CredentialId(pub Bytes<MAX_CREDENTIAL_ID_LENGTH>);
 
 struct CredentialIdRef<'a>(&'a [u8]);
 
@@ -111,7 +215,7 @@ pub enum Credential {
 }
 
 impl Credential {
-    pub fn try_from<UP: UserPresence, T: CryptoClient + Chacha8Poly1305 + FilesystemClient>(
+    pub fn try_from<UP: UserPresence, T: CryptoClient + FilesystemClient>(
         authnr: &mut Authenticator<UP, T>,
         rp_id_hash: &[u8; 32],
         descriptor: &PublicKeyCredentialDescriptorRef,
@@ -119,49 +223,32 @@ impl Credential {
         Self::try_from_bytes(authnr, rp_id_hash, descriptor.id)
     }
 
-    pub fn try_from_bytes<
-        UP: UserPresence,
-        T: CryptoClient + Chacha8Poly1305 + FilesystemClient,
-    >(
+    pub fn try_from_bytes<UP: UserPresence, T: CryptoClient + FilesystemClient>(
         authnr: &mut Authenticator<UP, T>,
         rp_id_hash: &[u8; 32],
         id: &[u8],
     ) -> Result<Self> {
-        let encrypted_serialized = CredentialIdRef(id).deserialize()?;
-
+        let id_version = authnr.state.persistent.credential_id_version();
         let kek = authnr
             .state
             .persistent
             .key_encryption_key(&mut authnr.trussed)?;
 
-        let serialized = try_syscall!(authnr.trussed.decrypt_chacha8poly1305(
-            kek,
-            &encrypted_serialized.ciphertext,
-            &rp_id_hash[..],
-            &encrypted_serialized.nonce,
-            &encrypted_serialized.tag,
-        ))
-        .map_err(|_| Error::InvalidCredential)?
-        .plaintext
-        .ok_or(Error::InvalidCredential)?;
-
-        // In older versions of this app, we serialized the full credential.  Now we only serialize
-        // the stripped credential.  For compatibility, we have to try both.
-        FullCredential::deserialize(&serialized)
-            .map(Self::Full)
-            .or_else(|_| StrippedCredential::deserialize(&serialized).map(Self::Stripped))
-            .map_err(|_| Error::InvalidCredential)
+        id_version.credential(&mut authnr.trussed, kek, rp_id_hash, id)
     }
 
-    pub fn id<T: Chacha8Poly1305 + Sha256>(
+    pub fn id<T: Sha256>(
         &self,
         trussed: &mut T,
-        key_encryption_key: KeyId,
+        id_version: CredentialIdVersion,
+        key_encryption_key: KeyEncryptionKey,
         rp_id_hash: &[u8; 32],
     ) -> Result<CredentialId> {
         match self {
-            Self::Full(credential) => credential.id(trussed, key_encryption_key, Some(rp_id_hash)),
-            Self::Stripped(credential) => CredentialId::new(
+            Self::Full(credential) => {
+                credential.id(trussed, id_version, key_encryption_key, Some(rp_id_hash))
+            }
+            Self::Stripped(credential) => id_version.id(
                 trussed,
                 credential,
                 key_encryption_key,
@@ -667,10 +754,11 @@ impl FullCredential {
     // the ID will stay below 255 bytes.
     //
     // Existing keyhandles can still be decoded
-    pub fn id<T: Chacha8Poly1305 + Sha256>(
+    pub fn id<T: CryptoClient + Sha256>(
         &self,
         trussed: &mut T,
-        key_encryption_key: KeyId,
+        id_version: CredentialIdVersion,
+        key_encryption_key: KeyEncryptionKey,
         rp_id_hash: Option<&[u8; 32]>,
     ) -> Result<CredentialId> {
         let rp_id_hash: [u8; 32] = if let Some(hash) = rp_id_hash {
@@ -683,10 +771,10 @@ impl FullCredential {
                 .map_err(|_| Error::Other)?
         };
         if self.use_short_id.unwrap_or_default() {
-            StrippedCredential::from(self).id(trussed, key_encryption_key, &rp_id_hash)
+            StrippedCredential::from(self).id(trussed, id_version, key_encryption_key, &rp_id_hash)
         } else {
             let stripped_credential = self.strip();
-            CredentialId::new(
+            id_version.id(
                 trussed,
                 &stripped_credential,
                 key_encryption_key,
@@ -763,13 +851,14 @@ impl StrippedCredential {
         }
     }
 
-    pub fn id<T: Chacha8Poly1305>(
+    pub fn id<T: CryptoClient>(
         &self,
         trussed: &mut T,
-        key_encryption_key: KeyId,
+        id_version: CredentialIdVersion,
+        key_encryption_key: KeyEncryptionKey,
         rp_id_hash: &[u8; 32],
     ) -> Result<CredentialId> {
-        CredentialId::new(trussed, self, key_encryption_key, rp_id_hash, &self.nonce)
+        id_version.id(trussed, self, key_encryption_key, rp_id_hash, &self.nonce)
     }
 }
 
@@ -994,12 +1083,13 @@ mod test {
                     )
                     .unwrap()
             };
+            let kek = KeyEncryptionKey(kek);
             platform.run_client(client_id.as_str(), |mut client| {
                 let data = old_credential_data();
                 let rp_id_hash = syscall!(client.hash_sha256(data.rp.id().as_ref())).hash;
                 let encrypted_serialized = CredentialIdRef(OLD_ID).deserialize().unwrap();
                 let serialized = syscall!(client.decrypt_chacha8poly1305(
-                    kek,
+                    kek.0,
                     &encrypted_serialized.ciphertext,
                     &rp_id_hash,
                     &encrypted_serialized.nonce,
@@ -1036,7 +1126,12 @@ mod test {
 
                 let credential = Credential::Full(full);
                 let id = credential
-                    .id(&mut client, kek, rp_id_hash.as_ref().try_into().unwrap())
+                    .id(
+                        &mut client,
+                        CredentialIdVersion::V1,
+                        kek,
+                        rp_id_hash.as_ref().try_into().unwrap(),
+                    )
                     .unwrap()
                     .0;
                 assert_eq!(
@@ -1050,7 +1145,8 @@ mod test {
     #[test]
     fn credential_ids() {
         trussed::virt::with_client(StoreConfig::ram(), "fido", |mut client| {
-            let kek = syscall!(client.generate_chacha8poly1305_key(Location::Internal)).key;
+            let format = CredentialIdVersion::V1;
+            let kek = format.generate_key_encryption_key(&mut client);
             let nonce = ByteArray::new([0; 12]);
             let data = credential_data();
             let mut full_credential = FullCredential {
@@ -1068,10 +1164,10 @@ mod test {
             full_credential.data.use_short_id = Some(true);
             let stripped_credential = StrippedCredential::from(&full_credential);
             let full_id = full_credential
-                .id(&mut client, kek, Some(&rp_id_hash))
+                .id(&mut client, format, kek, Some(&rp_id_hash))
                 .unwrap();
             let short_id = stripped_credential
-                .id(&mut client, kek, &rp_id_hash)
+                .id(&mut client, format, kek, &rp_id_hash)
                 .unwrap();
             assert_eq!(full_id.0, short_id.0);
 
@@ -1079,16 +1175,17 @@ mod test {
             full_credential.data.use_short_id = None;
             let stripped_credential = full_credential.strip();
             let full_id = full_credential
-                .id(&mut client, kek, Some(&rp_id_hash))
+                .id(&mut client, format, kek, Some(&rp_id_hash))
                 .unwrap();
-            let long_id = CredentialId::new(
-                &mut client,
-                &stripped_credential,
-                kek,
-                &rp_id_hash,
-                &full_credential.nonce,
-            )
-            .unwrap();
+            let long_id = format
+                .id(
+                    &mut client,
+                    &stripped_credential,
+                    kek,
+                    &rp_id_hash,
+                    &full_credential.nonce,
+                )
+                .unwrap();
             assert_eq!(full_id.0, long_id.0);
 
             assert!(short_id.0.len() < long_id.0.len());
@@ -1112,13 +1209,16 @@ mod test {
             third_party_payment: Some(true),
         };
         trussed::virt::with_client(StoreConfig::ram(), "fido", |mut client| {
-            let kek = syscall!(client.generate_chacha8poly1305_key(Location::Internal)).key;
+            let id_version = CredentialIdVersion::V1;
+            let kek = id_version.generate_key_encryption_key(&mut client);
             let rp_id_hash = syscall!(client.hash_sha256(rp_id.as_ref()))
                 .hash
                 .as_slice()
                 .try_into()
                 .unwrap();
-            let id = credential.id(&mut client, kek, &rp_id_hash).unwrap();
+            let id = credential
+                .id(&mut client, id_version, kek, &rp_id_hash)
+                .unwrap();
             assert_eq!(id.0.len(), 241);
         });
     }

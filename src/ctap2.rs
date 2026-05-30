@@ -400,6 +400,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         };
 
         // 12. if `rk` is set, store or overwrite key pair, if full error KeyStoreFull
+        let credential_id_version = self.state.persistent.credential_id_version();
 
         // 12.a generate credential
         let key_parameter = match rk_requested {
@@ -407,19 +408,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             false => {
                 // WrappedKey version
                 let wrapping_key = self.state.persistent.key_wrapping_key(&mut self.trussed)?;
-                let wrapped_key = syscall!(self.trussed.wrap_key_chacha8poly1305(
-                    wrapping_key,
-                    private_key,
-                    &[],
-                    None
-                ))
-                .wrapped_key;
-
-                // 32B key, 12B nonce, 16B tag + some info on algorithm (P256/Ed25519)
-                // Turns out it's size 92 (enum serialization not optimized yet...)
-                // let mut wrapped_key = Bytes::<60>::new();
-                // wrapped_key.extend_from_slice(&wrapped_key_msg).unwrap();
-                Key::WrappedKey(Bytes::try_from(&*wrapped_key).map_err(|_| Error::Other)?)
+                credential_id_version.wrap_key(&mut self.trussed, wrapping_key, private_key)?
             }
         };
 
@@ -459,8 +448,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         );
 
         // note that this does the "stripping" of OptionalUI etc.
-        let credential_id =
-            StrippedCredential::from(&credential).id(&mut self.trussed, kek, &rp_id_hash)?;
+        let credential_id = StrippedCredential::from(&credential).id(
+            &mut self.trussed,
+            credential_id_version,
+            kek,
+            &rp_id_hash,
+        )?;
 
         if rk_requested {
             // serialization with all metadata
@@ -2049,6 +2042,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         credential: Credential,
     ) -> Result<ctap2::get_assertion::Response> {
         let data = self.state.runtime.active_get_assertion.clone().unwrap();
+        let credential_id_version = self.state.persistent.credential_id_version();
         let rp_id_hash = &data.rp_id_hash;
 
         let (key, is_rk) = match credential.key().clone() {
@@ -2056,13 +2050,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             Key::WrappedKey(bytes) => {
                 let wrapping_key = self.state.persistent.key_wrapping_key(&mut self.trussed)?;
                 // info_now!("unwrapping {:?} with wrapping key {:?}", &bytes, &wrapping_key);
-                let key_result = syscall!(self.trussed.unwrap_key_chacha8poly1305(
-                    wrapping_key,
-                    &bytes,
-                    &[],
-                    Location::Volatile,
-                ))
-                .key;
+                let key_result =
+                    credential_id_version.unwrap_key(&mut self.trussed, wrapping_key, &bytes);
                 // debug_now!("key result: {:?}", &key_result);
                 info_now!("key result");
                 match key_result {
@@ -2096,7 +2085,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             .state
             .persistent
             .key_encryption_key(&mut self.trussed)?;
-        let credential_id = credential.id(&mut self.trussed, kek, rp_id_hash)?;
+        let credential_id =
+            credential.id(&mut self.trussed, credential_id_version, kek, rp_id_hash)?;
 
         use ctap2::AuthenticatorDataFlags as Flags;
 
