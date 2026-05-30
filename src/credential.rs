@@ -45,12 +45,17 @@ pub enum CredentialIdVersion {
     /// Private keys for non-resident credentials are wrapped using Chacha8Poly1305, serialized
     /// credential is encrypted using Chacha8Poly1305.
     V1,
+    /// Like `V1`, but using AES-256-GCM instead of Chacha8Poly1305.
+    #[cfg(feature = "credential-id-format-v2")]
+    V2,
 }
 
 impl CredentialIdVersion {
     fn mechanism(self) -> Mechanism {
         match self {
             Self::V1 => Mechanism::Chacha8Poly1305,
+            #[cfg(feature = "credential-id-format-v2")]
+            Self::V2 => Mechanism::Aes256Gcm,
         }
     }
 
