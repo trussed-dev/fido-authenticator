@@ -75,7 +75,7 @@ where
                     large_blobs: None,
                     nfc_transport: options.nfc_transport,
                     ccid_transport: options.ccid_transport,
-                    firmware_version: Some(0),
+                    firmware_version: Some(0.into()),
                     credential_id_version: None,
                 },
             );

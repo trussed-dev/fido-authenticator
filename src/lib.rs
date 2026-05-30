@@ -133,7 +133,7 @@ pub struct Config {
     /// Firmware version reported by `authenticatorGetInfo` (CTAP 2.1 §6.4 0x0E).
     ///
     /// The runner is expected to plumb its own version constant in here.
-    pub firmware_version: Option<usize>,
+    pub firmware_version: Option<FirmwareVersion>,
     /// The credential ID format to use for new credentials.
     ///
     /// To avoid invalidating existing credentials, this value is only used if the state is clean,
@@ -157,6 +157,42 @@ impl Config {
 
     pub fn supports_large_blobs(&self) -> bool {
         self.large_blobs.is_some()
+    }
+}
+
+/// This struct makes it possible to define the firmware version based on the credential ID format
+/// that is currently used by the authenticator.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct FirmwareVersion {
+    pub default: usize,
+    pub credential_id_v1: Option<usize>,
+    #[cfg(feature = "credential-id-format-v2")]
+    pub credential_id_v2: Option<usize>,
+}
+
+impl FirmwareVersion {
+    pub fn new(default: usize) -> Self {
+        Self {
+            default,
+            credential_id_v1: None,
+            #[cfg(feature = "credential-id-format-v2")]
+            credential_id_v2: None,
+        }
+    }
+
+    pub fn value(&self, credential_id_version: credential::CredentialIdVersion) -> usize {
+        let value = match credential_id_version {
+            credential::CredentialIdVersion::V1 => self.credential_id_v1,
+            #[cfg(feature = "credential-id-format-v2")]
+            credential::CredentialIdVersion::V2 => self.credential_id_v2,
+        };
+        value.unwrap_or(self.default)
+    }
+}
+
+impl From<usize> for FirmwareVersion {
+    fn from(default: usize) -> Self {
+        Self::new(default)
     }
 }
 

@@ -19,7 +19,7 @@ fuzz_target!(|requests: Vec<Request<'_>>| {
                 large_blobs: None,
                 nfc_transport: false,
                 ccid_transport: false,
-                firmware_version: Some(0),
+                firmware_version: Some(0.into()),
                 credential_id_version: None,
             },
         );

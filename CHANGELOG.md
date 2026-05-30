@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add the `Config::new` method to create an instance with the default values.
 - Add support for multiple credential ID versions and add the `credential_id_version` field to `Config`.
 - Add `CredentialIdVersion::V2` using AES-256-GCM.
+- Make firmware version configurable depending on the current credential ID format.
 
 ## [v0.4.0-rc.1](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.4.0-rc.1) (2026-05-29)
 

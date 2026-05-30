@@ -149,7 +149,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         response.max_creds_in_list = Some(ctap_types::sizes::MAX_CREDENTIAL_COUNT_IN_LIST);
         response.max_cred_id_length = Some(ctap_types::sizes::MAX_CREDENTIAL_ID_LENGTH);
         response.algorithms = Some(algorithms);
-        response.firmware_version = self.config.firmware_version;
+        response.firmware_version = self
+            .config
+            .firmware_version
+            .map(|version| version.value(self.state.persistent.credential_id_version()));
         response.remaining_discoverable_credentials =
             remaining_discoverable_credentials.map(|count| count as usize);
         response.max_cred_blob_length = Some(MAX_CRED_BLOB_LENGTH);
