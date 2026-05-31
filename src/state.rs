@@ -320,7 +320,9 @@ impl PersistentState {
             consecutive_pin_mismatches: 0,
             pin_hash: None,
             pin_code_point_length: 0,
-            timestamp: 0,
+            // Setting the signature counter to zero indicates that it is not supported or that a
+            // counter error occured, so we have to initialize it with a non-zero value.
+            timestamp: 1,
             min_pin_length: 0,
             min_pin_length_rp_ids: Vec::new(),
             force_pin_change: false,
