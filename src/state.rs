@@ -24,7 +24,10 @@ use trussed_core::{
     CertificateClient, CryptoClient, FilesystemClient,
 };
 
-use heapless::binary_heap::{BinaryHeap, Max};
+use heapless::{
+    binary_heap::{BinaryHeap, Max},
+    Vec,
+};
 
 use crate::{
     credential::FullCredential,
@@ -289,8 +292,7 @@ pub struct PersistentState {
     /// RP IDs that should automatically receive the `minPinLength` extension
     /// output without explicit request (CTAP 2.1 `setMinPINLength`).
     #[serde(default)]
-    min_pin_length_rp_ids:
-        heapless::Vec<heapless::String<MAX_RP_ID_LENGTH>, MAX_MIN_PIN_LENGTH_RP_IDS>,
+    min_pin_length_rp_ids: Vec<String<MAX_RP_ID_LENGTH>, MAX_MIN_PIN_LENGTH_RP_IDS>,
 
     /// `forcePINChange` (CTAP 2.1 §6.4 0x0C). When `true`, the authenticator
     /// rejects every operation that requires `clientPin` until the platform
@@ -309,7 +311,24 @@ impl PersistentState {
     const RESET_RETRIES: u8 = 8;
     const FILENAME: &'static Path = path!("persistent-state.cbor");
 
-    pub fn load<T: FilesystemClient>(trussed: &mut T) -> Result<Self> {
+    /// The default value for the state if it is initialized for the first time or reset.
+    fn reset_value() -> Self {
+        Self {
+            initialised: false,
+            key_encryption_key: None,
+            key_wrapping_key: None,
+            consecutive_pin_mismatches: 0,
+            pin_hash: None,
+            pin_code_point_length: 0,
+            timestamp: 0,
+            min_pin_length: 0,
+            min_pin_length_rp_ids: Vec::new(),
+            force_pin_change: false,
+            always_uv: false,
+        }
+    }
+
+    fn load<T: FilesystemClient>(trussed: &mut T) -> Result<Self> {
         // TODO: add "exists_file" method instead?
         let result =
             try_syscall!(trussed.read_file(Location::Internal, PathBuf::from(Self::FILENAME),))
@@ -353,25 +372,8 @@ impl PersistentState {
         if let Some(key) = self.key_wrapping_key {
             syscall!(trussed.delete(key));
         }
-        self.key_encryption_key = None;
-        self.key_wrapping_key = None;
-        self.consecutive_pin_mismatches = 0;
-        self.pin_hash = None;
-        self.timestamp = 0;
-        // CTAP 2.1 §6.7 authenticatorReset MUST reset the following features:
-        //   - "Always Require User Verification" (alwaysUv)
-        //   - "Set Minimum PIN Length" — its three pieces of state:
-        //       * `minPINLength` → back to default (the `Default` impl
-        //         leaves the raw field at 0, which our `min_pin_length()`
-        //         getter reads as DEFAULT_MIN_PIN_LENGTH)
-        //       * `minPinLengthRPIDs` → empty
-        //       * `forcePINChange` → false
-        //   - Enterprise attestation (we don't support it, so no state to
-        //     clear).
-        self.always_uv = false;
-        self.min_pin_length = 0;
-        self.min_pin_length_rp_ids = heapless::Vec::new();
-        self.force_pin_change = false;
+        *self = Self::reset_value();
+        self.initialised = true;
         self.save(trussed)
     }
 
@@ -384,6 +386,7 @@ impl PersistentState {
                 }
                 Err(_err) => {
                     info!("error with previous state! {:?}", _err);
+                    *self = Self::reset_value();
                 }
             }
             self.initialised = true;
