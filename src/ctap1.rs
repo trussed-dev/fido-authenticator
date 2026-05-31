@@ -87,7 +87,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             creation_time: self
                 .state
                 .persistent
-                .timestamp(&mut self.trussed)
+                .signature_counter(&mut self.trussed)
                 .map_err(|_| Error::NotEnoughMemory)?,
             use_counter: true,
             algorithm: SigningAlgorithm::P256 as i32,
@@ -225,7 +225,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let sig_count = self
             .state
             .persistent
-            .timestamp(&mut self.trussed)
+            .signature_counter(&mut self.trussed)
             .map_err(|_| Error::UnspecifiedNonpersistentExecutionError)?;
 
         let mut commitment = Commitment::new();

@@ -449,7 +449,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             &parameters.user,
             algorithm as i32,
             key_parameter,
-            self.state.persistent.timestamp(&mut self.trussed)?,
+            self.state.persistent.signature_counter(&mut self.trussed)?,
             hmac_secret_requested,
             cred_protect_requested,
             large_blob_key,
@@ -526,7 +526,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 flags
             },
 
-            sign_count: self.state.persistent.timestamp(&mut self.trussed)?,
+            sign_count: self.state.persistent.signature_counter(&mut self.trussed)?,
 
             attested_credential_data: {
                 // debug_now!("acd in, cid len {}, pk len {}", credential_id.0.len(), cose_public_key.len());
@@ -2100,7 +2100,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
 
         use ctap2::AuthenticatorDataFlags as Flags;
 
-        let sig_count = self.state.persistent.timestamp(&mut self.trussed)?;
+        let sig_count = self.state.persistent.signature_counter(&mut self.trussed)?;
 
         let authenticator_data = ctap2::get_assertion::AuthenticatorData {
             rp_id_hash,

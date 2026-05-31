@@ -278,9 +278,7 @@ pub struct PersistentState {
     /// a PIN change on the next `setMinPINLength` with a non-zero floor).
     #[serde(default)]
     pin_code_point_length: u8,
-    // Ideally, we'd dogfood a "Monotonic Counter" from trussed.
-    // TODO: Add per-key counters for resident keys.
-    // counter: Option<CounterId>,
+    /// Global signature counter.
     timestamp: u32,
 
     /// Configured minimum PIN length (CTAP 2.1 `setMinPINLength`, §6.11.4
@@ -392,7 +390,7 @@ impl PersistentState {
         }
     }
 
-    pub fn timestamp<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<u32> {
+    pub fn signature_counter<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<u32> {
         let now = self.timestamp;
         self.timestamp += 1;
         self.save(trussed)?;
