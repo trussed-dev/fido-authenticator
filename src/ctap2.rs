@@ -526,7 +526,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 flags
             },
 
-            sign_count: self.state.persistent.signature_counter(&mut self.trussed)?,
+            sign_count: credential.creation_time,
 
             attested_credential_data: {
                 // debug_now!("acd in, cid len {}, pk len {}", credential_id.0.len(), cose_public_key.len());
