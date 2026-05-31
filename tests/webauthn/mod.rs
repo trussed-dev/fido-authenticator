@@ -829,6 +829,7 @@ impl From<Value> for GetAssertionReply {
 pub struct AuthData {
     pub bytes: Vec<u8>,
     pub flags: u8,
+    pub sign_count: u32,
     pub credential: Option<CredentialData>,
     pub extensions: Option<BTreeMap<String, Value>>,
 }
@@ -855,7 +856,8 @@ impl From<Vec<u8>> for AuthData {
     fn from(vec: Vec<u8>) -> Self {
         let (_rp_id_hash, bytes) = vec.split_at(32);
         let (&flags, bytes) = bytes.split_first().unwrap();
-        let (_sign_count, bytes) = bytes.split_at(4);
+        let (sign_count, bytes) = bytes.split_first_chunk::<4>().unwrap();
+        let sign_count = u32::from_be_bytes(*sign_count);
         let (credential, bytes) = if flags & 0b0100_0000 == 0b0100_0000 {
             let (credential, bytes) = CredentialData::parse(bytes);
             (Some(credential), bytes)
@@ -870,6 +872,7 @@ impl From<Vec<u8>> for AuthData {
         Self {
             bytes: vec,
             flags,
+            sign_count,
             credential,
             extensions,
         }

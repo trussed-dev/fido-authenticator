@@ -868,6 +868,7 @@ impl Test for TestGetAssertion {
             );
             assert!(!response.auth_data.uv_flag());
             assert!(!response.auth_data.at_flag());
+            assert!(response.auth_data.sign_count > 0);
             assert_eq!(response.auth_data.ed_flag(), has_extensions);
             assert_eq!(response.number_of_credentials, None);
             credential.verify_assertion(&response.auth_data, client_data_hash, &response.signature);
@@ -2766,5 +2767,64 @@ fn test_versions_include_fido_2_3_exclude_fido_2_2() {
         let reply = device.exec(GetInfo).unwrap();
         assert!(reply.versions.contains(&"FIDO_2_3".to_owned()));
         assert!(!reply.versions.contains(&"FIDO_2_2".to_owned()));
+    })
+}
+
+#[test]
+fn test_signature_counter() {
+    let client_data_hash = vec![0u8; 32];
+    let rp_id = "example.com";
+    virt::run_ctap2(|device| {
+        let mc = MakeCredential::new(
+            client_data_hash.clone(),
+            Rp::new(rp_id),
+            User::new(vec![4; 16]),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        let response = device.exec(mc).unwrap();
+        let credential1 = response.auth_data.credential.unwrap();
+        let counter1 = response.auth_data.sign_count;
+
+        let mc = MakeCredential::new(
+            client_data_hash.clone(),
+            Rp::new(rp_id),
+            User::new(vec![4; 16]),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        let response = device.exec(mc).unwrap();
+        let credential2 = response.auth_data.credential.unwrap();
+        let counter2 = response.auth_data.sign_count;
+
+        let mut ga = GetAssertion::new(rp_id, client_data_hash.clone());
+        ga.allow_list = Some(vec![PubKeyCredDescriptor::new(
+            "public-key",
+            credential1.id,
+        )]);
+        let response = device.exec(ga).unwrap();
+        let counter3 = response.auth_data.sign_count;
+
+        let mut ga = GetAssertion::new(rp_id, client_data_hash);
+        ga.allow_list = Some(vec![PubKeyCredDescriptor::new(
+            "public-key",
+            credential2.id,
+        )]);
+        let response = device.exec(ga).unwrap();
+        let counter4 = response.auth_data.sign_count;
+
+        assert_eq!(counter1, 1);
+
+        let delta1 = counter2 - counter1;
+        assert!(delta1 >= 1);
+        assert!(delta1 <= 256);
+
+        let delta2 = counter3 - counter2;
+        assert!(delta2 >= 1);
+        assert!(delta2 <= 256);
+
+        let delta3 = counter4 - counter3;
+        assert!(delta3 >= 1);
+        assert!(delta3 <= 256);
+
+        assert!(delta1 + delta2 + delta3 > 3);
     })
 }

@@ -41,12 +41,19 @@ fn test_authenticate() {
         // enforce user presence
         let response = authenticate(&device, 3, challenge, application, &register).unwrap();
         assert_eq!(response.user_presence & 1, 1);
-        assert_eq!(response.counter, 1);
+        let counter1 = response.counter;
 
         // don’t enforce user presence
         let response = authenticate(&device, 8, challenge, application, &register).unwrap();
         assert_eq!(response.user_presence & 1, 0);
-        assert_eq!(response.counter, 2);
+        let counter2 = response.counter;
+
+        let delta1 = counter1 - 1;
+        assert!(delta1 >= 1);
+        assert!(delta1 <= 256);
+        let delta2 = counter2 - counter1;
+        assert!(delta2 >= 1);
+        assert!(delta2 <= 256);
     });
 }
 
@@ -128,12 +135,17 @@ fn test_authenticate_upgrade() {
         // enforce user presence
         let response = authenticate(&device, 3, challenge, application, &register).unwrap();
         assert_eq!(response.user_presence & 1, 1);
-        assert_eq!(response.counter, 1);
+        let counter1 = response.counter;
 
         // don’t enforce user presence
         let response = authenticate(&device, 8, challenge, application, &register).unwrap();
         assert_eq!(response.user_presence & 1, 0);
-        assert_eq!(response.counter, 2);
+        let counter2 = response.counter;
+
+        assert_eq!(counter1, 1);
+        let delta1 = counter2 - counter1;
+        assert!(delta1 >= 1);
+        assert!(delta1 <= 256);
     });
 }
 

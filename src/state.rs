@@ -695,6 +695,11 @@ impl RuntimeState {
 mod tests {
     use super::*;
     use hex_literal::hex;
+    use trussed::{
+        backend::BackendId,
+        virt::{self, StoreConfig},
+    };
+    use trussed_staging::virt::{BackendIds, Dispatcher};
 
     #[test]
     fn deser() {
@@ -708,5 +713,50 @@ mod tests {
         "
         ))
         .unwrap();
+    }
+
+    #[test]
+    fn test_signature_counter() {
+        virt::with_platform(StoreConfig::ram(), |platform| {
+            platform.run_client_with_backends(
+                "fido",
+                Dispatcher::default(),
+                &[
+                    BackendId::Custom(BackendIds::StagingBackend),
+                    BackendId::Core,
+                ],
+                |mut client| {
+                    let mut state = PersistentState::default();
+                    state.load_if_not_initialised(&mut client);
+
+                    let counter1 = state.signature_counter(&mut client).unwrap();
+                    let counter2 = state.signature_counter(&mut client).unwrap();
+                    let counter3 = state.signature_counter(&mut client).unwrap();
+                    let counter4 = state.signature_counter(&mut client).unwrap();
+                    let counter5 = state.signature_counter(&mut client).unwrap();
+
+                    assert_eq!(counter1, 1);
+                    assert!(counter2 > counter1);
+                    assert!(counter3 > counter2);
+                    assert!(counter4 > counter3);
+                    assert!(counter5 > counter4);
+                    // The random value should not be zero four times ...
+                    assert!(counter5 > counter1 + 4);
+                    assert!(counter5 < counter1 + 4 * 256);
+
+                    // counter goes into error state after overflow
+                    state.timestamp = u32::MAX;
+                    let counter6 = state.signature_counter(&mut client).unwrap();
+                    let counter7 = state.signature_counter(&mut client).unwrap();
+                    let counter8 = state.signature_counter(&mut client).unwrap();
+                    let counter9 = state.signature_counter(&mut client).unwrap();
+
+                    assert_eq!(counter6, u32::MAX);
+                    assert_eq!(counter7, 0);
+                    assert_eq!(counter8, 0);
+                    assert_eq!(counter9, 0);
+                },
+            )
+        })
     }
 }
