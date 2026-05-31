@@ -397,8 +397,18 @@ impl PersistentState {
 
     pub fn signature_counter<T: FilesystemClient>(&mut self, trussed: &mut T) -> Result<u32> {
         let now = self.timestamp;
-        self.timestamp += 1;
-        self.save(trussed)?;
+        // 0 indicates a counter overflow. If this is the case, we can no longer increment the
+        // counter and have to always return 0, see Requirement 2.3.2 in the Security Requirements
+        // v1.5.
+        if now > 0 {
+            if let Some(timestamp) = self.timestamp.checked_add(1) {
+                self.timestamp = timestamp;
+            } else {
+                // Indicate an overflow by setting the counter to 0.
+                self.timestamp = 0;
+            }
+            self.save(trussed)?;
+        }
         Ok(now)
     }
 

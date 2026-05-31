@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fix signature counter to improve spec compliance:
   - Set the initial signature counter to 1.
+  - Correctly handle signature counter overflows by returning 0.
 
 ## [v0.4.0-rc.1](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.4.0-rc.1) (2026-05-29)
 
