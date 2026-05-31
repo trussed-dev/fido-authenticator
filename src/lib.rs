@@ -152,6 +152,16 @@ pub struct Config {
     ///
     /// The runner is expected to plumb its own version constant in here.
     pub firmware_version: Option<usize>,
+    /// Whether `authenticatorReset` requires a long touch (a continuous ≥5 s
+    /// press) rather than a normal short touch (CTAP 2.3 §6.6 / §7.7).
+    ///
+    /// Recommended value: `true` (secure default). When `true`, reset requires
+    /// [`UserPresence::user_present_strong`] and `authenticatorGetInfo`
+    /// advertises `longTouchForReset = true`. A runner whose button backend
+    /// cannot detect a long press must explicitly opt out by setting this to
+    /// `false`, which restores the normal short-touch presence check. The
+    /// button/hardware backend is untouched either way.
+    pub long_touch_for_reset: bool,
 }
 
 impl Config {

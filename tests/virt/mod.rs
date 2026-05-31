@@ -75,9 +75,13 @@ where
                 nfc_transport: options.nfc_transport,
                 ccid_transport: options.ccid_transport,
                 firmware_version: Some(0),
+                long_touch_for_reset: options.long_touch_for_reset.unwrap_or(true),
             };
-            let mut authenticator =
-                Authenticator::new(client, TestUp::new(options.silent_up), config);
+            let mut authenticator = Authenticator::new(
+                client,
+                TestUp::new(options.silent_up, options.reject_strong_up),
+                config,
+            );
 
             let channel = Channel::new();
             let (rq, rp) = channel.split().unwrap();
@@ -143,6 +147,15 @@ pub struct Options {
     /// that exercise paths that would otherwise stall on the virt UI's
     /// default `Level::Normal` (which doesn't satisfy `Level::Strong`).
     pub silent_up: bool,
+    /// When true, the authenticator is constructed with the test-only
+    /// `TestUp::ShortOnly` user presence: a short touch (`Level::Normal`) is
+    /// granted but a long touch (`Level::Strong`) is denied with
+    /// `OperationDenied`. Lets a test assert that `long_touch_for_reset`
+    /// actually gates `authenticatorReset` on a long touch.
+    pub reject_strong_up: bool,
+    /// Overrides `Config::long_touch_for_reset`. `None` keeps the recommended
+    /// default (`true`).
+    pub long_touch_for_reset: Option<bool>,
     pub inspect_ifs: Option<InspectFsFn>,
 }
 
@@ -154,11 +167,17 @@ pub struct Options {
 pub enum TestUp {
     Conforming,
     Silent,
+    /// Grants a short touch (`Level::Normal`) but denies a long touch
+    /// (`Level::Strong`) with `OperationDenied`. Used to test that
+    /// `long_touch_for_reset` actually requires a long touch for reset.
+    ShortOnly,
 }
 
 impl TestUp {
-    fn new(silent: bool) -> Self {
-        if silent {
+    fn new(silent: bool, reject_strong: bool) -> Self {
+        if reject_strong {
+            Self::ShortOnly
+        } else if silent {
             Self::Silent
         } else {
             Self::Conforming
@@ -175,6 +194,8 @@ impl UserPresence for TestUp {
         match self {
             Self::Conforming => Conforming {}.user_present(trussed, timeout_milliseconds),
             Self::Silent => Silent {}.user_present(trussed, timeout_milliseconds),
+            // Short touch is granted.
+            Self::ShortOnly => Silent {}.user_present(trussed, timeout_milliseconds),
         }
     }
 
@@ -186,6 +207,8 @@ impl UserPresence for TestUp {
         match self {
             Self::Conforming => Conforming {}.user_present_strong(trussed, timeout_milliseconds),
             Self::Silent => Silent {}.user_present_strong(trussed, timeout_milliseconds),
+            // Long touch is denied — the user only managed a short touch.
+            Self::ShortOnly => Err(ctap_types::Error::OperationDenied),
         }
     }
 }

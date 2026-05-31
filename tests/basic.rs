@@ -3214,3 +3214,89 @@ fn test_enable_long_touch_for_reset_is_noop() {
         assert_eq!(reply.long_touch_for_reset, Some(true));
     })
 }
+
+// ============================================================================
+// authenticatorReset long-touch gating (CTAP 2.3 §6.6 / §7.7, Config option)
+// ============================================================================
+
+/// With `long_touch_for_reset = true` (the recommended default), a normal
+/// short touch (`Level::Normal`) must NOT authorize `authenticatorReset`; the
+/// authenticator demands a long touch (`Level::Strong`). The `ShortOnly` test
+/// UP grants Normal but denies Strong, so Reset is rejected with
+/// `CTAP2_ERR_OPERATION_DENIED` (0x27).
+#[test]
+fn test_reset_long_touch_rejects_short_touch() {
+    let options = Options {
+        long_touch_for_reset: Some(true),
+        reject_strong_up: true,
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        // `ResetReply` is a unit reply with no Debug/PartialEq, so map the Ok
+        // arm to `()` before comparing.
+        let result = device.exec(Reset).map(|_| ());
+        assert_eq!(result, Err(Ctap2Error(0x27)));
+    })
+}
+
+/// With `long_touch_for_reset = true` and a UP that grants `Level::Strong`
+/// (the `Silent` test UP), `authenticatorReset` succeeds.
+#[test]
+fn test_reset_long_touch_accepts_strong_touch() {
+    let options = Options {
+        long_touch_for_reset: Some(true),
+        silent_up: true,
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        device.exec(Reset).unwrap();
+    })
+}
+
+/// With `long_touch_for_reset = false` (a runner that opted out), a normal
+/// short touch is sufficient and the strong check is never invoked. `ShortOnly`
+/// grants Normal and denies Strong, so success here proves `reset()` took the
+/// short-touch path rather than `user_present_strong`.
+#[test]
+fn test_reset_short_touch_accepts_short_touch() {
+    let options = Options {
+        long_touch_for_reset: Some(false),
+        reject_strong_up: true,
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        device.exec(Reset).unwrap();
+    })
+}
+
+// ============================================================================
+// Empty rp.id / rpId rejected (CTAP 2.1 §6.1.1.2 / §6.2.1.2)
+// ============================================================================
+
+/// MakeCredential with an empty `rp.id` is rejected before any user presence
+/// check with `CTAP2_ERR_MISSING_PARAMETER` (0x14).
+#[test]
+fn test_make_credential_empty_rp_id_rejected() {
+    let client_data_hash = &[0; 32];
+    virt::run_ctap2(|device| {
+        let user = User::new(b"id123")
+            .name("john.doe")
+            .display_name("John Doe");
+        let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+        let request = MakeCredential::new(client_data_hash, Rp::new(""), user, pub_key_cred_params);
+        let result = device.exec(request);
+        assert_eq!(result, Err(Ctap2Error(0x14)));
+    })
+}
+
+/// GetAssertion with an empty `rpId` is rejected before any user presence
+/// check with `CTAP2_ERR_MISSING_PARAMETER` (0x14).
+#[test]
+fn test_get_assertion_empty_rp_id_rejected() {
+    let client_data_hash = &[0; 32];
+    virt::run_ctap2(|device| {
+        let request = GetAssertion::new("", client_data_hash);
+        let result = device.exec(request);
+        assert_eq!(result, Err(Ctap2Error(0x14)));
+    })
+}
