@@ -23,12 +23,24 @@ impl<T: Exhaustive + Clone> Exhaustive for Option<T> {
     }
 }
 
+macro_rules! iter_map {
+    ([ $($name:ident: $iter:expr,)* ] => $map:expr) => {
+        ::itertools::iproduct!(
+            $($iter,)*
+        ).map(|($($name,)*)| { $map })
+    }
+}
+
+#[allow(unused_imports)]
+pub(crate) use iter_map;
+
 macro_rules! exhaustive_struct {
     ($($field:ident: $type:ty,)*) => {
-        ::itertools::iproduct!(
-            $(<$type as Exhaustive>::iter_exhaustive(),)*
-        )
-        .map(|($($field,)*)| Self { $($field,)* })
+        $crate::webauthn::iter_map! {
+            [
+                $($field: <$type as Exhaustive>::iter_exhaustive(),)*
+            ] => Self { $($field,)* }
+        }
     }
 }
 
@@ -537,6 +549,21 @@ impl MakeCredentialOptions {
     }
 }
 
+impl MakeCredentialOptions {
+    pub fn iter_valid() -> impl Iterator<Item = Self> + Clone {
+        iter_map! {
+            [
+                rk: [true, false],
+                uv: [true, false],
+            ] => Self {
+                rk: rk.then_some(true),
+                up: None,
+                uv: uv.then_some(true),
+            }
+        }
+    }
+}
+
 impl From<MakeCredentialOptions> for Value {
     fn from(options: MakeCredentialOptions) -> Value {
         let mut map = Map::default();
@@ -776,6 +803,18 @@ impl GetAssertionOptions {
     pub fn uv(mut self, uv: bool) -> Self {
         self.uv = Some(uv);
         self
+    }
+
+    pub fn iter_valid() -> impl Iterator<Item = Self> + Clone {
+        iter_map! {
+            [
+                up: [true, false],
+                uv: [true, false],
+            ] => Self {
+                up: Some(up),
+                uv: uv.then_some(true),
+            }
+        }
     }
 }
 

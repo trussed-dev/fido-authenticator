@@ -16,12 +16,50 @@ use rand::RngCore as _;
 use fs::list_fs;
 use virt::{Ctap2, Ctap2Error, Options};
 use webauthn::{
-    exhaustive_struct, AttStmtFormat, AuthenticatorConfig, AuthenticatorConfigParams, ClientPin,
-    CredentialManagement, CredentialManagementParams, Exhaustive, GetAssertion,
+    exhaustive_struct, iter_map, AttStmtFormat, AuthenticatorConfig, AuthenticatorConfigParams,
+    ClientPin, CredentialManagement, CredentialManagementParams, Exhaustive, GetAssertion,
     GetAssertionExtensionsInput, GetAssertionOptions, GetInfo, GetNextAssertion, HmacSecretInput,
     KeyAgreementKey, MakeCredential, MakeCredentialExtensionsInput, MakeCredentialOptions,
     PinToken, PubKeyCredDescriptor, PubKeyCredParam, PublicKey, Rp, SharedSecret, Test, User,
 };
+
+macro_rules! run_tests {
+    ($test:ident {
+        $(exhaustive = [
+            $($exh_field:ident: $exh_type:ty,)*
+        ],)?
+        $(iter = [
+            $($iter_field:ident: $iter:expr,)*
+        ],)?
+        $(random = [
+            $($random_field:ident: $random_type:ty,)*
+        ],)?
+        $(fixed = [
+            $($fixed_field:ident: $fixed_value:expr,)*
+        ],)?
+    }) => {{
+        $(
+            let mut rng = rand::thread_rng();
+            $(
+                let $random_field: Vec<$random_type> = <$random_type as Exhaustive>::iter_exhaustive().collect();
+            )*
+        )?
+        let tests = iter_map! {
+            [
+                $($($exh_field: <$exh_type as Exhaustive>::iter_exhaustive(),)*)?
+                $($($iter_field: $iter,)*)?
+            ] => $test {
+                $($($exh_field,)*)?
+                $($($iter_field,)*)?
+                $($($fixed_field: $fixed_value,)*)?
+                $($($random_field: *::rand::seq::SliceRandom::choose($random_field.as_slice(), &mut rng).unwrap(),)*)?
+            }
+        };
+        for test in tests {
+            test.run();
+        }
+    }}
+}
 
 #[test]
 fn test_ping() {
@@ -551,6 +589,18 @@ enum PinAuth {
     PinToken(RequestPinToken),
 }
 
+impl PinAuth {
+    fn iter_valid() -> impl Iterator<Item = Self> + Clone {
+        [
+            Self::NoPin,
+            Self::PinNoToken,
+            Self::PinToken(RequestPinToken::ValidRpId),
+            Self::PinToken(RequestPinToken::NoRpId),
+        ]
+        .into_iter()
+    }
+}
+
 impl Exhaustive for PinAuth {
     fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
         [Self::NoPin, Self::PinNoToken]
@@ -707,21 +757,107 @@ impl Test for TestMakeCredential {
     }
 }
 
-impl Exhaustive for TestMakeCredential {
-    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
-        exhaustive_struct! {
-            pin_auth: PinAuth,
-            options: Option<MakeCredentialOptions>,
-            valid_pub_key_alg: bool,
-            attestation_formats_preference: Option<AttestationFormatsPreference>,
-            hmac_secret: bool,
+#[test]
+fn test_make_credential_pub_key_alg() {
+    run_tests! {
+        TestMakeCredential {
+            exhaustive = [
+                valid_pub_key_alg: bool,
+            ],
+            iter = [
+                pin_auth: PinAuth::iter_valid(),
+                options: MakeCredentialOptions::iter_valid().map(Some),
+            ],
+            random = [
+                attestation_formats_preference: Option<AttestationFormatsPreference>,
+                hmac_secret: bool,
+            ],
         }
     }
 }
 
 #[test]
-fn test_make_credential() {
-    TestMakeCredential::run_all();
+fn test_make_credential_hmac_secret() {
+    run_tests! {
+        TestMakeCredential {
+            exhaustive = [
+                hmac_secret: bool,
+            ],
+            iter = [
+                pin_auth: PinAuth::iter_valid(),
+                options: MakeCredentialOptions::iter_valid().map(Some),
+            ],
+            random = [
+                attestation_formats_preference: Option<AttestationFormatsPreference>,
+            ],
+            fixed = [
+                valid_pub_key_alg: true,
+            ],
+        }
+    }
+}
+
+#[test]
+fn test_make_credential_pin_auth() {
+    run_tests! {
+        TestMakeCredential {
+            exhaustive = [
+                pin_auth: PinAuth,
+            ],
+            iter = [
+                options: MakeCredentialOptions::iter_valid().map(Some),
+            ],
+            random = [
+                attestation_formats_preference: Option<AttestationFormatsPreference>,
+                hmac_secret: bool,
+            ],
+            fixed = [
+                valid_pub_key_alg: true,
+            ],
+        }
+    }
+}
+
+#[test]
+fn test_make_credential_options() {
+    run_tests! {
+        TestMakeCredential {
+            exhaustive = [
+                options: Option<MakeCredentialOptions>,
+            ],
+            iter = [
+                pin_auth: PinAuth::iter_valid(),
+            ],
+            random = [
+                attestation_formats_preference: Option<AttestationFormatsPreference>,
+                hmac_secret: bool,
+            ],
+            fixed = [
+                valid_pub_key_alg: true,
+            ],
+        }
+    }
+}
+
+#[test]
+fn test_make_credential_attestation_formats_preference() {
+    run_tests! {
+        TestMakeCredential {
+            exhaustive = [
+                attestation_formats_preference: Option<AttestationFormatsPreference>,
+            ],
+            iter = [
+                pin_auth: PinAuth::iter_valid(),
+                options: MakeCredentialOptions::iter_valid().map(Some),
+            ],
+            random = [
+                hmac_secret: bool,
+            ],
+            fixed = [
+                valid_pub_key_alg: true,
+            ],
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -922,8 +1058,85 @@ impl Exhaustive for TestGetAssertion {
 }
 
 #[test]
-fn test_get_assertion() {
-    TestGetAssertion::run_all();
+fn test_get_assertion_options() {
+    run_tests! {
+        TestGetAssertion {
+            exhaustive = [
+                rk: bool,
+                allow_list: bool,
+                options: Option<GetAssertionOptions>,
+            ],
+            random = [
+                mc_extensions: Option<ExhaustiveMakeCredentialExtensionsInput>,
+                ga_hmac_secret: bool,
+                ga_third_party_payment: Option<bool>,
+                ga_cred_blob: bool,
+            ],
+        }
+    }
+}
+
+#[test]
+fn test_get_assertion_hmac_secret() {
+    run_tests! {
+        TestGetAssertion {
+            exhaustive = [
+                rk: bool,
+                allow_list: bool,
+                mc_extensions: Option<ExhaustiveMakeCredentialExtensionsInput>,
+                ga_hmac_secret: bool,
+            ],
+            iter = [
+                options: GetAssertionOptions::iter_valid().map(Some),
+            ],
+            random = [
+                ga_third_party_payment: Option<bool>,
+                ga_cred_blob: bool,
+            ],
+        }
+    }
+}
+
+#[test]
+fn test_get_assertion_third_party_payment() {
+    run_tests! {
+        TestGetAssertion {
+            exhaustive = [
+                rk: bool,
+                allow_list: bool,
+                mc_extensions: Option<ExhaustiveMakeCredentialExtensionsInput>,
+                ga_third_party_payment: Option<bool>,
+            ],
+            iter = [
+                options: GetAssertionOptions::iter_valid().map(Some),
+            ],
+            random = [
+                ga_hmac_secret: bool,
+                ga_cred_blob: bool,
+            ],
+        }
+    }
+}
+
+#[test]
+fn test_get_assertion_cred_blob() {
+    run_tests! {
+        TestGetAssertion {
+            exhaustive = [
+                rk: bool,
+                allow_list: bool,
+                mc_extensions: Option<ExhaustiveMakeCredentialExtensionsInput>,
+                ga_cred_blob: bool,
+            ],
+            iter = [
+                options: GetAssertionOptions::iter_valid().map(Some),
+            ],
+            random = [
+                ga_hmac_secret: bool,
+                ga_third_party_payment: Option<bool>,
+            ],
+        }
+    }
 }
 
 fn run_test_get_next_assertion(device: &Ctap2) {
@@ -1155,18 +1368,16 @@ impl Test for TestListCredentials {
     }
 }
 
-impl Exhaustive for TestListCredentials {
-    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
-        exhaustive_struct! {
-            pin_token_rp_id: bool,
-            third_party_payment: Option<bool>,
-        }
-    }
-}
-
 #[test]
 fn test_list_credentials() {
-    TestListCredentials::run_all();
+    run_tests! {
+        TestListCredentials {
+            exhaustive = [
+                pin_token_rp_id: bool,
+                third_party_payment: Option<bool>,
+            ],
+        }
+    }
 }
 
 // ============================================================================
