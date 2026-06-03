@@ -69,7 +69,7 @@ rand = "0.8.4"
 rand_chacha = "0.3"
 sha2 = "0.10"
 serde_test = "1.0.176"
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "ad577412599156ac98f29ee969e76537e506f2bc", features = ["virt"] }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b2492feada78ee17b936c99c13df480a4fc6d2f5", features = ["virt"] }
 trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.4.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
 trussed-usbip = { git = "https://github.com/trussed-dev/pc-usbip-runner.git", rev = "017921df0930707c4af68882ccb1f8b3f1bbf7c5", default-features = false, features = ["ctaphid"] }
 usbd-ctaphid = "0.4"
@@ -79,7 +79,7 @@ x509-parser = "0.16"
 features = ["chunked", "dispatch"]
 
 [patch.crates-io]
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "ad577412599156ac98f29ee969e76537e506f2bc" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b2492feada78ee17b936c99c13df480a4fc6d2f5" }
 
 [profile.test]
 opt-level = 2

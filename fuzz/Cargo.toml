@@ -24,5 +24,5 @@ doc = false
 bench = false
 
 [patch.crates-io]
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "ad577412599156ac98f29ee969e76537e506f2bc" }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b2492feada78ee17b936c99c13df480a4fc6d2f5" }
 trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.4.0" }
