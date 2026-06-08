@@ -39,6 +39,8 @@ credential-id-format-v2 = ["trussed-core/aes256-gcm"]
 # enables support for a large-blob array longer than 1024 bytes
 chunked = ["dep:trussed-chunked"]
 
+mldsa44 = ["trussed-core/mldsa44", "ctap-types/mldsa44"]
+
 log-all = []
 log-none = []
 log-trace = []
@@ -54,6 +56,7 @@ cbc = { version = "0.1.2", features = ["alloc"] }
 ciborium = "0.2.2"
 ciborium-io = "0.2.2"
 cipher = "0.4.4"
+ctap-types = { version = "=0.6.0-rc.4", features = ["mldsa44"] }
 ctaphid = { version = "0.3.1", default-features = false }
 ctaphid-dispatch = "0.4"
 delog = { version = "0.1.6", features = ["std-log"] }
@@ -69,7 +72,7 @@ rand = "0.8.4"
 rand_chacha = "0.3"
 sha2 = "0.10"
 serde_test = "1.0.176"
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b2492feada78ee17b936c99c13df480a4fc6d2f5", features = ["virt"] }
+trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b2492feada78ee17b936c99c13df480a4fc6d2f5", features = ["mldsa44", "virt"] }
 trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.4.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
 trussed-usbip = { git = "https://github.com/trussed-dev/pc-usbip-runner.git", rev = "017921df0930707c4af68882ccb1f8b3f1bbf7c5", default-features = false, features = ["ctaphid"] }
 usbd-ctaphid = "0.4"
@@ -79,7 +82,13 @@ x509-parser = "0.16"
 features = ["chunked", "dispatch"]
 
 [patch.crates-io]
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b2492feada78ee17b936c99c13df480a4fc6d2f5" }
+ctap-types = { git = "https://github.com/0x0ece/ctap-types", rev = "1056c78b06fddc1010afebf549434ac097a6db42" }
+trussed = { git = "https://github.com/0x0ece/trussed", rev = "a1b33c46eb16ef7fa5f6324f7c099ff339fe21e7" }
+trussed-core = { git = "https://github.com/0x0ece/trussed", rev = "a1b33c46eb16ef7fa5f6324f7c099ff339fe21e7" }
+
+[patch."https://github.com/trussed-dev/trussed.git"]
+trussed = { git = "https://github.com/0x0ece/trussed", rev = "a1b33c46eb16ef7fa5f6324f7c099ff339fe21e7" }
+trussed-core = { git = "https://github.com/0x0ece/trussed", rev = "a1b33c46eb16ef7fa5f6324f7c099ff339fe21e7" }
 
 [profile.test]
 opt-level = 2

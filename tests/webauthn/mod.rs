@@ -1044,6 +1044,10 @@ pub struct GetInfoReply {
     pub options: Option<BTreeMap<String, Value>>,
     pub pin_protocols: Option<Vec<u8>>,
     pub transports: Option<Vec<String>>,
+    /// CTAP 2.1 §6.4 0x0A: `algorithms` — array of
+    /// `PublicKeyCredentialParameters` the authenticator supports.
+    /// Each entry is `{"alg": i32, "type": "public-key"}`.
+    pub algorithms: Option<Vec<Value>>,
     pub force_pin_change: Option<bool>,
     pub min_pin_length: Option<u32>,
     pub attestation_formats: Option<Vec<String>>,
@@ -1062,6 +1066,8 @@ impl From<Value> for GetInfoReply {
             pin_protocols: map.remove(&6).map(|value| value.deserialized().unwrap()),
             // 0x09: transports (CTAP 2.1)
             transports: map.remove(&9).map(|value| value.deserialized().unwrap()),
+            // 0x0A: algorithms (CTAP 2.1)
+            algorithms: map.remove(&0x0A).map(|value| value.deserialized().unwrap()),
             // 0x0C: forcePINChange (CTAP 2.1)
             force_pin_change: map.remove(&0x0C).map(|value| value.deserialized().unwrap()),
             // 0x0D: minPINLength (CTAP 2.1)
