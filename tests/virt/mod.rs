@@ -106,9 +106,12 @@ where
                 result.unwrap()
             })
         },
-        |ifs| {
+        |ifs, vfs| {
             if let Some(inspect_ifs) = options.inspect_ifs {
                 inspect_ifs(ifs);
+            }
+            if let Some(inspect_vfs) = options.inspect_vfs {
+                inspect_vfs(vfs);
             }
         },
     )
@@ -143,6 +146,9 @@ pub struct Options {
     /// Sets `Config::long_touch_for_reset` (default `true`).
     pub long_touch_for_reset: bool,
     pub inspect_ifs: Option<InspectFsFn>,
+    /// Inspect the volatile filesystem after the run (e.g. to assert that a
+    /// non-resident operation left no orphaned key).
+    pub inspect_vfs: Option<InspectFsFn>,
 }
 
 impl Default for Options {
@@ -155,6 +161,7 @@ impl Default for Options {
             user_presence: Level::Normal,
             long_touch_for_reset: true,
             inspect_ifs: None,
+            inspect_vfs: None,
         }
     }
 }
@@ -313,15 +320,10 @@ impl HidDevice for Device<'_> {
     }
 }
 
-fn with_client<F, F2, T>(
-    files: &[(PathBuf, Vec<u8>)],
-    user_presence: Level,
-    f: F,
-    inspect_ifs: F2,
-) -> T
+fn with_client<F, F2, T>(files: &[(PathBuf, Vec<u8>)], user_presence: Level, f: F, inspect: F2) -> T
 where
     F: FnOnce(Client) -> T,
-    F2: FnOnce(&dyn DynFilesystem),
+    F2: FnOnce(&dyn DynFilesystem, &dyn DynFilesystem),
 {
     virt::with_platform(StoreConfig::ram(), |mut platform| {
         let ui: Box<dyn UserInterface + Send + Sync + 'static> = Box::new(TestUI { user_presence });
@@ -354,7 +356,7 @@ where
             f,
         );
 
-        inspect_ifs(ifs);
+        inspect(ifs, store.vfs());
 
         result
     })

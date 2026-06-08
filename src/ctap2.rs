@@ -399,240 +399,264 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             false => Location::Volatile,
         };
         let private_key = algorithm.generate_private_key(&mut self.trussed, location);
-        let cose_public_key = algorithm.derive_public_key(&mut self.trussed, private_key);
 
-        // 11.b CTAP 2.2 hmac-secret-mc: evaluate hmac-secret at MakeCredential
-        // time so the platform can capture salts atomically with credential
-        // creation. Same wire format as GA's hmac-secret output.
-        let hmac_secret_mc_output: Option<Bytes<80>> = if let Some(hmac_secret) =
-            hmac_secret_mc_input.as_ref()
-        {
-            let output =
-                self.process_hmac_secret_extension(false, hmac_secret, private_key, uv_performed)?;
-            Some(output)
-        } else {
-            None
-        };
+        // The credential key now exists in the keystore. Resident keys are
+        // persisted to `Location::Internal`, so every error path from here must
+        // delete the key, otherwise it is orphaned and leaks VFS space. Run the
+        // remainder in a closure so a single cleanup below covers all of its
+        // early returns.
+        let make_credential_result = (|| -> Result<()> {
+            let cose_public_key = algorithm.derive_public_key(&mut self.trussed, private_key);
 
-        // 12. if `rk` is set, store or overwrite key pair, if full error KeyStoreFull
-        let credential_id_version = self.state.persistent.credential_id_version();
-
-        // 12.a generate credential
-        let key_parameter = match rk_requested {
-            true => Key::ResidentKey(private_key),
-            false => {
-                // WrappedKey version
-                let wrapping_key = self.state.persistent.key_wrapping_key(&mut self.trussed)?;
-                credential_id_version.wrap_key(&mut self.trussed, wrapping_key, private_key)?
-            }
-        };
-
-        // injecting this is a bit mehhh..
-        let nonce = self.nonce();
-        info_now!("nonce = {:?}", &nonce);
-
-        // 12.b generate credential ID { = AEAD(Serialize(Credential)) }
-        let kek = self
-            .state
-            .persistent
-            .key_encryption_key(&mut self.trussed)?;
-
-        // store it.
-        // TODO: overwrite, error handling with KeyStoreFull
-
-        let large_blob_key = if large_blob_key_requested {
-            let key = syscall!(self.trussed.random_bytes(32)).bytes;
-            Some(ByteArray::new(key.as_slice().try_into().unwrap()))
-        } else {
-            None
-        };
-
-        let credential = FullCredential::new(
-            credential::CtapVersion::Fido21Pre,
-            &parameters.rp,
-            &parameters.user,
-            algorithm as i32,
-            key_parameter,
-            self.state.persistent.signature_counter(&mut self.trussed)?,
-            hmac_secret_requested,
-            cred_protect_requested,
-            large_blob_key,
-            third_party_payment_requested.then_some(true),
-            cred_blob_to_store.clone(),
-            nonce,
-        );
-
-        // note that this does the "stripping" of OptionalUI etc.
-        let credential_id = StrippedCredential::from(&credential).id(
-            &mut self.trussed,
-            credential_id_version,
-            kek,
-            &rp_id_hash,
-        )?;
-
-        if rk_requested {
-            // serialization with all metadata
-            let serialized_credential = credential.serialize()?;
-
-            // first delete any other RK cred with same RP + UserId if there is one.
-            self.delete_resident_key_by_user_id(&rp_id_hash, credential.user.id())
-                .ok();
-
-            let mut key_store_full = self.can_fit(serialized_credential.len()) == Some(false)
-                || CredentialManagement::new(self).count_credentials()?
-                    >= self
-                        .config
-                        .max_resident_credential_count
-                        .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE);
-
-            if !key_store_full {
-                // then store key, making it resident
-                let credential_id_hash = self.hash(credential_id.0.as_ref());
-                let result = try_syscall!(self.trussed.write_file(
-                    Location::Internal,
-                    rk_path(&rp_id_hash, &credential_id_hash),
-                    serialized_credential,
-                    // user attribute for later easy lookup
-                    // Some(rp_id_hash.clone()),
-                    None,
-                ));
-                key_store_full = result.is_err();
-            }
-
-            if key_store_full {
-                return Err(Error::KeyStoreFull);
-            }
-        }
-
-        // 13. generate and return attestation statement using clientDataHash
-
-        // 13.a AuthenticatorData and its serialization
-        use ctap2::AuthenticatorDataFlags as Flags;
-        info_now!("MC created cred id");
-
-        let (attestation_maybe, aaguid) = self.state.identity.attestation(&mut self.trussed);
-
-        let authenticator_data = ctap2::make_credential::AuthenticatorData {
-            rp_id_hash: &rp_id_hash,
-
-            flags: {
-                let mut flags = Flags::USER_PRESENCE;
-                if uv_performed {
-                    flags |= Flags::USER_VERIFIED;
-                }
-                if true {
-                    flags |= Flags::ATTESTED_CREDENTIAL_DATA;
-                }
-                if hmac_secret_requested.is_some()
-                    || cred_protect_requested.is_some()
-                    || cred_blob_requested
-                    || min_pin_length_to_emit.is_some()
-                    || hmac_secret_mc_output.is_some()
-                {
-                    flags |= Flags::EXTENSION_DATA;
-                }
-                flags
-            },
-
-            sign_count: credential.creation_time,
-
-            attested_credential_data: {
-                // debug_now!("acd in, cid len {}, pk len {}", credential_id.0.len(), cose_public_key.len());
-                let attested_credential_data = ctap2::make_credential::AttestedCredentialData {
-                    aaguid: &aaguid,
-                    credential_id: &credential_id.0,
-                    credential_public_key: &cose_public_key,
-                };
-                // debug_now!("cose PK = {:?}", &attested_credential_data.credential_public_key);
-                Some(attested_credential_data)
-            },
-
-            extensions: {
-                if hmac_secret_requested.is_some()
-                    || cred_protect_requested.is_some()
-                    || cred_blob_requested
-                    || min_pin_length_to_emit.is_some()
-                    || hmac_secret_mc_output.is_some()
-                {
-                    let mut extensions = ctap2::make_credential::ExtensionsOutput::default();
-                    extensions.cred_protect = parameters.extensions.as_ref().unwrap().cred_protect;
-                    extensions.hmac_secret = parameters.extensions.as_ref().unwrap().hmac_secret;
-                    if cred_blob_requested {
-                        // `Some(true)` if the platform-supplied blob fit in
-                        // `MAX_CRED_BLOB_LENGTH` and was stored, `Some(false)`
-                        // otherwise (CTAP 2.1 §11.1).
-                        extensions.cred_blob = Some(cred_blob_to_store.is_some());
-                    }
-                    extensions.min_pin_length = min_pin_length_to_emit;
-                    if let Some(out) = hmac_secret_mc_output {
-                        extensions.hmac_secret_mc = Some(out);
-                    }
-                    Some(extensions)
+            // 11.b CTAP 2.2 hmac-secret-mc: evaluate hmac-secret at MakeCredential
+            // time so the platform can capture salts atomically with credential
+            // creation. Same wire format as GA's hmac-secret output.
+            let hmac_secret_mc_output: Option<Bytes<80>> =
+                if let Some(hmac_secret) = hmac_secret_mc_input.as_ref() {
+                    let output = self.process_hmac_secret_extension(
+                        false,
+                        hmac_secret,
+                        private_key,
+                        uv_performed,
+                    )?;
+                    Some(output)
                 } else {
                     None
+                };
+
+            // 12. if `rk` is set, store or overwrite key pair, if full error KeyStoreFull
+            let credential_id_version = self.state.persistent.credential_id_version();
+
+            // 12.a generate credential
+            let key_parameter = match rk_requested {
+                true => Key::ResidentKey(private_key),
+                false => {
+                    // WrappedKey version
+                    let wrapping_key = self.state.persistent.key_wrapping_key(&mut self.trussed)?;
+                    credential_id_version.wrap_key(&mut self.trussed, wrapping_key, private_key)?
                 }
-            },
-        };
-        // debug_now!("authData = {:?}", &authenticator_data);
+            };
 
-        let serialized_auth_data = authenticator_data.serialize()?;
+            // injecting this is a bit mehhh..
+            let nonce = self.nonce();
+            info_now!("nonce = {:?}", &nonce);
 
-        // select attestation format or use packed attestation as default
-        let att_stmt_fmt = parameters
-            .attestation_formats_preference
-            .as_ref()
-            .map(SupportedAttestationFormat::select)
-            .unwrap_or(Some(SupportedAttestationFormat::Packed));
-        let att_stmt = if let Some(format) = att_stmt_fmt {
-            match format {
-                SupportedAttestationFormat::None => {
-                    Some(AttestationStatement::None(NoneAttestationStatement {}))
+            // 12.b generate credential ID { = AEAD(Serialize(Credential)) }
+            let kek = self
+                .state
+                .persistent
+                .key_encryption_key(&mut self.trussed)?;
+
+            // store it.
+            // TODO: overwrite, error handling with KeyStoreFull
+
+            let large_blob_key = if large_blob_key_requested {
+                let key = syscall!(self.trussed.random_bytes(32)).bytes;
+                Some(ByteArray::new(key.as_slice().try_into().unwrap()))
+            } else {
+                None
+            };
+
+            let credential = FullCredential::new(
+                credential::CtapVersion::Fido21Pre,
+                &parameters.rp,
+                &parameters.user,
+                algorithm as i32,
+                key_parameter,
+                self.state.persistent.signature_counter(&mut self.trussed)?,
+                hmac_secret_requested,
+                cred_protect_requested,
+                large_blob_key,
+                third_party_payment_requested.then_some(true),
+                cred_blob_to_store.clone(),
+                nonce,
+            );
+
+            // note that this does the "stripping" of OptionalUI etc.
+            let credential_id = StrippedCredential::from(&credential).id(
+                &mut self.trussed,
+                credential_id_version,
+                kek,
+                &rp_id_hash,
+            )?;
+
+            if rk_requested {
+                // serialization with all metadata
+                let serialized_credential = credential.serialize()?;
+
+                // first delete any other RK cred with same RP + UserId if there is one.
+                self.delete_resident_key_by_user_id(&rp_id_hash, credential.user.id())
+                    .ok();
+
+                let mut key_store_full = self.can_fit(serialized_credential.len()) == Some(false)
+                    || CredentialManagement::new(self).count_credentials()?
+                        >= self
+                            .config
+                            .max_resident_credential_count
+                            .unwrap_or(MAX_RESIDENT_CREDENTIALS_GUESSTIMATE);
+
+                if !key_store_full {
+                    // then store key, making it resident
+                    let credential_id_hash = self.hash(credential_id.0.as_ref());
+                    let result = try_syscall!(self.trussed.write_file(
+                        Location::Internal,
+                        rk_path(&rp_id_hash, &credential_id_hash),
+                        serialized_credential,
+                        // user attribute for later easy lookup
+                        // Some(rp_id_hash.clone()),
+                        None,
+                    ));
+                    key_store_full = result.is_err();
                 }
-                SupportedAttestationFormat::Packed => {
-                    let mut commitment = Bytes::<1024>::new();
-                    commitment
-                        .extend_from_slice(&serialized_auth_data)
-                        .map_err(|_| Error::Other)?;
-                    commitment
-                        .extend_from_slice(parameters.client_data_hash)
-                        .map_err(|_| Error::Other)?;
 
-                    let (attestation_key, attestation_algorithm) = attestation_maybe
-                        .as_ref()
-                        .map(|attestation| (attestation.0, SigningAlgorithm::P256))
-                        .unwrap_or((private_key, algorithm));
-                    let signature =
-                        attestation_algorithm.sign(&mut self.trussed, attestation_key, &commitment);
-                    let packed = PackedAttestationStatement {
-                        alg: attestation_algorithm.into(),
-                        sig: Bytes::try_from(&*signature).map_err(|_| Error::Other)?,
-                        x5c: attestation_maybe.as_ref().map(|attestation| {
-                            // See: https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation-cert-requirements
-                            let cert = attestation.1.clone();
-                            let mut x5c = Vec::new();
-                            x5c.push(cert).ok();
-                            x5c
-                        }),
-                    };
-                    Some(AttestationStatement::Packed(packed))
+                if key_store_full {
+                    return Err(Error::KeyStoreFull);
                 }
             }
-        } else {
-            None
-        };
 
-        if !rk_requested {
-            let _success = syscall!(self.trussed.delete(private_key)).success;
-            info_now!("deleted private credential key: {}", _success);
+            // 13. generate and return attestation statement using clientDataHash
+
+            // 13.a AuthenticatorData and its serialization
+            use ctap2::AuthenticatorDataFlags as Flags;
+            info_now!("MC created cred id");
+
+            let (attestation_maybe, aaguid) = self.state.identity.attestation(&mut self.trussed);
+
+            let authenticator_data = ctap2::make_credential::AuthenticatorData {
+                rp_id_hash: &rp_id_hash,
+
+                flags: {
+                    let mut flags = Flags::USER_PRESENCE;
+                    if uv_performed {
+                        flags |= Flags::USER_VERIFIED;
+                    }
+                    if true {
+                        flags |= Flags::ATTESTED_CREDENTIAL_DATA;
+                    }
+                    if hmac_secret_requested.is_some()
+                        || cred_protect_requested.is_some()
+                        || cred_blob_requested
+                        || min_pin_length_to_emit.is_some()
+                        || hmac_secret_mc_output.is_some()
+                    {
+                        flags |= Flags::EXTENSION_DATA;
+                    }
+                    flags
+                },
+
+                sign_count: credential.creation_time,
+
+                attested_credential_data: {
+                    // debug_now!("acd in, cid len {}, pk len {}", credential_id.0.len(), cose_public_key.len());
+                    let attested_credential_data = ctap2::make_credential::AttestedCredentialData {
+                        aaguid: &aaguid,
+                        credential_id: &credential_id.0,
+                        credential_public_key: &cose_public_key,
+                    };
+                    // debug_now!("cose PK = {:?}", &attested_credential_data.credential_public_key);
+                    Some(attested_credential_data)
+                },
+
+                extensions: {
+                    if hmac_secret_requested.is_some()
+                        || cred_protect_requested.is_some()
+                        || cred_blob_requested
+                        || min_pin_length_to_emit.is_some()
+                        || hmac_secret_mc_output.is_some()
+                    {
+                        let mut extensions = ctap2::make_credential::ExtensionsOutput::default();
+                        extensions.cred_protect =
+                            parameters.extensions.as_ref().unwrap().cred_protect;
+                        extensions.hmac_secret =
+                            parameters.extensions.as_ref().unwrap().hmac_secret;
+                        if cred_blob_requested {
+                            // `Some(true)` if the platform-supplied blob fit in
+                            // `MAX_CRED_BLOB_LENGTH` and was stored, `Some(false)`
+                            // otherwise (CTAP 2.1 §11.1).
+                            extensions.cred_blob = Some(cred_blob_to_store.is_some());
+                        }
+                        extensions.min_pin_length = min_pin_length_to_emit;
+                        if let Some(out) = hmac_secret_mc_output {
+                            extensions.hmac_secret_mc = Some(out);
+                        }
+                        Some(extensions)
+                    } else {
+                        None
+                    }
+                },
+            };
+            // debug_now!("authData = {:?}", &authenticator_data);
+
+            let serialized_auth_data = authenticator_data.serialize()?;
+
+            // select attestation format or use packed attestation as default
+            let att_stmt_fmt = parameters
+                .attestation_formats_preference
+                .as_ref()
+                .map(SupportedAttestationFormat::select)
+                .unwrap_or(Some(SupportedAttestationFormat::Packed));
+            let att_stmt = if let Some(format) = att_stmt_fmt {
+                match format {
+                    SupportedAttestationFormat::None => {
+                        Some(AttestationStatement::None(NoneAttestationStatement {}))
+                    }
+                    SupportedAttestationFormat::Packed => {
+                        let mut commitment = Bytes::<1024>::new();
+                        commitment
+                            .extend_from_slice(&serialized_auth_data)
+                            .map_err(|_| Error::Other)?;
+                        commitment
+                            .extend_from_slice(parameters.client_data_hash)
+                            .map_err(|_| Error::Other)?;
+
+                        let (attestation_key, attestation_algorithm) = attestation_maybe
+                            .as_ref()
+                            .map(|attestation| (attestation.0, SigningAlgorithm::P256))
+                            .unwrap_or((private_key, algorithm));
+                        let signature = attestation_algorithm.sign(
+                            &mut self.trussed,
+                            attestation_key,
+                            &commitment,
+                        );
+                        let packed = PackedAttestationStatement {
+                            alg: attestation_algorithm.into(),
+                            sig: Bytes::try_from(&*signature).map_err(|_| Error::Other)?,
+                            x5c: attestation_maybe.as_ref().map(|attestation| {
+                                // See: https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation-cert-requirements
+                                let cert = attestation.1.clone();
+                                let mut x5c = Vec::new();
+                                x5c.push(cert).ok();
+                                x5c
+                            }),
+                        };
+                        Some(AttestationStatement::Packed(packed))
+                    }
+                }
+            } else {
+                None
+            };
+
+            if !rk_requested {
+                let _success = syscall!(self.trussed.delete(private_key)).success;
+                info_now!("deleted private credential key: {}", _success);
+            }
+
+            response.fmt = att_stmt_fmt
+                .map(From::from)
+                .unwrap_or(AttestationStatementFormat::None);
+            response.auth_data = serialized_auth_data;
+            response.att_stmt = att_stmt;
+            response.large_blob_key = large_blob_key;
+            Ok(())
+        })();
+
+        // On success the credential was fully created (and any non-resident key
+        // was already deleted above). On any error, delete the now-orphaned key
+        // so it does not leak storage.
+        if make_credential_result.is_err() {
+            syscall!(self.trussed.delete(private_key));
         }
-
-        response.fmt = att_stmt_fmt
-            .map(From::from)
-            .unwrap_or(AttestationStatementFormat::None);
-        response.auth_data = serialized_auth_data;
-        response.att_stmt = att_stmt;
-        response.large_blob_key = large_blob_key;
-        Ok(())
+        make_credential_result
     }
 
     #[inline(never)]
@@ -2099,155 +2123,172 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             }
         };
 
-        // 8. process any extensions present
-        let mut large_blob_key_requested = false;
-        let extensions_output = if let Some(extensions) = &data.extensions {
-            if self.config.supports_large_blobs() {
-                if extensions.large_blob_key == Some(false) {
-                    // large_blob_key must be Some(true) or omitted
-                    return Err(Error::InvalidOption);
+        // For a non-resident credential `key` was just unwrapped into volatile
+        // storage; every error path below must delete it or it is orphaned and
+        // leaks storage. Run the rest in a closure so a single cleanup covers
+        // all early returns.
+        let assertion_result = (|| -> Result<()> {
+            // 8. process any extensions present
+            let mut large_blob_key_requested = false;
+            let extensions_output = if let Some(extensions) = &data.extensions {
+                if self.config.supports_large_blobs() {
+                    if extensions.large_blob_key == Some(false) {
+                        // large_blob_key must be Some(true) or omitted
+                        return Err(Error::InvalidOption);
+                    }
+                    large_blob_key_requested = extensions.large_blob_key == Some(true);
                 }
-                large_blob_key_requested = extensions.large_blob_key == Some(true);
+                self.process_assertion_extensions(&data, extensions, credential, key)?
+            } else {
+                None
+            };
+
+            // 9./10. sign clientDataHash || authData with "first" credential
+
+            // info_now!("signing with credential {:?}", &credential);
+            let kek = self
+                .state
+                .persistent
+                .key_encryption_key(&mut self.trussed)?;
+            let credential_id =
+                credential.id(&mut self.trussed, credential_id_version, kek, rp_id_hash)?;
+
+            use ctap2::AuthenticatorDataFlags as Flags;
+
+            let sig_count = self.state.persistent.signature_counter(&mut self.trussed)?;
+
+            let authenticator_data = ctap2::get_assertion::AuthenticatorData {
+                rp_id_hash,
+
+                flags: {
+                    let mut flags = Flags::empty();
+                    if data.up_performed {
+                        flags |= Flags::USER_PRESENCE;
+                    }
+                    if data.uv_performed {
+                        flags |= Flags::USER_VERIFIED;
+                    }
+                    if extensions_output.is_some() {
+                        flags |= Flags::EXTENSION_DATA;
+                    }
+                    flags
+                },
+
+                sign_count: sig_count,
+                attested_credential_data: None,
+                extensions: extensions_output,
+            };
+
+            let serialized_auth_data = authenticator_data.serialize()?;
+
+            let mut commitment = Bytes::<1024>::new();
+            commitment
+                .extend_from_slice(&serialized_auth_data)
+                .map_err(|_| Error::Other)?;
+            commitment
+                .extend_from_slice(&data.client_data_hash)
+                .map_err(|_| Error::Other)?;
+
+            let signing_algorithm =
+                SigningAlgorithm::try_from(credential.algorithm()).map_err(|_| Error::Other)?;
+            let signature =
+                Bytes::try_from(&*signing_algorithm.sign(&mut self.trussed, key, &commitment))
+                    .unwrap();
+
+            // select preferred format or skip attestation statement
+            let att_stmt_fmt = data
+                .attestation_formats_preference
+                .as_ref()
+                .and_then(SupportedAttestationFormat::select);
+            let att_stmt = if let Some(format) = att_stmt_fmt {
+                match format {
+                    SupportedAttestationFormat::None => {
+                        Some(AttestationStatement::None(NoneAttestationStatement {}))
+                    }
+                    SupportedAttestationFormat::Packed => {
+                        let (attestation_maybe, _) =
+                            self.state.identity.attestation(&mut self.trussed);
+                        let (signature, attestation_algorithm) = {
+                            if let Some(attestation) = attestation_maybe.as_ref() {
+                                let signing_algorithm = SigningAlgorithm::P256;
+                                let signature = signing_algorithm.sign(
+                                    &mut self.trussed,
+                                    attestation.0,
+                                    &commitment,
+                                );
+                                (
+                                    Bytes::try_from(&*signature).map_err(|_| Error::Other)?,
+                                    signing_algorithm.into(),
+                                )
+                            } else {
+                                (signature.clone(), credential.algorithm())
+                            }
+                        };
+                        let packed = PackedAttestationStatement {
+                            alg: attestation_algorithm,
+                            sig: signature,
+                            x5c: attestation_maybe.as_ref().map(|attestation| {
+                                // See: https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation-cert-requirements
+                                let cert = attestation.1.clone();
+                                let mut x5c = Vec::new();
+                                x5c.push(cert).ok();
+                                x5c
+                            }),
+                        };
+                        Some(AttestationStatement::Packed(packed))
+                    }
+                }
+            } else {
+                None
+            };
+
+            if !is_rk {
+                syscall!(self.trussed.delete(key));
             }
-            self.process_assertion_extensions(&data, extensions, credential, key)?
-        } else {
-            None
-        };
 
-        // 9./10. sign clientDataHash || authData with "first" credential
+            response.credential = credential_id.into();
+            response.auth_data = serialized_auth_data;
+            response.signature = signature;
+            response.number_of_credentials = num_credentials;
+            response.att_stmt = att_stmt;
 
-        // info_now!("signing with credential {:?}", &credential);
-        let kek = self
-            .state
-            .persistent
-            .key_encryption_key(&mut self.trussed)?;
-        let credential_id =
-            credential.id(&mut self.trussed, credential_id_version, kek, rp_id_hash)?;
-
-        use ctap2::AuthenticatorDataFlags as Flags;
-
-        let sig_count = self.state.persistent.signature_counter(&mut self.trussed)?;
-
-        let authenticator_data = ctap2::get_assertion::AuthenticatorData {
-            rp_id_hash,
-
-            flags: {
-                let mut flags = Flags::empty();
-                if data.up_performed {
-                    flags |= Flags::USER_PRESENCE;
-                }
-                if data.uv_performed {
-                    flags |= Flags::USER_VERIFIED;
-                }
-                if extensions_output.is_some() {
-                    flags |= Flags::EXTENSION_DATA;
-                }
-                flags
-            },
-
-            sign_count: sig_count,
-            attested_credential_data: None,
-            extensions: extensions_output,
-        };
-
-        let serialized_auth_data = authenticator_data.serialize()?;
-
-        let mut commitment = Bytes::<1024>::new();
-        commitment
-            .extend_from_slice(&serialized_auth_data)
-            .map_err(|_| Error::Other)?;
-        commitment
-            .extend_from_slice(&data.client_data_hash)
-            .map_err(|_| Error::Other)?;
-
-        let signing_algorithm =
-            SigningAlgorithm::try_from(credential.algorithm()).map_err(|_| Error::Other)?;
-        let signature =
-            Bytes::try_from(&*signing_algorithm.sign(&mut self.trussed, key, &commitment)).unwrap();
-
-        // select preferred format or skip attestation statement
-        let att_stmt_fmt = data
-            .attestation_formats_preference
-            .as_ref()
-            .and_then(SupportedAttestationFormat::select);
-        let att_stmt = if let Some(format) = att_stmt_fmt {
-            match format {
-                SupportedAttestationFormat::None => {
-                    Some(AttestationStatement::None(NoneAttestationStatement {}))
-                }
-                SupportedAttestationFormat::Packed => {
-                    let (attestation_maybe, _) = self.state.identity.attestation(&mut self.trussed);
-                    let (signature, attestation_algorithm) = {
-                        if let Some(attestation) = attestation_maybe.as_ref() {
-                            let signing_algorithm = SigningAlgorithm::P256;
-                            let signature = signing_algorithm.sign(
-                                &mut self.trussed,
-                                attestation.0,
-                                &commitment,
-                            );
-                            (
-                                Bytes::try_from(&*signature).map_err(|_| Error::Other)?,
-                                signing_algorithm.into(),
-                            )
-                        } else {
-                            (signature.clone(), credential.algorithm())
+            // User with empty IDs are ignored for compatibility
+            if is_rk {
+                if let Credential::Full(credential) = credential {
+                    if !credential.user.id().is_empty() {
+                        let mut user: PublicKeyCredentialUserEntity =
+                            credential.user.clone().into();
+                        // User identifiable information (name, DisplayName, icon) MUST not
+                        // be returned if user verification is not done by the authenticator.
+                        // For single account per RP case, authenticator returns "id" field.
+                        if !data.uv_performed || !data.multiple_credentials {
+                            user.icon = None;
+                            user.name = None;
+                            user.display_name = None;
                         }
+                        response.user = Some(user);
+                    }
+                }
+
+                if large_blob_key_requested {
+                    debug!("Sending largeBlobKey in getAssertion");
+                    response.large_blob_key = match credential {
+                        Credential::Stripped(stripped) => stripped.large_blob_key,
+                        Credential::Full(full) => full.data.large_blob_key,
                     };
-                    let packed = PackedAttestationStatement {
-                        alg: attestation_algorithm,
-                        sig: signature,
-                        x5c: attestation_maybe.as_ref().map(|attestation| {
-                            // See: https://www.w3.org/TR/webauthn-2/#sctn-packed-attestation-cert-requirements
-                            let cert = attestation.1.clone();
-                            let mut x5c = Vec::new();
-                            x5c.push(cert).ok();
-                            x5c
-                        }),
-                    };
-                    Some(AttestationStatement::Packed(packed))
                 }
             }
-        } else {
-            None
-        };
 
-        if !is_rk {
+            Ok(())
+        })();
+
+        // On error, delete the orphaned non-resident key (resident keys are
+        // owned by the stored credential and must be kept). On success it was
+        // already deleted above.
+        if assertion_result.is_err() && !is_rk {
             syscall!(self.trussed.delete(key));
         }
-
-        response.credential = credential_id.into();
-        response.auth_data = serialized_auth_data;
-        response.signature = signature;
-        response.number_of_credentials = num_credentials;
-        response.att_stmt = att_stmt;
-
-        // User with empty IDs are ignored for compatibility
-        if is_rk {
-            if let Credential::Full(credential) = credential {
-                if !credential.user.id().is_empty() {
-                    let mut user: PublicKeyCredentialUserEntity = credential.user.clone().into();
-                    // User identifiable information (name, DisplayName, icon) MUST not
-                    // be returned if user verification is not done by the authenticator.
-                    // For single account per RP case, authenticator returns "id" field.
-                    if !data.uv_performed || !data.multiple_credentials {
-                        user.icon = None;
-                        user.name = None;
-                        user.display_name = None;
-                    }
-                    response.user = Some(user);
-                }
-            }
-
-            if large_blob_key_requested {
-                debug!("Sending largeBlobKey in getAssertion");
-                response.large_blob_key = match credential {
-                    Credential::Stripped(stripped) => stripped.large_blob_key,
-                    Credential::Full(full) => full.data.large_blob_key,
-                };
-            }
-        }
-
-        Ok(())
+        assertion_result
     }
 
     #[inline(never)]

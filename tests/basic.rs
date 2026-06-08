@@ -862,6 +862,202 @@ fn test_make_credential_attestation_formats_preference() {
     }
 }
 
+/// Regression test: when `make_credential` fails *after* generating the
+/// credential key, that key must be deleted rather than orphaned in the
+/// keystore (resident keys are persisted to internal storage). The bug is in
+/// the shared key cleanup, not in any one feature, so this exercises several
+/// unrelated failure paths — two of which predate hmac-secret.
+///
+/// Invariant checked after each run: the keystore holds exactly one key per
+/// stored resident credential, plus the attestation key and the
+/// authenticator's key-encryption key. An orphaned key from a failed attempt
+/// would push the key count above this.
+#[test]
+fn test_make_credential_error_does_not_leak_key() {
+    use littlefs2::path::PathBuf;
+
+    fn rk_make_credential(user_id: &[u8]) -> MakeCredential {
+        let rp = Rp::new("example.com");
+        let user = User::new(user_id).name("john.doe").display_name("John Doe");
+        let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+        let mut request = MakeCredential::new([0; 32], rp, user, pub_key_cred_params);
+        request.options = Some(MakeCredentialOptions::default().rk(true));
+        request
+    }
+
+    fn assert_no_leak(
+        scenario: &'static str,
+        configure: impl FnOnce(&mut Options),
+        drive: impl FnOnce(&Ctap2) + Send,
+    ) {
+        let mut options = Options {
+            inspect_ifs: Some(Box::new(move |ifs| {
+                let mut files = list_fs(ifs);
+                let keys = files.try_remove_keys();
+                let rks = files.try_remove_rks();
+                assert_eq!(keys, rks + 2, "{scenario}: keys={keys} rks={rks}");
+            })),
+            ..Default::default()
+        };
+        configure(&mut options);
+        virt::run_ctap2_with_options(options, move |device| drive(&device));
+    }
+
+    // 1. KeyStoreFull via the resident-credential count limit (predates
+    //    hmac-secret). The baseline takes the only slot, so a second,
+    //    different-user credential fails after its key has been generated.
+    assert_no_leak(
+        "key store full (count limit)",
+        |options| options.max_resident_credential_count = Some(1),
+        |device| {
+            device
+                .exec(rk_make_credential(b"baseline"))
+                .expect("baseline make_credential should succeed");
+            assert!(device.exec(rk_make_credential(b"other")).is_err());
+        },
+    );
+
+    // 2. KeyStoreFull via a nearly-full filesystem — the `can_fit` path, also
+    //    predating hmac-secret. Create resident credentials until one is
+    //    rejected (its key still gets generated first).
+    assert_no_leak(
+        "key store full (filesystem)",
+        |options| {
+            for i in 0..80 {
+                let path = PathBuf::try_from(format!("/filler/{i}").as_str()).unwrap();
+                options.files.push((path, vec![0; 512]));
+            }
+        },
+        |device| {
+            let mut hit_full = false;
+            for i in 0..64u32 {
+                if device.exec(rk_make_credential(&i.to_le_bytes())).is_err() {
+                    hit_full = true;
+                    break;
+                }
+            }
+            assert!(hit_full, "expected the filesystem to fill up");
+        },
+    );
+
+    // 3. Invalid hmac-secret-mc (bad salt length): fails right after key
+    //    generation — just one of the ~dozen error paths the cleanup covers.
+    assert_no_leak(
+        "bad hmac-secret-mc",
+        |_| {},
+        |device| {
+            device
+                .exec(rk_make_credential(b"baseline"))
+                .expect("baseline make_credential should succeed");
+            let mut bad = rk_make_credential(b"other");
+            bad.extensions = Some(MakeCredentialExtensionsInput {
+                hmac_secret: Some(true),
+                hmac_secret_mc: Some(HmacSecretInput {
+                    key_agreement: KeyAgreementKey::generate().public_key(),
+                    salt_enc: vec![0; 5],
+                    salt_auth: [0; 32],
+                    pin_protocol: Some(2),
+                }),
+                ..Default::default()
+            });
+            assert!(device.exec(bad).is_err());
+        },
+    );
+
+    // 4. Non-resident (wrapped-key) path: a non-resident credential's key is
+    //    generated in `Location::Volatile` (see `ctap2.rs`), so a
+    //    make_credential that fails after key-gen must delete it from the VFS,
+    //    not the IFS. The scenarios above only exercise the resident (IFS) half;
+    //    this mirrors `test_get_assertion_error_does_not_leak_key` for the
+    //    make_credential side.
+    fn nonrk_make_credential(user_id: &[u8]) -> MakeCredential {
+        let mut request = rk_make_credential(user_id);
+        request.options = Some(MakeCredentialOptions::default().rk(false));
+        request
+    }
+    let options = Options {
+        inspect_vfs: Some(Box::new(|vfs| {
+            let keys = list_fs(vfs).try_remove_keys();
+            // Only the hmac-secret-mc session key-agreement key should remain;
+            // the non-resident credential key must have been deleted. A leak
+            // would make this 2.
+            assert_eq!(
+                keys, 1,
+                "make_credential leaked a volatile key: {keys} volatile key(s)"
+            );
+        })),
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        let mut bad = nonrk_make_credential(b"volatile");
+        bad.extensions = Some(MakeCredentialExtensionsInput {
+            hmac_secret: Some(true),
+            hmac_secret_mc: Some(HmacSecretInput {
+                key_agreement: KeyAgreementKey::generate().public_key(),
+                salt_enc: vec![0; 5],
+                salt_auth: [0; 32],
+                pin_protocol: Some(2),
+            }),
+            ..Default::default()
+        });
+        assert!(device.exec(bad).is_err());
+    });
+}
+
+/// Regression test for the get_assertion side of the leak: a non-resident
+/// credential's key is unwrapped into volatile storage, and a get_assertion
+/// that fails afterwards (here, an invalid hmac-secret) must not orphan that
+/// unwrapped key.
+#[test]
+fn test_get_assertion_error_does_not_leak_key() {
+    let options = Options {
+        inspect_vfs: Some(Box::new(|vfs| {
+            let keys = list_fs(vfs).try_remove_keys();
+            // The only volatile key left should be the session key-agreement
+            // key created while processing hmac-secret. The unwrapped
+            // credential key must have been deleted; if it leaked, this is 2.
+            assert_eq!(
+                keys, 1,
+                "get_assertion leaked an unwrapped key: {keys} volatile key(s)"
+            );
+        })),
+        ..Default::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        // A non-resident (wrapped-key) credential.
+        let rp = Rp::new("example.com");
+        let user = User::new(b"id123")
+            .name("john.doe")
+            .display_name("John Doe");
+        let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+        let request = MakeCredential::new([0; 32], rp, user, pub_key_cred_params);
+        let credential = device
+            .exec(request)
+            .expect("make_credential should succeed")
+            .auth_data
+            .credential
+            .expect("credential present");
+
+        // get_assertion with an invalid hmac-secret fails after the credential
+        // key has been unwrapped into volatile storage.
+        let mut request = GetAssertion::new("example.com", [0; 32]);
+        request.allow_list = Some(vec![PubKeyCredDescriptor::new("public-key", credential.id)]);
+        request.extensions = Some(GetAssertionExtensionsInput {
+            hmac_secret: Some(HmacSecretInput {
+                key_agreement: KeyAgreementKey::generate().public_key(),
+                salt_enc: vec![0; 5],
+                salt_auth: [0; 32],
+                pin_protocol: Some(2),
+            }),
+            ..Default::default()
+        });
+        assert!(
+            device.exec(request).is_err(),
+            "get_assertion was expected to fail"
+        );
+    });
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct ExhaustiveMakeCredentialExtensionsInput {
     hmac_secret: Option<bool>,
