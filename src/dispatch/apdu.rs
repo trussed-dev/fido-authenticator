@@ -1,5 +1,6 @@
 use apdu_app::Interface;
-use ctap_types::{serde::error::Error as SerdeError, Error};
+use cbor_smol::error::Error as SerdeError;
+use ctap_types::Error;
 use heapless::VecView;
 use iso7816::{command::CommandView, Status};
 

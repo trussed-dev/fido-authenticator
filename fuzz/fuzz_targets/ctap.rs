@@ -1,9 +1,9 @@
 #![no_main]
 
 use ctap_types::{
-    authenticator::Request,
     ctap1::Authenticator as _,
     ctap2::{Authenticator as _, Response},
+    Request,
 };
 use fido_authenticator::{Authenticator, Config, Conforming};
 use trussed::virt::StoreConfig;

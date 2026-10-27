@@ -5,20 +5,20 @@ use ctap_types::{
     ctap2::{
         self,
         client_pin::Permissions,
-        config::{MAX_MIN_PIN_LENGTH_RP_IDS, MAX_RP_ID_LENGTH},
+        config::{self, MAX_MIN_PIN_LENGTH_RP_IDS, MAX_RP_ID_LENGTH},
         get_assertion::HmacSecretInput,
         AttestationFormatsPreference, AttestationStatement, AttestationStatementFormat,
         Authenticator, NoneAttestationStatement, PackedAttestationStatement, VendorOperation,
     },
-    heapless::{String, Vec},
-    heapless_bytes::Bytes,
     sizes::{self, MAX_CRED_BLOB_LENGTH},
     webauthn::{
         FilteredPublicKeyCredentialParameters, KnownPublicKeyCredentialParameters,
-        PublicKeyCredentialUserEntity, ED_DSA, ES256,
+        PublicKeyCredentialUserEntity,
     },
     ByteArray, Error,
 };
+use heapless::{String, Vec};
+use heapless_bytes::Bytes;
 use littlefs2_core::{path, Path, PathBuf};
 use sha2::{Digest as _, Sha256};
 use subtle::ConstantTimeEq as _;
@@ -129,10 +129,10 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let mut algorithms = Vec::new();
         algorithms
-            .push(KnownPublicKeyCredentialParameters { alg: ES256 })
+            .push(KnownPublicKeyCredentialParameters::ES256)
             .unwrap();
         algorithms
-            .push(KnownPublicKeyCredentialParameters { alg: ED_DSA })
+            .push(KnownPublicKeyCredentialParameters::EdDSA)
             .unwrap();
         let algorithms = FilteredPublicKeyCredentialParameters(algorithms);
 
@@ -141,7 +141,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         let mut response = ctap2::get_info::Response::default();
         response.versions = versions;
         response.extensions = Some(extensions);
-        response.aaguid = Bytes::from(&aaguid);
+        response.aaguid = aaguid.into();
         response.options = Some(options);
         response.transports = Some(transports);
         // 1200
@@ -171,10 +171,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
         //   0x03 setMinPINLength         (CTAP 2.3 §6.11.4)
         //   0x04 enableLongTouchForReset (CTAP 2.3 §6.11.5)
         let mut cfg_cmds = Vec::new();
-        cfg_cmds.push(0x02).unwrap();
-        cfg_cmds.push(0x03).unwrap();
+        cfg_cmds.push(config::Subcommand::ToggleAlwaysUv).unwrap();
+        cfg_cmds.push(config::Subcommand::SetMinPINLength).unwrap();
         if self.config.long_touch_for_reset {
-            cfg_cmds.push(0x04).unwrap();
+            cfg_cmds
+                .push(config::Subcommand::EnableLongTouchForReset)
+                .unwrap();
         }
         response.authenticator_config_commands = Some(cfg_cmds);
         response
@@ -275,15 +277,15 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
 
         let mut algorithm: Option<SigningAlgorithm> = None;
         for param in parameters.pub_key_cred_params.0.iter() {
-            match param.alg {
-                -7 =>
+            match param {
+                KnownPublicKeyCredentialParameters::ES256 =>
                 {
                     #[allow(clippy::collapsible_match)]
                     if algorithm.is_none() {
                         algorithm = Some(SigningAlgorithm::P256);
                     }
                 }
-                -8 => {
+                KnownPublicKeyCredentialParameters::EdDSA => {
                     algorithm = Some(SigningAlgorithm::Ed25519);
                 }
                 _ => {}
@@ -1809,7 +1811,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                     | Subcommand::UpdateUserInformation => {
                         data.resize_to_capacity();
                         // ble, need to reserialize
-                        ctap_types::serde::cbor_serialize(
+                        cbor_smol::cbor_serialize(
                             &parameters
                                 .sub_command_params
                                 .as_ref()

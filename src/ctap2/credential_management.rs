@@ -403,11 +403,11 @@ where
         let cose_public_key = algorithm.derive_public_key(&mut self.trussed, private_key);
         let cose_public_key = match algorithm {
             SigningAlgorithm::P256 => {
-                PublicKey::P256Key(ctap_types::serde::cbor_deserialize(&cose_public_key).unwrap())
+                PublicKey::P256Key(cbor_smol::cbor_deserialize(&cose_public_key).unwrap())
             }
-            SigningAlgorithm::Ed25519 => PublicKey::Ed25519Key(
-                ctap_types::serde::cbor_deserialize(&cose_public_key).unwrap(),
-            ),
+            SigningAlgorithm::Ed25519 => {
+                PublicKey::Ed25519Key(cbor_smol::cbor_deserialize(&cose_public_key).unwrap())
+            }
         };
         let cred_protect = match credential.cred_protect {
             Some(x) => Some(x),
