@@ -1,6 +1,7 @@
 use cosey::EcdhEsHkdf256PublicKey;
 use ctap_types::{ctap2::client_pin::Permissions, Error, Result};
 use heapless::String;
+use subtle::ConstantTimeEq as _;
 use trussed_core::{
     mechanisms::{HmacSha256, P256},
     syscall, try_syscall,
@@ -270,7 +271,7 @@ impl<'a, T: CryptoClient + HkdfClient + HmacSha256 + P256> PinProtocol<'a, T> {
             PinProtocolVersion::V1 => &actual_signature[..16],
             PinProtocolVersion::V2 => &actual_signature,
         };
-        expected_signature == signature
+        expected_signature.ct_eq(signature).into()
     }
 
     // in spec: verify(pinUvAuthToken, ...)

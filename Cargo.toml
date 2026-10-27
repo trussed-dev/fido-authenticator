@@ -23,6 +23,7 @@ serde = { version = "1.0", default-features = false }
 serde_bytes = { version = "0.11.14", default-features = false }
 serde-indexed = "0.1"
 sha2 = { version = "0.10", default-features = false }
+subtle = { version = "2.6", default-features = false }
 trussed-chunked = { version = "0.3", optional = true }
 trussed-core = { version = "0.2.2", features = ["aes256-cbc", "certificate-client", "chacha8-poly1305", "crypto-client", "ed255", "filesystem-client", "hmac-sha256", "management-client", "p256", "sha256", "ui-client"] }
 trussed-fs-info = "0.3"

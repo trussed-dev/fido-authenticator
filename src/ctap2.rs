@@ -21,6 +21,7 @@ use ctap_types::{
 };
 use littlefs2_core::{path, Path, PathBuf};
 use sha2::{Digest as _, Sha256};
+use subtle::ConstantTimeEq as _;
 
 use trussed_core::{
     syscall, try_syscall,
@@ -972,10 +973,12 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
                 // set — same-PIN change with the flag clear is allowed.
                 let new_pin_hash_32 = syscall!(self.trussed.hash_sha256(&new_pin)).hash;
                 let new_pin_hash: [u8; 16] = new_pin_hash_32[..16].try_into().unwrap();
-                if self.state.persistent.force_pin_change()
-                    && self.state.persistent.pin_hash() == Some(new_pin_hash)
-                {
-                    return Err(Error::PinPolicyViolation);
+                if self.state.persistent.force_pin_change() {
+                    if let Some(pin_hash) = self.state.persistent.pin_hash() {
+                        if pin_hash.ct_eq(&new_pin_hash).into() {
+                            return Err(Error::PinPolicyViolation);
+                        }
+                    }
                 }
 
                 // 9. store hashed PIN + PINCodePointLength
@@ -1695,7 +1698,8 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
             }
         };
 
-        if pin_hash != stored_pin_hash {
+        let pin_matches = bool::from(pin_hash.ct_eq(&stored_pin_hash));
+        if !pin_matches {
             // I) generate new KEK
             self.pin_protocol(pin_protocol).regenerate();
             self.state.pin_blocked()?;
