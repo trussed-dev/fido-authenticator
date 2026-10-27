@@ -37,6 +37,10 @@ impl<'a> Authenticator<'a, NoPin> {
         request.new_pin_enc = Some(pin_enc);
         request.pin_auth = Some(pin_auth);
         self.ctap2.exec(request).unwrap();
+        self.assume_pin(pin)
+    }
+
+    pub fn assume_pin(self, pin: &[u8]) -> Authenticator<'a, Pin> {
         Authenticator {
             ctap2: self.ctap2,
             key_agreement_key: self.key_agreement_key,
@@ -46,7 +50,11 @@ impl<'a> Authenticator<'a, NoPin> {
     }
 }
 
-impl<P: PinState> Authenticator<'_, P> {
+impl<'a, P: PinState> Authenticator<'a, P> {
+    pub fn release(self) -> Ctap2<'a> {
+        self.ctap2
+    }
+
     fn shared_secret(&mut self) -> &SharedSecret {
         self.shared_secret.get_or_insert_with(|| {
             let reply = self.ctap2.exec(ClientPin::new(2, 2)).unwrap();
@@ -130,7 +138,9 @@ impl Authenticator<'_, Pin> {
         // TODO: check RP ID hash
         let total_rps = reply.total_rps.unwrap();
         let mut rps = Vec::with_capacity(total_rps);
-        rps.push(reply.rp.unwrap().into());
+        if total_rps > 0 {
+            rps.push(reply.rp.unwrap().into());
+        }
 
         for _ in 1..total_rps {
             let request = CredentialManagement::new(0x03);

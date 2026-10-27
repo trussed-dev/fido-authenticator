@@ -272,7 +272,7 @@ impl From<Value> for ClientPinReply {
     }
 }
 
-#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Rp {
     pub id: String,
     pub name: Option<String>,
