@@ -1046,6 +1046,7 @@ pub struct GetInfoReply {
     pub transports: Option<Vec<String>>,
     pub force_pin_change: Option<bool>,
     pub min_pin_length: Option<u32>,
+    pub firmware_version: Option<usize>,
     pub attestation_formats: Option<Vec<String>>,
     pub long_touch_for_reset: Option<bool>,
 }
@@ -1066,6 +1067,7 @@ impl From<Value> for GetInfoReply {
             force_pin_change: map.remove(&0x0C).map(|value| value.deserialized().unwrap()),
             // 0x0D: minPINLength (CTAP 2.1)
             min_pin_length: map.remove(&0x0D).map(|value| value.deserialized().unwrap()),
+            firmware_version: map.remove(&0x0e).map(|value| value.deserialized().unwrap()),
             attestation_formats: map.remove(&0x16).map(|value| value.deserialized().unwrap()),
             // 0x18: longTouchForReset (CTAP 2.3)
             long_touch_for_reset: map.remove(&0x18).map(|value| value.deserialized().unwrap()),

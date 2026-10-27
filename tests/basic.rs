@@ -10,6 +10,7 @@ use std::{
 };
 
 use ciborium::Value;
+use fido_authenticator::FirmwareVersion;
 use hex_literal::hex;
 use rand::RngCore as _;
 use trussed_core::types::consent::Level;
@@ -91,6 +92,62 @@ fn test_get_info() {
         assert_eq!(reply.pin_protocols, Some(vec![2, 1]));
         assert_eq!(reply.attestation_formats, Some(vec!["packed".to_owned()]));
     });
+}
+
+#[test]
+fn test_get_info_firmware_version_none() {
+    let options = Options {
+        firmware_version: None,
+        ..Options::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        let reply = device.exec(GetInfo).unwrap();
+        assert_eq!(reply.firmware_version, None);
+    });
+}
+
+#[test]
+fn test_get_info_firmware_version_default() {
+    let options = Options {
+        firmware_version: Some(FirmwareVersion::new(42)),
+        ..Options::default()
+    };
+    virt::run_ctap2_with_options(options, |device| {
+        let reply = device.exec(GetInfo).unwrap();
+        assert_eq!(reply.firmware_version, Some(42));
+    });
+}
+
+#[test]
+fn test_get_info_firmware_version_dynamic() {
+    let firmware_version = FirmwareVersion {
+        default: 42,
+        credential_id_v1: Some(43),
+        #[cfg(feature = "credential-id-format-v2")]
+        credential_id_v2: Some(44),
+    };
+
+    let data = [
+        (CredentialIdVersion::V1, 43),
+        #[cfg(feature = "credential-id-format-v2")]
+        (CredentialIdVersion::V2, 44),
+    ];
+
+    for (credential_id_version, expected) in data {
+        let options = Options {
+            firmware_version: Some(firmware_version),
+            user_presence: Level::Strong,
+            credential_id_version,
+            ..Options::default()
+        };
+        virt::run_ctap2_with_options(options, |device| {
+            let reply = device.exec(GetInfo).unwrap();
+            assert_eq!(reply.firmware_version, Some(expected));
+            device.exec(Reset).unwrap();
+            let reply = device.exec(GetInfo).unwrap();
+            assert_eq!(reply.firmware_version, Some(expected));
+        });
+    }
 }
 
 fn get_shared_secret(device: &Ctap2, platform_key_agreement: &KeyAgreementKey) -> SharedSecret {

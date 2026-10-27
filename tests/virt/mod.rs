@@ -19,7 +19,7 @@ use ctaphid::{
     HidDevice, HidDeviceInfo,
 };
 use ctaphid_dispatch::{Channel, Dispatch, Requester, DEFAULT_MESSAGE_SIZE};
-use fido_authenticator::{Authenticator, Config, Conforming};
+use fido_authenticator::{Authenticator, Config, Conforming, FirmwareVersion};
 use littlefs2::{object_safe::DynFilesystem, path, path::PathBuf};
 use rand::{
     distributions::{Distribution, Uniform},
@@ -75,7 +75,7 @@ where
                 large_blobs: None,
                 nfc_transport: options.nfc_transport,
                 ccid_transport: options.ccid_transport,
-                firmware_version: Some(0.into()),
+                firmware_version: options.firmware_version,
                 credential_id_version: Some(options.credential_id_version.into()),
                 long_touch_for_reset: options.long_touch_for_reset,
                 fido2_up_timeout: Some(100),
@@ -148,6 +148,7 @@ pub struct Options {
     /// Sets `Config::long_touch_for_reset` (default `true`).
     pub long_touch_for_reset: bool,
     pub credential_id_version: CredentialIdVersion,
+    pub firmware_version: Option<FirmwareVersion>,
     pub inspect_ifs: Option<InspectFsFn>,
     /// Inspect the volatile filesystem after the run (e.g. to assert that a
     /// non-resident operation left no orphaned key).
@@ -164,6 +165,7 @@ impl Default for Options {
             user_presence: Level::Normal,
             long_touch_for_reset: true,
             credential_id_version: CredentialIdVersion::V1,
+            firmware_version: Some(FirmwareVersion::new(0)),
             inspect_ifs: None,
             inspect_vfs: None,
         }
