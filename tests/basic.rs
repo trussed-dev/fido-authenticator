@@ -3695,3 +3695,54 @@ fn test_get_assertion_empty_rp_id_rejected() {
         assert_eq!(result, Err(Ctap2Error(0x14)));
     })
 }
+
+// Verify that calling commands with a bad PIN auth does not decrement the PIN retry counter.
+#[test]
+fn test_bad_pin_auth_retries() {
+    const ERR_PIN_AUTH_INVALID: u8 = 0x33;
+    let client_data_hash = &[0; 32];
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    let pin_auth = [0; 32];
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+
+        assert_eq!(get_pin_retries(&device), 8);
+
+        let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+        let mut request = MakeCredential::new(
+            client_data_hash,
+            Rp::new("example.com"),
+            User::new(b"id123"),
+            pub_key_cred_params,
+        );
+        request.pin_auth = Some(pin_auth);
+        request.pin_protocol = Some(2);
+        assert_eq!(device.exec(request), Err(Ctap2Error(ERR_PIN_AUTH_INVALID)));
+
+        assert_eq!(get_pin_retries(&device), 8);
+
+        let mut request = ClientPin::new(2, 4);
+        request.key_agreement = Some(key_agreement_key.public_key());
+        request.pin_hash_enc = Some(Vec::new());
+        request.new_pin_enc = Some(Vec::new());
+        request.pin_auth = Some(pin_auth);
+        assert_eq!(
+            device.exec(request).err(),
+            Some(Ctap2Error(ERR_PIN_AUTH_INVALID))
+        );
+
+        assert_eq!(get_pin_retries(&device), 8);
+
+        let mut request = CredentialManagement::new(0x01);
+        request.pin_protocol = Some(2);
+        request.pin_auth = Some(pin_auth);
+        assert_eq!(
+            device.exec(request).err(),
+            Some(Ctap2Error(ERR_PIN_AUTH_INVALID))
+        );
+
+        assert_eq!(get_pin_retries(&device), 8);
+    });
+}

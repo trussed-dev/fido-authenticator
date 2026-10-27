@@ -1828,23 +1828,11 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
                     .ok_or(Error::MissingParameter)?;
 
                 let mut pin_protocol = self.pin_protocol(pin_protocol);
-                if let Ok(pin_token) = pin_protocol.verify_pin_token(&data[..len], pin_auth) {
-                    info_now!("passed pinauth");
-                    pin_token.require_permissions(Permissions::CREDENTIAL_MANAGEMENT)?;
-                    pin_token.require_valid_for_rp(rp_scope)?;
-                    Ok(())
-                } else {
-                    info_now!("failed pinauth!");
-                    self.state.decrement_retries(&mut self.trussed)?;
-                    let maybe_blocked = self.state.pin_blocked();
-                    if maybe_blocked.is_err() {
-                        info_now!("blocked");
-                        maybe_blocked
-                    } else {
-                        info_now!("pinAuthInvalid");
-                        Err(Error::PinAuthInvalid)
-                    }
-                }
+                let pin_token = pin_protocol.verify_pin_token(&data[..len], pin_auth)?;
+                info_now!("passed pinauth");
+                pin_token.require_permissions(Permissions::CREDENTIAL_MANAGEMENT)?;
+                pin_token.require_valid_for_rp(rp_scope)?;
+                Ok(())
             }
 
             // don't need the PIN auth, they're continuations
