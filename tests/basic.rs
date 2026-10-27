@@ -8,6 +8,7 @@ pub mod webauthn;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
+    time::Duration,
 };
 
 use ciborium::Value;
@@ -70,9 +71,11 @@ macro_rules! run_tests {
     }}
 }
 
+const ERR_PIN_AUTH_INVALID: Ctap2Error = Ctap2Error(0x33);
+
 #[test]
 fn test_ping() {
-    virt::run_ctaphid(|device| {
+    virt::run_ctaphid(|device, _| {
         device.ping(&[0xf1, 0xd0]).unwrap();
     });
 }
@@ -483,6 +486,123 @@ fn test_get_pin_token_no_pin() {
         // TODO: review if this is the correct error code
         assert_eq!(result, Err(Ctap2Error(0x35)));
     })
+}
+
+fn test_pin_token_timeout(timeout1: Duration, err1: bool, timeout2: Duration, err2: bool) {
+    let client_data_hash = b"";
+    let key_agreement_key = KeyAgreementKey::generate();
+    let rp = Rp::new("example.com");
+    let user = User::new(b"test");
+    let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+    let pin = b"123456";
+
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+
+        let pin_token =
+            get_pin_token(&device, &key_agreement_key, &shared_secret, pin, 0x01, None).unwrap();
+        let pin_auth = pin_token.authenticate(client_data_hash);
+
+        device.uptime_offset().add(timeout1);
+
+        let mut request = MakeCredential::new(
+            client_data_hash,
+            rp.clone(),
+            user.clone(),
+            pub_key_cred_params.clone(),
+        );
+        request.pin_auth = Some(pin_auth);
+        request.pin_protocol = Some(2);
+        if err1 {
+            assert_eq!(device.exec(request), Err(ERR_PIN_AUTH_INVALID));
+        } else {
+            device.exec(request).unwrap();
+        }
+
+        device.uptime_offset().add(timeout2);
+
+        let mut request =
+            MakeCredential::new(client_data_hash, rp, user, pub_key_cred_params.clone());
+        request.pin_auth = Some(pin_auth);
+        request.pin_protocol = Some(2);
+        if err2 {
+            assert_eq!(device.exec(request), Err(ERR_PIN_AUTH_INVALID));
+        } else {
+            device.exec(request).unwrap();
+        }
+    });
+}
+
+#[test]
+fn test_pin_token_timeout_ok() {
+    test_pin_token_timeout(
+        Duration::from_secs(10),
+        false,
+        Duration::from_secs(5 * 60),
+        false,
+    );
+}
+
+#[test]
+fn test_pin_token_timeout_initial() {
+    test_pin_token_timeout(
+        Duration::from_secs(60),
+        true,
+        Duration::from_secs(5 * 60),
+        true,
+    );
+}
+
+#[test]
+fn test_pin_token_timeout_max() {
+    test_pin_token_timeout(
+        Duration::from_secs(10),
+        false,
+        Duration::from_secs(10 * 60),
+        true,
+    );
+}
+
+// This test ensures that an invalid pinAuth value does not count as a usage with regard to the
+// initial usage timer.
+#[test]
+fn test_pin_token_timeout_invalid_pin_auth() {
+    let client_data_hash = b"";
+    let key_agreement_key = KeyAgreementKey::generate();
+    let rp = Rp::new("example.com");
+    let user = User::new(b"test");
+    let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+    let pin = b"123456";
+
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+
+        let pin_token =
+            get_pin_token(&device, &key_agreement_key, &shared_secret, pin, 0x01, None).unwrap();
+        let pin_auth = pin_token.authenticate(client_data_hash);
+
+        device.uptime_offset().add(Duration::from_secs(10));
+
+        let mut request = MakeCredential::new(
+            client_data_hash,
+            rp.clone(),
+            user.clone(),
+            pub_key_cred_params.clone(),
+        );
+        request.pin_auth = Some([0; 32]);
+        request.pin_protocol = Some(2);
+        assert_eq!(device.exec(request), Err(ERR_PIN_AUTH_INVALID));
+
+        device.uptime_offset().add(Duration::from_secs(30));
+
+        let mut request =
+            MakeCredential::new(client_data_hash, rp, user, pub_key_cred_params.clone());
+        request.pin_auth = Some(pin_auth);
+        request.pin_protocol = Some(2);
+        assert_eq!(device.exec(request), Err(ERR_PIN_AUTH_INVALID));
+    });
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3705,7 +3825,6 @@ fn test_get_assertion_empty_rp_id_rejected() {
 // Verify that calling commands with a bad PIN auth does not decrement the PIN retry counter.
 #[test]
 fn test_bad_pin_auth_retries() {
-    const ERR_PIN_AUTH_INVALID: u8 = 0x33;
     let client_data_hash = &[0; 32];
     let key_agreement_key = KeyAgreementKey::generate();
     let pin = b"123456";
@@ -3725,7 +3844,7 @@ fn test_bad_pin_auth_retries() {
         );
         request.pin_auth = Some(pin_auth);
         request.pin_protocol = Some(2);
-        assert_eq!(device.exec(request), Err(Ctap2Error(ERR_PIN_AUTH_INVALID)));
+        assert_eq!(device.exec(request), Err(ERR_PIN_AUTH_INVALID));
 
         assert_eq!(get_pin_retries(&device), 8);
 
@@ -3734,20 +3853,14 @@ fn test_bad_pin_auth_retries() {
         request.pin_hash_enc = Some(Vec::new());
         request.new_pin_enc = Some(Vec::new());
         request.pin_auth = Some(pin_auth);
-        assert_eq!(
-            device.exec(request).err(),
-            Some(Ctap2Error(ERR_PIN_AUTH_INVALID))
-        );
+        assert_eq!(device.exec(request).err(), Some(ERR_PIN_AUTH_INVALID));
 
         assert_eq!(get_pin_retries(&device), 8);
 
         let mut request = CredentialManagement::new(0x01);
         request.pin_protocol = Some(2);
         request.pin_auth = Some(pin_auth);
-        assert_eq!(
-            device.exec(request).err(),
-            Some(Ctap2Error(ERR_PIN_AUTH_INVALID))
-        );
+        assert_eq!(device.exec(request).err(), Some(ERR_PIN_AUTH_INVALID));
 
         assert_eq!(get_pin_retries(&device), 8);
     });

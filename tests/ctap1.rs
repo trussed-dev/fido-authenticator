@@ -17,7 +17,7 @@ use virt::Options;
 
 #[test]
 fn test_version() {
-    virt::run_ctaphid(|device| {
+    virt::run_ctaphid(|device, _| {
         let response = version(&device);
         assert_eq!(response, b"U2F_V2".as_slice());
     })
@@ -25,7 +25,7 @@ fn test_version() {
 
 #[test]
 fn test_authenticate() {
-    virt::run_ctaphid(|device| {
+    virt::run_ctaphid(|device, _| {
         let challenge = &hex!("4142d21c00d94ffb9d504ada8f99b721f4b191ae4e37ca0140f696b6983cfacb");
         let application = &hex!("f0e6a6a97042a4f1f1c87f5f7d44315b2d852c2df5c7991cc66241bf7072d1c4");
         let register = register(&device, challenge, application);
@@ -59,7 +59,7 @@ fn test_authenticate() {
 
 #[test]
 fn test_authenticate_wrong_application() {
-    virt::run_ctaphid(|device| {
+    virt::run_ctaphid(|device, _| {
         let challenge = &hex!("4142d21c00d94ffb9d504ada8f99b721f4b191ae4e37ca0140f696b6983cfacb");
         let mut application =
             hex!("f0e6a6a97042a4f1f1c87f5f7d44315b2d852c2df5c7991cc66241bf7072d1c4");
@@ -78,7 +78,7 @@ fn test_authenticate_wrong_application() {
 
 #[test]
 fn test_authenticate_wrong_keyhandle() {
-    virt::run_ctaphid(|device| {
+    virt::run_ctaphid(|device, _| {
         let challenge = &hex!("4142d21c00d94ffb9d504ada8f99b721f4b191ae4e37ca0140f696b6983cfacb");
         let application = &hex!("f0e6a6a97042a4f1f1c87f5f7d44315b2d852c2df5c7991cc66241bf7072d1c4");
         let mut register = register(&device, challenge, application);
@@ -115,7 +115,7 @@ fn test_authenticate_upgrade() {
         ..Default::default()
     };
 
-    virt::run_ctaphid_with_options(options, |device| {
+    virt::run_ctaphid_with_options(options, |device, _| {
         let application = &hex!("f0e6a6a97042a4f1f1c87f5f7d44315b2d852c2df5c7991cc66241bf7072d1c4");
         let keyhandle = hex!("A3005878B3F2499ACECB2C08F437DEF0F41929BD4DCFBCA7D43E893B18799BA61F6D84A36EAFCB87D9E833AEA1FE68BABD27A4B89C83C32EC25B092D915D9EA207ECA4BDE5A06E3CDCCFE0E93600AC28A6A8A61E4A1C6881C67E252F00425672427CFC59463B097364F45FD050F8E6BE1C6CD45C1F7D9B5732E334A8014C533D8BF37EEF0D8D7D16B6DF025055B1A6492F5607139EF420D47051A5F3");
         let user_key = &hex!("04AE6B38AE33494A3A58A9FED8A1C5DA2683F510A69B9DE4D8849648485ECDCC21918E6124F6E0B71E7B3C5D92F08EC38D3161E236FF72743923141E97089AA2C4");

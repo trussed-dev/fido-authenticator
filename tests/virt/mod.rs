@@ -30,7 +30,7 @@ use trussed::{
     platform::{Platform as _, UserInterface},
     store::Store as _,
     types::ui::Status,
-    virt::{self, StoreConfig},
+    virt::{self, StoreConfig, UptimeOffset},
 };
 use trussed_core::types::{consent::Level, reboot::To};
 use trussed_staging::virt::{BackendIds, Client, Dispatcher};
@@ -47,7 +47,7 @@ static INIT_LOGGER: Once = Once::new();
 
 pub fn run_ctaphid<F, T>(f: F) -> T
 where
-    F: FnOnce(ctaphid::Device<Device>) -> T + Send,
+    F: FnOnce(ctaphid::Device<Device>, UptimeOffset) -> T + Send,
     T: Send,
 {
     run_ctaphid_with_options(Default::default(), f)
@@ -55,7 +55,7 @@ where
 
 pub fn run_ctaphid_with_options<F, T>(options: Options, f: F) -> T
 where
-    F: FnOnce(ctaphid::Device<Device>) -> T + Send,
+    F: FnOnce(ctaphid::Device<Device>, UptimeOffset) -> T + Send,
     T: Send,
 {
     INIT_LOGGER.call_once(|| {
@@ -67,7 +67,7 @@ where
     with_client(
         &files,
         options.user_presence,
-        |client| {
+        |client, uptime_offset| {
             let config = Config {
                 max_msg_size: 0,
                 skip_up_timeout: None,
@@ -99,7 +99,7 @@ where
                 let runner = s.spawn(move || {
                     let device = Device::new(rq);
                     let device = ctaphid::Device::new(device, DeviceInfo).unwrap();
-                    f(device)
+                    f(device, uptime_offset)
                 });
 
                 let result = runner.join();
@@ -124,7 +124,12 @@ where
     F: FnOnce(Ctap2) -> T + Send,
     T: Send,
 {
-    run_ctaphid(|device| f(Ctap2(device)))
+    run_ctaphid(|device, uptime_offset| {
+        f(Ctap2 {
+            device,
+            uptime_offset,
+        })
+    })
 }
 
 pub fn run_ctap2_with_options<F, T>(options: Options, f: F) -> T
@@ -132,7 +137,12 @@ where
     F: FnOnce(Ctap2) -> T + Send,
     T: Send,
 {
-    run_ctaphid_with_options(options, |device| f(Ctap2(device)))
+    run_ctaphid_with_options(options, |device, uptime_offset| {
+        f(Ctap2 {
+            device,
+            uptime_offset,
+        })
+    })
 }
 
 pub type InspectFsFn = Box<dyn Fn(&dyn DynFilesystem)>;
@@ -227,7 +237,10 @@ impl UserInterface for TestUI {
     }
 }
 
-pub struct Ctap2<'a>(ctaphid::Device<Device<'a>>);
+pub struct Ctap2<'a> {
+    device: ctaphid::Device<Device<'a>>,
+    uptime_offset: UptimeOffset,
+}
 
 impl Ctap2<'_> {
     /// Send a raw CTAP1 (U2F) APDU and return the response body / SW
@@ -236,7 +249,7 @@ impl Ctap2<'_> {
     /// "disable U2F" path, where toggling `alwaysUv` requires CTAP2 but
     /// the side effect is observable on the U2F dispatch).
     pub fn ctap1(&self, apdu: &[u8]) -> Result<Vec<u8>, u16> {
-        let mut response = self.0.ctap1(apdu).unwrap();
+        let mut response = self.device.ctap1(apdu).unwrap();
         let low = response.pop().unwrap();
         let high = response.pop().unwrap();
         let status = u16::from_be_bytes([high, low]);
@@ -245,6 +258,10 @@ impl Ctap2<'_> {
         } else {
             Err(status)
         }
+    }
+
+    pub fn uptime_offset(&self) -> &UptimeOffset {
+        &self.uptime_offset
     }
 
     pub fn exec<R: Request>(&self, request: R) -> Result<R::Reply, Ctap2Error> {
@@ -257,7 +274,7 @@ impl Ctap2<'_> {
         let mut serialized = Vec::new();
         ciborium::into_writer(&request, &mut serialized).unwrap();
         let reply = self
-            .0
+            .device
             .ctap2(R::COMMAND, &serialized)
             .map_err(|err| match err {
                 ctaphid::error::Error::CommandError(ctaphid::error::CommandError::CborError(
@@ -356,10 +373,11 @@ impl HidDevice for Device<'_> {
 
 fn with_client<F, F2, T>(files: &[(PathBuf, Vec<u8>)], user_presence: Level, f: F, inspect: F2) -> T
 where
-    F: FnOnce(Client) -> T,
+    F: FnOnce(Client, UptimeOffset) -> T,
     F2: FnOnce(&dyn DynFilesystem, &dyn DynFilesystem),
 {
     virt::with_platform(StoreConfig::ram(), |mut platform| {
+        let uptime_offset = platform.user_interface().uptime_offset();
         let ui: Box<dyn UserInterface + Send + Sync + 'static> = Box::new(TestUI { user_presence });
         platform.user_interface().set_inner(ui);
         // virt always uses the same seed -- request some random bytes to reach a somewhat random
@@ -387,7 +405,7 @@ where
                 BackendId::Custom(BackendIds::StagingBackend),
                 BackendId::Core,
             ],
-            f,
+            |client| f(client, uptime_offset),
         );
 
         inspect(ifs, store.vfs());

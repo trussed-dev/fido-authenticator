@@ -71,7 +71,7 @@ rand = "0.8.4"
 rand_chacha = "0.3"
 sha2 = "0.10"
 serde_test = "1.0.176"
-trussed = { version = "0.2", features = ["aes256-gcm", "virt"] }
+trussed = { version = "0.2.1", features = ["aes256-gcm", "virt"] }
 trussed-staging = { version = "0.5", features = ["chunked", "hkdf", "virt", "fs-info"] }
 trussed-usbip = { version = "0.4", features = ["ctaphid"] }
 x509-parser = "0.16"

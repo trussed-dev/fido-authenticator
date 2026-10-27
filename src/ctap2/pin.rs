@@ -1,3 +1,5 @@
+use core::time::Duration;
+
 use cosey::EcdhEsHkdf256PublicKey;
 use ctap_types::{ctap2::client_pin::Permissions, Error, Result};
 use heapless::String;
@@ -8,12 +10,18 @@ use trussed_core::{
     types::{
         Bytes, KeyId, KeySerialization, Location, Mechanism, Message, ShortData, StorageAttributes,
     },
-    CryptoClient,
+    CryptoClient, ManagementClient,
 };
 use trussed_hkdf::{HkdfClient, KeyOrData, OkmId};
 
 // PIN protocol 1 supports 16 or 32 bytes, PIN protocol 2 requires 32 bytes.
 const PIN_TOKEN_LENGTH: usize = 32;
+
+// See § 6.5.2.1 of the spec for a description of the timeouts.
+// The spec recommends 30 s for USB and 19.8 s for NFC and smart-card but allows smaller values.
+// We use 19 s for simplicity.
+const INITIAL_USAGE_TIME_LIMIT: Duration = Duration::from_secs(19);
+const MAX_USAGE_TIME_PERIOD: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Clone, Copy, Debug)]
 pub enum PinProtocolVersion {
@@ -98,7 +106,29 @@ pub struct PinTokenMut<'a, T: CryptoClient> {
     trussed: &'a mut T,
 }
 
-impl<T: CryptoClient> PinTokenMut<'_, T> {
+impl<'a, T: CryptoClient + ManagementClient> PinTokenMut<'a, T> {
+    pub fn is_in_use(&self) -> bool {
+        self.pin_token.state.is_in_use()
+    }
+
+    pub fn key_id(&self) -> KeyId {
+        self.pin_token.key_id
+    }
+
+    pub fn update(&mut self) {
+        self.pin_token.state.update(self.trussed)
+    }
+
+    pub fn clear_initial_usage_timeout(&mut self) {
+        if let Some(usage_timeouts) = &mut self.pin_token.state.usage_timeouts {
+            usage_timeouts.initial_usage_timeout = None;
+        }
+    }
+
+    pub fn into_inner(self) -> &'a mut PinToken {
+        self.pin_token
+    }
+
     pub fn restrict(&mut self, permissions: Permissions, rp_id: Option<String<256>>) {
         self.pin_token.state.permissions = permissions;
         self.pin_token.state.rp = rp_id.map(|id| Rp::new(self.trussed, id));
@@ -135,7 +165,55 @@ struct PinTokenState {
     rp: Option<Rp>,
     is_user_present: bool,
     is_user_verified: bool,
-    is_in_use: bool,
+    usage_timeouts: Option<PinTokenTimeouts>,
+}
+
+impl PinTokenState {
+    // in spec: pinUvAuthTokenUsageTimerObserver
+    fn update<T: ManagementClient>(&mut self, trussed: &mut T) {
+        let Some(usage_timeouts) = &self.usage_timeouts else {
+            return;
+        };
+        let now = syscall!(trussed.uptime()).uptime;
+
+        let mut timed_out = false;
+        if now > usage_timeouts.max_usage_timeout {
+            timed_out = true;
+        } else if let Some(initial_usage_timeout) = usage_timeouts.initial_usage_timeout {
+            if now > initial_usage_timeout {
+                timed_out = true;
+            }
+        }
+
+        if timed_out {
+            self.reset();
+        }
+    }
+
+    // in spec: stopUsingPinUvAuthToken
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn is_in_use(&self) -> bool {
+        self.usage_timeouts.is_some()
+    }
+}
+
+#[derive(Debug)]
+struct PinTokenTimeouts {
+    initial_usage_timeout: Option<Duration>,
+    max_usage_timeout: Duration,
+}
+
+impl PinTokenTimeouts {
+    fn new<T: ManagementClient>(trussed: &mut T) -> Self {
+        let now = syscall!(trussed.uptime()).uptime;
+        Self {
+            initial_usage_timeout: Some(now + INITIAL_USAGE_TIME_LIMIT),
+            max_usage_timeout: now + MAX_USAGE_TIME_PERIOD,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -183,7 +261,7 @@ pub struct PinProtocol<'a, T> {
     version: PinProtocolVersion,
 }
 
-impl<'a, T: CryptoClient + HkdfClient + HmacSha256 + P256> PinProtocol<'a, T> {
+impl<'a, T: CryptoClient + HkdfClient + HmacSha256 + ManagementClient + P256> PinProtocol<'a, T> {
     pub fn new(
         trussed: &'a mut T,
         state: &'a mut PinProtocolState,
@@ -196,11 +274,15 @@ impl<'a, T: CryptoClient + HkdfClient + HmacSha256 + P256> PinProtocol<'a, T> {
         }
     }
 
-    fn pin_token(&self) -> Option<&PinToken> {
-        match self.version {
-            PinProtocolVersion::V1 => self.state.pin_token_v1.as_ref(),
-            PinProtocolVersion::V2 => self.state.pin_token_v2.as_ref(),
-        }
+    fn pin_token_mut(&mut self) -> Option<PinTokenMut<'_, T>> {
+        let pin_token = match self.version {
+            PinProtocolVersion::V1 => self.state.pin_token_v1.as_mut(),
+            PinProtocolVersion::V2 => self.state.pin_token_v2.as_mut(),
+        };
+        pin_token.map(|pin_token| PinTokenMut {
+            pin_token,
+            trussed: self.trussed,
+        })
     }
 
     pub fn regenerate(&mut self) {
@@ -227,9 +309,7 @@ impl<'a, T: CryptoClient + HkdfClient + HmacSha256 + P256> PinProtocol<'a, T> {
         let mut pin_token = PinToken::generate(self.trussed);
         pin_token.state.is_user_present = is_user_present;
         pin_token.state.is_user_verified = true;
-        // TODO: set initial usage time limit
-        // TODO: start and observe usage timer
-        pin_token.state.is_in_use = true;
+        pin_token.state.usage_timeouts = Some(PinTokenTimeouts::new(self.trussed));
         let pin_token_field = match self.version {
             PinProtocolVersion::V1 => &mut self.state.pin_token_v1,
             PinProtocolVersion::V2 => &mut self.state.pin_token_v2,
@@ -276,12 +356,16 @@ impl<'a, T: CryptoClient + HkdfClient + HmacSha256 + P256> PinProtocol<'a, T> {
 
     // in spec: verify(pinUvAuthToken, ...)
     pub fn verify_pin_token(&mut self, data: &[u8], signature: &[u8]) -> Result<&PinToken> {
-        let pin_token = self.pin_token().ok_or(Error::PinAuthInvalid)?;
-        if pin_token.state.is_in_use && self.verify(pin_token.key_id, data, signature) {
-            // We previously checked that `pin_token()` is not None in the first line of this
+        let mut pin_token = self.pin_token_mut().ok_or(Error::PinAuthInvalid)?;
+        pin_token.update();
+        let key_id = pin_token.key_id();
+        if pin_token.is_in_use() && self.verify(key_id, data, signature) {
+            // We previously checked that `pin_token_mut()` is not None in the first line of this
             // function so this cannot panic, but we cannot return the `pin_token` variable here
             // because of the `verify` call after it.
-            Ok(self.pin_token().unwrap())
+            let mut pin_token = self.pin_token_mut().unwrap();
+            pin_token.clear_initial_usage_timeout();
+            Ok(pin_token.into_inner())
         } else {
             Err(Error::PinAuthInvalid)
         }
