@@ -8,11 +8,12 @@ pub mod webauthn;
 use std::collections::BTreeSet;
 
 use littlefs2::path::PathBuf;
+use rand::seq::SliceRandom as _;
 
 use authenticator::{Authenticator, Pin};
 use fs::list_fs;
-use virt::{Ctap2Error, Options};
-use webauthn::{CredentialData, PubKeyCredDescriptor, Rp, User};
+use virt::{CredentialIdVersion, Ctap2Error, Options};
+use webauthn::{CredentialData, Exhaustive as _, PubKeyCredDescriptor, Rp, User};
 
 struct CredMgmt<'a> {
     authenticator: Authenticator<'a, Pin>,
@@ -101,6 +102,16 @@ impl<'a> CredMgmt<'a> {
     }
 }
 
+fn prepare_options() -> Options {
+    let mut rng = rand::thread_rng();
+    let versions: Vec<_> = CredentialIdVersion::iter_exhaustive().collect();
+    let credential_id_version = *versions.as_slice().choose(&mut rng).unwrap();
+    Options {
+        credential_id_version,
+        ..Default::default()
+    }
+}
+
 fn generate_rp(i: usize) -> Rp {
     // TODO: set other fields than id
     let rp_id = format!("rp{i}");
@@ -116,17 +127,15 @@ fn generate_user(i: u8) -> User {
 
 #[test]
 fn test_list_credentials() {
-    let options = Options {
-        inspect_ifs: Some(Box::new(move |ifs| {
-            let mut files = list_fs(ifs);
-            files.remove_standard();
-            files.remove_state();
-            assert_eq!(files.try_remove_keys(), 11);
-            assert_eq!(files.try_remove_rks(), 10);
-            files.assert_empty();
-        })),
-        ..Default::default()
-    };
+    let mut options = prepare_options();
+    options.inspect_ifs = Some(Box::new(move |ifs| {
+        let mut files = list_fs(ifs);
+        files.remove_standard();
+        files.remove_state();
+        assert_eq!(files.try_remove_keys(), 11);
+        assert_eq!(files.try_remove_rks(), 10);
+        files.assert_empty();
+    }));
 
     virt::run_ctap2_with_options(options, |device| {
         let authenticator = Authenticator::new(device).set_pin(b"123456");
@@ -143,17 +152,15 @@ fn test_list_credentials() {
 
 #[test]
 fn test_list_credentials_multi() {
-    let options = Options {
-        inspect_ifs: Some(Box::new(move |ifs| {
-            let mut files = list_fs(ifs);
-            files.remove_standard();
-            files.remove_state();
-            assert_eq!(files.try_remove_keys(), 11);
-            assert_eq!(files.try_remove_rks(), 10);
-            files.assert_empty();
-        })),
-        ..Default::default()
-    };
+    let mut options = prepare_options();
+    options.inspect_ifs = Some(Box::new(move |ifs| {
+        let mut files = list_fs(ifs);
+        files.remove_standard();
+        files.remove_state();
+        assert_eq!(files.try_remove_keys(), 11);
+        assert_eq!(files.try_remove_rks(), 10);
+        files.assert_empty();
+    }));
 
     virt::run_ctap2_with_options(options, |device| {
         let authenticator = Authenticator::new(device).set_pin(b"123456");
@@ -172,17 +179,15 @@ fn test_list_credentials_multi() {
 
 #[test]
 fn test_list_credentials_overwrite() {
-    let options = Options {
-        inspect_ifs: Some(Box::new(move |ifs| {
-            let mut files = list_fs(ifs);
-            files.remove_standard();
-            files.remove_state();
-            assert_eq!(files.try_remove_keys(), 2);
-            assert_eq!(files.try_remove_rks(), 1);
-            files.assert_empty();
-        })),
-        ..Default::default()
-    };
+    let mut options = prepare_options();
+    options.inspect_ifs = Some(Box::new(move |ifs| {
+        let mut files = list_fs(ifs);
+        files.remove_standard();
+        files.remove_state();
+        assert_eq!(files.try_remove_keys(), 2);
+        assert_eq!(files.try_remove_rks(), 1);
+        files.assert_empty();
+    }));
 
     virt::run_ctap2_with_options(options, |device| {
         let authenticator = Authenticator::new(device).set_pin(b"123456");
@@ -198,17 +203,15 @@ fn test_list_credentials_overwrite() {
 
 #[test]
 fn test_list_credentials_delete() {
-    let options = Options {
-        inspect_ifs: Some(Box::new(move |ifs| {
-            let mut files = list_fs(ifs);
-            files.remove_standard();
-            files.remove_state();
-            assert_eq!(files.try_remove_keys(), 9);
-            assert_eq!(files.try_remove_rks(), 8);
-            files.assert_empty();
-        })),
-        ..Default::default()
-    };
+    let mut options = prepare_options();
+    options.inspect_ifs = Some(Box::new(move |ifs| {
+        let mut files = list_fs(ifs);
+        files.remove_standard();
+        files.remove_state();
+        assert_eq!(files.try_remove_keys(), 9);
+        assert_eq!(files.try_remove_rks(), 8);
+        files.assert_empty();
+    }));
 
     virt::run_ctap2_with_options(options, |device| {
         let authenticator = Authenticator::new(device).set_pin(b"123456");
@@ -232,17 +235,15 @@ fn test_list_credentials_delete() {
 
 #[test]
 fn test_list_credentials_delete_all() {
-    let options = Options {
-        inspect_ifs: Some(Box::new(move |ifs| {
-            let mut files = list_fs(ifs);
-            files.remove_standard();
-            files.remove_state();
-            assert_eq!(files.try_remove_keys(), 1);
-            files.remove_empty_dir("fido/dat/rk");
-            files.assert_empty();
-        })),
-        ..Default::default()
-    };
+    let mut options = prepare_options();
+    options.inspect_ifs = Some(Box::new(move |ifs| {
+        let mut files = list_fs(ifs);
+        files.remove_standard();
+        files.remove_state();
+        assert_eq!(files.try_remove_keys(), 1);
+        files.remove_empty_dir("fido/dat/rk");
+        files.assert_empty();
+    }));
 
     virt::run_ctap2_with_options(options, |device| {
         let authenticator = Authenticator::new(device).set_pin(b"123456");
@@ -263,17 +264,15 @@ fn test_list_credentials_delete_all() {
 
 #[test]
 fn test_list_credentials_update_user() {
-    let options = Options {
-        inspect_ifs: Some(Box::new(move |ifs| {
-            let mut files = list_fs(ifs);
-            files.remove_standard();
-            files.remove_state();
-            assert_eq!(files.try_remove_keys(), 11);
-            assert_eq!(files.try_remove_rks(), 10);
-            files.assert_empty();
-        })),
-        ..Default::default()
-    };
+    let mut options = prepare_options();
+    options.inspect_ifs = Some(Box::new(move |ifs| {
+        let mut files = list_fs(ifs);
+        files.remove_standard();
+        files.remove_state();
+        assert_eq!(files.try_remove_keys(), 11);
+        assert_eq!(files.try_remove_rks(), 10);
+        files.assert_empty();
+    }));
 
     virt::run_ctap2_with_options(options, |device| {
         let authenticator = Authenticator::new(device).set_pin(b"123456");
@@ -320,10 +319,8 @@ fn test_list_credentials_update_user() {
 
 #[test]
 fn test_max_credential_count() {
-    let options = Options {
-        max_resident_credential_count: Some(10),
-        ..Default::default()
-    };
+    let mut options = prepare_options();
+    options.max_resident_credential_count = Some(10);
     virt::run_ctap2_with_options(options, |device| {
         let mut authenticator = Authenticator::new(device).set_pin(b"123456");
         let metadata = authenticator.credentials_metadata();
@@ -363,15 +360,13 @@ fn test_max_credential_count() {
 
 #[test]
 fn test_filesystem_full() {
-    let mut options = Options {
-        max_resident_credential_count: Some(10),
-        inspect_ifs: Some(Box::new(|ifs| {
-            let blocks = ifs.available_blocks().unwrap();
-            assert!(blocks < 10, "{blocks}");
-            assert!(blocks > 1, "{blocks}");
-        })),
-        ..Default::default()
-    };
+    let mut options = prepare_options();
+    options.max_resident_credential_count = Some(10);
+    options.inspect_ifs = Some(Box::new(move |ifs| {
+        let blocks = ifs.available_blocks().unwrap();
+        assert!(blocks < 10, "{blocks}");
+        assert!(blocks > 1, "{blocks}");
+    }));
     for i in 0..80 {
         let path = PathBuf::try_from(format!("/test/{i}").as_str()).unwrap();
         options.files.push((path, vec![0; 512]));
@@ -417,15 +412,13 @@ fn test_filesystem_full() {
 
 #[test]
 fn test_filesystem_full_update_user() {
-    let mut options = Options {
-        max_resident_credential_count: Some(10),
-        inspect_ifs: Some(Box::new(|ifs| {
-            let blocks = ifs.available_blocks().unwrap();
-            assert!(blocks < 10, "{blocks}");
-            assert!(blocks > 1, "{blocks}");
-        })),
-        ..Default::default()
-    };
+    let mut options = prepare_options();
+    options.max_resident_credential_count = Some(10);
+    options.inspect_ifs = Some(Box::new(move |ifs| {
+        let blocks = ifs.available_blocks().unwrap();
+        assert!(blocks < 10, "{blocks}");
+        assert!(blocks > 1, "{blocks}");
+    }));
     for i in 0..80 {
         let path = PathBuf::try_from(format!("/test/{i}").as_str()).unwrap();
         options.files.push((path, vec![0; 512]));

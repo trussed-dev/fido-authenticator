@@ -15,7 +15,7 @@ use rand::RngCore as _;
 use trussed_core::types::consent::Level;
 
 use fs::list_fs;
-use virt::{Ctap2, Ctap2Error, Options};
+use virt::{CredentialIdVersion, Ctap2, Ctap2Error, Options};
 use webauthn::{
     exhaustive_struct, iter_map, AttStmtFormat, AuthenticatorConfig, AuthenticatorConfigParams,
     ClientPin, CredentialManagement, CredentialManagementParams, Exhaustive, GetAssertion,
@@ -613,6 +613,7 @@ impl Exhaustive for PinAuth {
 
 #[derive(Clone, Debug)]
 struct TestMakeCredential {
+    credential_id_version: CredentialIdVersion,
     pin_auth: PinAuth,
     options: Option<MakeCredentialOptions>,
     valid_pub_key_alg: bool,
@@ -660,6 +661,7 @@ impl Test for TestMakeCredential {
             .unwrap_or_default();
         let is_successful = self.expected_error().is_none();
         let options = Options {
+            credential_id_version: self.credential_id_version,
             inspect_ifs: Some(Box::new(move |ifs| {
                 let mut files = list_fs(ifs);
                 files.remove_standard();
@@ -760,6 +762,28 @@ impl Test for TestMakeCredential {
 }
 
 #[test]
+fn test_make_credential_id_version() {
+    run_tests! {
+        TestMakeCredential {
+            exhaustive = [
+                credential_id_version: CredentialIdVersion,
+            ],
+            iter = [
+                pin_auth: PinAuth::iter_valid(),
+                options: MakeCredentialOptions::iter_valid().map(Some),
+            ],
+            random = [
+                attestation_formats_preference: Option<AttestationFormatsPreference>,
+                hmac_secret: bool,
+            ],
+            fixed = [
+                valid_pub_key_alg: true,
+            ],
+        }
+    }
+}
+
+#[test]
 fn test_make_credential_pub_key_alg() {
     run_tests! {
         TestMakeCredential {
@@ -771,6 +795,7 @@ fn test_make_credential_pub_key_alg() {
                 options: MakeCredentialOptions::iter_valid().map(Some),
             ],
             random = [
+                credential_id_version: CredentialIdVersion,
                 attestation_formats_preference: Option<AttestationFormatsPreference>,
                 hmac_secret: bool,
             ],
@@ -790,6 +815,7 @@ fn test_make_credential_hmac_secret() {
                 options: MakeCredentialOptions::iter_valid().map(Some),
             ],
             random = [
+                credential_id_version: CredentialIdVersion,
                 attestation_formats_preference: Option<AttestationFormatsPreference>,
             ],
             fixed = [
@@ -810,6 +836,7 @@ fn test_make_credential_pin_auth() {
                 options: MakeCredentialOptions::iter_valid().map(Some),
             ],
             random = [
+                credential_id_version: CredentialIdVersion,
                 attestation_formats_preference: Option<AttestationFormatsPreference>,
                 hmac_secret: bool,
             ],
@@ -831,6 +858,7 @@ fn test_make_credential_options() {
                 pin_auth: PinAuth::iter_valid(),
             ],
             random = [
+                credential_id_version: CredentialIdVersion,
                 attestation_formats_preference: Option<AttestationFormatsPreference>,
                 hmac_secret: bool,
             ],
@@ -853,6 +881,7 @@ fn test_make_credential_attestation_formats_preference() {
                 options: MakeCredentialOptions::iter_valid().map(Some),
             ],
             random = [
+                credential_id_version: CredentialIdVersion,
                 hmac_secret: bool,
             ],
             fixed = [
@@ -1095,6 +1124,7 @@ impl From<ExhaustiveMakeCredentialExtensionsInput> for MakeCredentialExtensionsI
 
 #[derive(Clone, Debug)]
 struct TestGetAssertion {
+    credential_id_version: CredentialIdVersion,
     rk: bool,
     allow_list: bool,
     options: Option<GetAssertionOptions>,
@@ -1129,8 +1159,13 @@ impl Test for TestGetAssertion {
         // TODO: client data
         let client_data_hash = &[0; 32];
 
+        let options = Options {
+            credential_id_version: self.credential_id_version,
+            ..Default::default()
+        };
+
         // TODO: test with PIN
-        virt::run_ctap2(|device| {
+        virt::run_ctap2_with_options(options, |device| {
             let key_agreement_key = KeyAgreementKey::generate();
             let shared_secret = get_shared_secret(&device, &key_agreement_key);
 
@@ -1241,16 +1276,24 @@ impl Test for TestGetAssertion {
     }
 }
 
-impl Exhaustive for TestGetAssertion {
-    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
-        exhaustive_struct! {
-            rk: bool,
-            allow_list: bool,
-            options: Option<GetAssertionOptions>,
-            mc_extensions: Option<ExhaustiveMakeCredentialExtensionsInput>,
-            ga_hmac_secret: bool,
-            ga_third_party_payment: Option<bool>,
-            ga_cred_blob: bool,
+#[test]
+fn test_get_assertion_credential_id_version() {
+    run_tests! {
+        TestGetAssertion {
+            exhaustive = [
+                credential_id_version: CredentialIdVersion,
+                rk: bool,
+                allow_list: bool,
+            ],
+            iter = [
+                options: GetAssertionOptions::iter_valid().map(Some),
+            ],
+            random = [
+                mc_extensions: Option<ExhaustiveMakeCredentialExtensionsInput>,
+                ga_hmac_secret: bool,
+                ga_third_party_payment: Option<bool>,
+                ga_cred_blob: bool,
+            ],
         }
     }
 }
@@ -1265,6 +1308,7 @@ fn test_get_assertion_options() {
                 options: Option<GetAssertionOptions>,
             ],
             random = [
+                credential_id_version: CredentialIdVersion,
                 mc_extensions: Option<ExhaustiveMakeCredentialExtensionsInput>,
                 ga_hmac_secret: bool,
                 ga_third_party_payment: Option<bool>,
@@ -1288,6 +1332,7 @@ fn test_get_assertion_hmac_secret() {
                 options: GetAssertionOptions::iter_valid().map(Some),
             ],
             random = [
+                credential_id_version: CredentialIdVersion,
                 ga_third_party_payment: Option<bool>,
                 ga_cred_blob: bool,
             ],
@@ -1309,6 +1354,7 @@ fn test_get_assertion_third_party_payment() {
                 options: GetAssertionOptions::iter_valid().map(Some),
             ],
             random = [
+                credential_id_version: CredentialIdVersion,
                 ga_hmac_secret: bool,
                 ga_cred_blob: bool,
             ],
@@ -1330,6 +1376,7 @@ fn test_get_assertion_cred_blob() {
                 options: GetAssertionOptions::iter_valid().map(Some),
             ],
             random = [
+                credential_id_version: CredentialIdVersion,
                 ga_hmac_secret: bool,
                 ga_third_party_payment: Option<bool>,
             ],
@@ -1466,6 +1513,7 @@ fn test_get_next_assertion_multi_rp() {
 
 #[derive(Clone, Debug)]
 struct TestListCredentials {
+    credential_id_version: CredentialIdVersion,
     pin_token_rp_id: bool,
     third_party_payment: Option<bool>,
 }
@@ -1476,7 +1524,13 @@ impl Test for TestListCredentials {
         let pin = b"123456";
         let rp_id = "example.com";
         let user_id = b"id123";
-        virt::run_ctap2(|device| {
+
+        let options = Options {
+            credential_id_version: self.credential_id_version,
+            ..Default::default()
+        };
+
+        virt::run_ctap2_with_options(options, |device| {
             let shared_secret = get_shared_secret(&device, &key_agreement_key);
             set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
 
@@ -1571,6 +1625,7 @@ fn test_list_credentials() {
     run_tests! {
         TestListCredentials {
             exhaustive = [
+                credential_id_version: CredentialIdVersion,
                 pin_token_rp_id: bool,
                 third_party_payment: Option<bool>,
             ],

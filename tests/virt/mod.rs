@@ -35,7 +35,7 @@ use trussed::{
 use trussed_core::types::{consent::Level, reboot::To};
 use trussed_staging::virt::{BackendIds, Client, Dispatcher};
 
-use crate::webauthn::Request;
+use crate::webauthn::{Exhaustive, Request};
 
 use pipe::Pipe;
 
@@ -76,7 +76,7 @@ where
                 nfc_transport: options.nfc_transport,
                 ccid_transport: options.ccid_transport,
                 firmware_version: Some(0.into()),
-                credential_id_version: None,
+                credential_id_version: Some(options.credential_id_version.into()),
                 long_touch_for_reset: options.long_touch_for_reset,
                 fido2_up_timeout: Some(100),
             };
@@ -147,6 +147,7 @@ pub struct Options {
     pub user_presence: Level,
     /// Sets `Config::long_touch_for_reset` (default `true`).
     pub long_touch_for_reset: bool,
+    pub credential_id_version: CredentialIdVersion,
     pub inspect_ifs: Option<InspectFsFn>,
     /// Inspect the volatile filesystem after the run (e.g. to assert that a
     /// non-resident operation left no orphaned key).
@@ -162,8 +163,37 @@ impl Default for Options {
             ccid_transport: false,
             user_presence: Level::Normal,
             long_touch_for_reset: true,
+            credential_id_version: CredentialIdVersion::V1,
             inspect_ifs: None,
             inspect_vfs: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum CredentialIdVersion {
+    V1,
+    #[cfg(feature = "credential-id-format-v2")]
+    V2,
+}
+
+impl Exhaustive for CredentialIdVersion {
+    fn iter_exhaustive() -> impl Iterator<Item = Self> + Clone {
+        [
+            Self::V1,
+            #[cfg(feature = "credential-id-format-v2")]
+            Self::V2,
+        ]
+        .into_iter()
+    }
+}
+
+impl From<CredentialIdVersion> for fido_authenticator::credential::CredentialIdVersion {
+    fn from(version: CredentialIdVersion) -> Self {
+        match version {
+            CredentialIdVersion::V1 => Self::V1,
+            #[cfg(feature = "credential-id-format-v2")]
+            CredentialIdVersion::V2 => Self::V2,
         }
     }
 }
