@@ -480,6 +480,7 @@ impl From<MakeCredential> for Value {
 
 #[derive(Clone, Debug, Default)]
 pub struct MakeCredentialExtensionsInput {
+    pub cred_protect: Option<u8>,
     pub hmac_secret: Option<bool>,
     /// CTAP 2.2 §11.4.5: `hmac-secret-mc` allows the platform to evaluate
     /// hmac-secret at MakeCredential time. Same payload shape as the
@@ -492,6 +493,11 @@ pub struct MakeCredentialExtensionsInput {
 }
 
 impl MakeCredentialExtensionsInput {
+    pub fn cred_protect(mut self, cred_protect: u8) -> Self {
+        self.cred_protect = Some(cred_protect);
+        self
+    }
+
     pub fn cred_blob(mut self, cred_blob: Vec<u8>) -> Self {
         self.cred_blob = Some(cred_blob);
         self
@@ -508,6 +514,9 @@ impl From<MakeCredentialExtensionsInput> for Value {
         let mut map = Map::default();
         if let Some(cred_blob) = extensions.cred_blob {
             map.push("credBlob", cred_blob);
+        }
+        if let Some(cred_protect) = extensions.cred_protect {
+            map.push("credProtect", cred_protect);
         }
         if let Some(hmac_secret) = extensions.hmac_secret {
             map.push("hmac-secret", hmac_secret);

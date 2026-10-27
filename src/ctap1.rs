@@ -158,14 +158,16 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             return Err(Error::CommandNotAllowedNoEf);
         }
 
-        let cred = Credential::try_from_bytes(self, auth.app_id, auth.key_handle);
+        let cred = Credential::try_from_bytes(self, auth.app_id, auth.key_handle)
+            .ok()
+            .filter(|cred| self.check_credential_applicable(cred, true, false));
 
         let user_presence_byte = match auth.control_byte {
             ControlByte::CheckOnly => {
                 // if the control byte is set to 0x07 by the FIDO Client,
                 // the U2F token is supposed to simply check whether the
                 // provided key handle was originally created by this token
-                return if cred.is_ok() {
+                return if cred.is_some() {
                     Err(Error::ConditionsOfUseNotSatisfied)
                 } else {
                     Err(Error::IncorrectDataParameter)
@@ -182,7 +184,7 @@ impl<UP: UserPresence, T: TrussedRequirements> Authenticator for crate::Authenti
             ControlByte::DontEnforceUserPresenceAndSign => 0x00,
         };
 
-        let cred = cred.map_err(|_| Error::IncorrectDataParameter)?;
+        let cred = cred.ok_or(Error::IncorrectDataParameter)?;
 
         let key = match cred.key() {
             Key::WrappedKey(bytes) => {

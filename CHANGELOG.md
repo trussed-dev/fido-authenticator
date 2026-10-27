@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Always delete the credential key if `make_credential` fails.
 - Use constant-time comparisons for PIN hashes and PIN auth verification.
 - Don’t decrement the PIN retry counter for invalid pinAuth data in `credential_management`.
+- Also enforce the `credProtect` extension over U2F/CTAP1.
 
 ## [v0.4.0-rc.3](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.4.0-rc.3) (2026-06-01)
 

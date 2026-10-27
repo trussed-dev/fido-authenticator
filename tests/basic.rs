@@ -13,7 +13,12 @@ use std::{
 use ciborium::Value;
 use fido_authenticator::FirmwareVersion;
 use hex_literal::hex;
+use iso7816::{
+    command::{class::Class, instruction::Instruction, CommandBuilder, ExpectedLen},
+    response::Status,
+};
 use rand::RngCore as _;
+use sha2::{Digest as _, Sha256};
 use trussed_core::types::consent::Level;
 
 use fs::list_fs;
@@ -1114,6 +1119,7 @@ impl Exhaustive for ExhaustiveMakeCredentialExtensionsInput {
 impl From<ExhaustiveMakeCredentialExtensionsInput> for MakeCredentialExtensionsInput {
     fn from(input: ExhaustiveMakeCredentialExtensionsInput) -> Self {
         Self {
+            cred_protect: None,
             hmac_secret: input.hmac_secret,
             hmac_secret_mc: None,
             third_party_payment: input.third_party_payment,
@@ -3745,4 +3751,70 @@ fn test_bad_pin_auth_retries() {
 
         assert_eq!(get_pin_retries(&device), 8);
     });
+}
+
+// This test checks that credentials that are created over CTAP2 using the credProtect
+// extension are handled correctly over U2F.
+#[test]
+fn test_cred_protect_u2f() {
+    fn authenticate(device: &Ctap2, rp_id_hash: [u8; 32], credential_id: &[u8]) -> Option<Status> {
+        let challenge = [0; 32];
+        let mut request = Vec::new();
+        request.extend_from_slice(&challenge);
+        request.extend_from_slice(&rp_id_hash);
+        request.push(credential_id.len().try_into().unwrap());
+        request.extend_from_slice(credential_id);
+
+        let builder = CommandBuilder::new(
+            Class::from_byte(0).unwrap(),
+            Instruction::from(2),
+            0x08,
+            0,
+            request.as_slice(),
+            ExpectedLen::Max,
+        );
+        let mut buffer = heapless::Vec::<_, 1024>::new();
+        builder.serialize_into(&mut buffer).unwrap();
+        device.ctap1(&buffer).err().map(Status::from)
+    }
+
+    let client_data_hash = &[0; 32];
+    let key_agreement_key = KeyAgreementKey::generate();
+    let rp = "example.com";
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+
+        let policies = [0x01, 0x02, 0x03];
+        let [id1, id2, id3] = policies.map(|policy| {
+            let pub_key_cred_params = vec![PubKeyCredParam::new("public-key", -7)];
+            let mut request = MakeCredential::new(
+                client_data_hash,
+                Rp::new(rp),
+                User::new(b"id123"),
+                pub_key_cred_params,
+            );
+            request.extensions =
+                Some(MakeCredentialExtensionsInput::default().cred_protect(policy));
+            device
+                .exec(request)
+                .unwrap()
+                .auth_data
+                .credential
+                .unwrap()
+                .id
+        });
+
+        let mut hasher = Sha256::new();
+        hasher.update(rp);
+        let rp_id_hash = hasher.finalize().into();
+
+        assert_eq!(authenticate(&device, rp_id_hash, &id1), None);
+        assert_eq!(authenticate(&device, rp_id_hash, &id2), None);
+        assert_eq!(
+            authenticate(&device, rp_id_hash, &id3),
+            Some(Status::IncorrectDataParameter)
+        );
+    })
 }

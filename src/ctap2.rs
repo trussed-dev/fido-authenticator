@@ -1516,7 +1516,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
     }
 
     #[inline(never)]
-    fn check_credential_applicable(
+    pub(crate) fn check_credential_applicable(
         &mut self,
         credential: &Credential,
         allowlist_passed: bool,
