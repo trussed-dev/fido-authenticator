@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn deser() {
-        let _state: PersistentState = trussed::cbor_deserialize(&hex!(
+        let _state: PersistentState = cbor_smol::cbor_deserialize(&hex!(
             "
             a5726b65795f656e6372797074696f6e5f6b657950b19a5a2845e5ec71e3
             2a1b890892376c706b65795f7772617070696e675f6b6579f6781a636f6e

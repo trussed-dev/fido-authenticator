@@ -887,19 +887,31 @@ impl From<&FullCredential> for StrippedCredential {
 #[cfg(test)]
 mod test {
     use super::*;
+    use heapless_bytes::Bytes;
     use hex_literal::hex;
     use littlefs2_core::path;
     use rand::SeedableRng as _;
     use rand_chacha::ChaCha8Rng;
+    use serde::Serialize;
     use serde_test::{assert_de_tokens, assert_tokens, Token};
     use trussed::{
-        client::{Chacha8Poly1305, Sha256},
         key::{Kind, Secrecy},
-        store::keystore::{ClientKeystore, Keystore as _},
-        types::Location,
+        store::{ClientKeystore, Keystore as _},
         virt::{self, StoreConfig},
         Platform as _,
     };
+    use trussed_core::{
+        mechanisms::{Chacha8Poly1305, Sha256},
+        types::Location,
+    };
+
+    fn cbor_serialize_bytes<T: Serialize, const N: usize>(
+        object: &T,
+    ) -> cbor_smol::Result<Bytes<N>> {
+        let mut data = Bytes::new();
+        cbor_smol::cbor_serialize_to(object, &mut data)?;
+        Ok(data)
+    }
 
     fn credential_data() -> CredentialData {
         CredentialData {
@@ -1049,17 +1061,15 @@ mod test {
 
     #[test]
     fn skip_credential_data_options() {
-        use trussed::{cbor_deserialize as deserialize, cbor_serialize_bytes as serialize};
-
         let credential_data = credential_data();
-        let serialization: Bytes<1024> = serialize(&credential_data).unwrap();
-        let deserialized: CredentialData = deserialize(&serialization).unwrap();
+        let serialization: Bytes<1024> = cbor_serialize_bytes(&credential_data).unwrap();
+        let deserialized: CredentialData = cbor_smol::cbor_deserialize(&serialization).unwrap();
 
         assert_eq!(credential_data, deserialized);
 
         let credential_data = random_credential_data();
-        let serialization: Bytes<1024> = serialize(&credential_data).unwrap();
-        let deserialized: CredentialData = deserialize(&serialization).unwrap();
+        let serialization: Bytes<1024> = cbor_serialize_bytes(&credential_data).unwrap();
+        let deserialized: CredentialData = cbor_smol::cbor_deserialize(&serialization).unwrap();
 
         assert_eq!(credential_data, deserialized);
     }
@@ -1116,14 +1126,14 @@ mod test {
                 let stripped_credential = full.strip();
 
                 let serialized_data: Bytes<1024> =
-                    trussed::cbor_serialize_bytes(&stripped_credential.data).unwrap();
+                    cbor_serialize_bytes(&stripped_credential.data).unwrap();
                 assert_eq!(
                     delog::hexstr!(&serialized_data).to_string(),
                     delog::hexstr!(SERIALIZED_DATA).to_string()
                 );
 
                 let serialized_credential: Bytes<1024> =
-                    trussed::cbor_serialize_bytes(&stripped_credential).unwrap();
+                    cbor_serialize_bytes(&stripped_credential).unwrap();
                 assert_eq!(
                     delog::hexstr!(&serialized_credential).to_string(),
                     delog::hexstr!(SERIALIZED_CREDENTIAL).to_string()

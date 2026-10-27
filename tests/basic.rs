@@ -12,7 +12,7 @@ use std::{
 use ciborium::Value;
 use hex_literal::hex;
 use rand::RngCore as _;
-use trussed::platform::consent::Level;
+use trussed_core::types::consent::Level;
 
 use fs::list_fs;
 use virt::{Ctap2, Ctap2Error, Options};

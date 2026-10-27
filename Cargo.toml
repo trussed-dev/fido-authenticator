@@ -48,7 +48,7 @@ log-warn = []
 log-error = []
 
 [dev-dependencies]
-admin-app = { git = "https://github.com/Nitrokey/admin-app.git", tag = "v0.1.0-nitrokey.21", features = ["migration-tests"] }
+admin-app = { version = "0.5", features = ["migration-tests"] }
 aes = "0.8.4"
 cbc = { version = "0.1.2", features = ["alloc"] }
 ciborium = "0.2.2"
@@ -62,24 +62,20 @@ hex-literal = "0.4.1"
 hmac = "0.12.1"
 interchange = "0.3"
 itertools = "0.14"
-littlefs2 = "0.7"
+littlefs2 = "0.8"
 log = "0.4.21"
 p256 = { version = "0.13.2", features = ["ecdh"] }
 rand = "0.8.4"
 rand_chacha = "0.3"
 sha2 = "0.10"
 serde_test = "1.0.176"
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b2492feada78ee17b936c99c13df480a4fc6d2f5", features = ["virt"] }
-trussed-staging = { git = "https://github.com/trussed-dev/trussed-staging.git", tag = "v0.4.0", features = ["chunked", "hkdf", "virt", "fs-info"] }
-trussed-usbip = { git = "https://github.com/trussed-dev/pc-usbip-runner.git", rev = "017921df0930707c4af68882ccb1f8b3f1bbf7c5", default-features = false, features = ["ctaphid"] }
-usbd-ctaphid = "0.4"
+trussed = { version = "0.2", features = ["virt"] }
+trussed-staging = { version = "0.5", features = ["chunked", "hkdf", "virt", "fs-info"] }
+trussed-usbip = { version = "0.4", features = ["ctaphid"] }
 x509-parser = "0.16"
 
 [package.metadata.docs.rs]
 features = ["chunked", "dispatch"]
-
-[patch.crates-io]
-trussed = { git = "https://github.com/trussed-dev/trussed.git", rev = "b2492feada78ee17b936c99c13df480a4fc6d2f5" }
 
 [profile.test]
 opt-level = 2
