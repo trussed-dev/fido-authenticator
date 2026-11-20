@@ -1859,7 +1859,7 @@ impl<UP: UserPresence, T: TrussedRequirements> crate::Authenticator<UP, T> {
         // 0. CTAP 2.1 §6.5.5.7 / §6.4.0x0C: while `forcePINChange` is set the
         // authenticator MUST refuse every PIN-protected operation until the
         // platform calls `clientPin.changePIN`.
-        if self.state.persistent.force_pin_change() {
+        if self.state.persistent.force_pin_change() && pin_auth.is_some_and(|p| !p.is_empty()) {
             return Err(Error::PinPolicyViolation);
         }
 

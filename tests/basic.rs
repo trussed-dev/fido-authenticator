@@ -3931,3 +3931,43 @@ fn test_cred_protect_u2f() {
         );
     })
 }
+
+/// While forcePINChange is set, a makeCredential without pinUvAuthParam and
+/// with rk=false must still succeed (makeCredUvNotRqd path), without UV.
+#[test]
+fn test_make_credential_no_uv_with_force_pin_change() {
+    let key_agreement_key = KeyAgreementKey::generate();
+    let pin = b"123456";
+    virt::run_ctap2(|device| {
+        let shared_secret = get_shared_secret(&device, &key_agreement_key);
+        set_pin(&device, &key_agreement_key, &shared_secret, pin).unwrap();
+
+        // Set forcePINChange via authenticatorConfig.setMinPINLength.
+        let pin_token = get_pin_token(
+            &device,
+            &key_agreement_key,
+            &shared_secret,
+            pin,
+            PERM_AUTHENTICATOR_CONFIGURATION,
+            None,
+        )
+        .unwrap();
+        let params = AuthenticatorConfigParams {
+            force_change_pin: Some(true),
+            ..Default::default()
+        };
+        set_min_pin_length(&device, &pin_token, params).unwrap();
+        assert_eq!(device.exec(GetInfo).unwrap().force_pin_change, Some(true));
+
+        // No pinUvAuthParam, no pinUvAuthProtocol, rk not requested.
+        let request = MakeCredential::new(
+            vec![0u8; 32],
+            Rp::new("example.com"),
+            User::new(vec![1u8; 16]),
+            vec![PubKeyCredParam::new("public-key", -7)],
+        );
+        let reply = device.exec(request).unwrap();
+        assert!(reply.auth_data.up_flag(), "UP flag must be set");
+        assert!(!reply.auth_data.uv_flag(), "UV flag must not be set");
+    })
+}
