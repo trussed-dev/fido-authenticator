@@ -6,39 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-- Fixed: `makeCredentials` and `getAssertion` without requiring UV was running into `PinPolicyViolation` when `ForcePinChange` was enabled.
-- Update to `ctap-types` v0.6.
+-
 
-## [v0.4.0-rc.4](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.4.0-rc.4) (2026-10-28)
 
-- Update to `ctap-types` v0.6.0-rc.5.
-- Add `long_touch_for_reset` to `Config` and, if set, implement the `enableLongTouchForReset` subcommand for `config` and always require a long touch for a reset.
-- Add `fido2_up_timeout` to `Config`.
-- Always delete the credential key if `make_credential` fails.
-- Use constant-time comparisons for PIN hashes and PIN auth verification.
-- Don’t decrement the PIN retry counter for invalid pinAuth data in `credential_management`.
-- Also enforce the `credProtect` extension over U2F/CTAP1.
-- Add initial and max usage timer for PIN tokens.
+## [v0.4.0](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.4.0) (2026-11-20)
 
-## [v0.4.0-rc.3](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.4.0-rc.3) (2026-06-01)
+### Features
 
-- Update to `ctap-types` v0.6.0-rc.4.
-
-## [v0.4.0-rc.2](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.4.0-rc.2) (2026-05-31)
-
-- Fix signature counter to improve spec compliance:
-  - Set the initial signature counter to 1.
-  - Correctly handle signature counter overflows by returning 0.
-  - Increment the signature counter by a positive random number per assertion.
-- Add the `Config::new` method to create an instance with the default values.
-- Add support for multiple credential ID versions and add the `credential_id_version` field to `Config`.
-- Add `CredentialIdVersion::V2` using AES-256-GCM.
-- Make firmware version configurable depending on the current credential ID format.
-
-## [v0.4.0-rc.1](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.4.0-rc.1) (2026-05-29)
-
-- Update to `ctap-types` v0.6.0-rc.2.
-- Set `algorithms`, `authenticator_config_commands`, `firmware_version`, `max_serialized_large_blob_array` and `remaining_discoverable_credentials` in `get_info` and add `firmware_version` to `Config`.
 - Implement these new extensions:
   - `credBlob`
   - `hmac-secret-mc`
@@ -47,12 +21,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implement the `config` command with these subcommands:
   - `toggleAlwaysUv`
   - `setMinPINLength`
+- Set `algorithms`, `authenticator_config_commands`, `firmware_version`, `max_serialized_large_blob_array` and `remaining_discoverable_credentials` in `get_info` and add `firmware_version` to `Config`.
 - Add `ccid_transport` to `Config` and set `transports` in `get_info` accordingly.
 - Indicate support for `FIDO_2_3` in `get_info`.
-- Load full credential from filesstem for getAssertion if an allow list is used with a discoverable credential.
+- Add `long_touch_for_reset` to `Config` and, if set, implement the `enableLongTouchForReset` subcommand for `config` and always require a long touch for a reset.
+- Add `fido2_up_timeout` to `Config`.
+- Add initial and max usage timer for PIN tokens.
+- Add support for multiple credential ID formats:
+  - Add the `credential_id_version` field to `Config`.
+  - Add `CredentialIdVersion::V2` using AES-256-GCM.
+  - Make firmware version configurable depending on the current credential ID format.
+
+### Bugfixes
+
 - Use UTF-8 code points instead of bytes when checking the minimum length for PINs.
 - Accept `up = true` in makeCredential.
+- Load full credential from filesstem for getAssertion if an allow list is used with a discoverable credential.
 - Fix PIN verification in `large_blobs_set`.
+- Fix signature counter to improve spec compliance:
+  - Set the initial signature counter to 1.
+  - Correctly handle signature counter overflows by returning 0.
+  - Increment the signature counter by a positive random number per assertion.
+- Always delete the credential key if `make_credential` fails.
+- Don’t decrement the PIN retry counter for invalid pinAuth data in `credential_management`.
+- Also enforce the `credProtect` extension over U2F/CTAP1.
+- `makeCredentials` and `getAssertion` without requiring UV was running into `PinPolicyViolation` when `ForcePinChange` was enabled.
+
+### Other Changes
+
+- Update to `ctap-types` v0.6.
+- Add the `Config::new` method to create an instance with the default values.
+- Use constant-time comparisons for PIN hashes and PIN auth verification.
 
 ## [v0.3.0](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.3.0) (2026-03-25)
 
