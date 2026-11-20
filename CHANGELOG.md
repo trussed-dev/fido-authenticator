@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 - Fixed: `makeCredentials` and `getAssertion` without requiring UV was running into `PinPolicyViolation` when `ForcePinChange` was enabled.
+- Update to `ctap-types` v0.6.
 
 ## [v0.4.0-rc.4](https://github.com/trussed-dev/fido-authenticator/releases/tag/v0.4.0-rc.4) (2026-10-28)
 
